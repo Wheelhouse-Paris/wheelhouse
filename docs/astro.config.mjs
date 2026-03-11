@@ -32,6 +32,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'concepts/overview' },
 						{ label: 'Streams', slug: 'concepts/streams' },
 						{ label: 'Agents', slug: 'concepts/agents' },
+						{ label: 'Personas', slug: 'concepts/personas' },
 						{ label: 'Surfaces', slug: 'concepts/surfaces' },
 						{ label: 'Skills', slug: 'concepts/skills' },
 						{ label: 'Cron', slug: 'concepts/cron' },
