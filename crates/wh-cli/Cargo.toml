@@ -1,0 +1,9 @@
+[package]
+name = "wh-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "wh"
+path = "src/main.rs"

@@ -1,0 +1,12 @@
+/* Wheelhouse custom theme */
+:root {
+  --sl-color-accent-low: #1a2744;
+  --sl-color-accent: #3b6fd4;
+  --sl-color-accent-high: #93b4f0;
+}
+
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #0d1a33;
+  --sl-color-accent: #5585e0;
+  --sl-color-accent-high: #b3ccf7;
+}

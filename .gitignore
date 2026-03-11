@@ -1,0 +1,26 @@
+# Rust
+target/
+Cargo.lock
+
+# Node / Docs
+docs/node_modules/
+docs/dist/
+docs/.astro/
+
+# Wheelhouse runtime
+.wheelhouse/
+*.wh.lock
+
+# Secrets
+.env
+.env.*
+*.token
+secrets/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+.vscode/
+*.swp

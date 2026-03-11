@@ -1,0 +1,43 @@
+---
+title: Installation
+description: Install Wheelhouse on macOS or Linux
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Requirements
+
+- **Podman** — container runtime ([install guide](https://podman.io/getting-started/installation))
+- **Git** — version control
+- macOS ARM or Linux amd64 (MVP); macOS Intel + Linux arm64 coming in Phase 2
+
+## Install
+
+<Tabs>
+  <TabItem label="macOS">
+    ```sh
+    brew install wheelhouse-paris/tap/wh
+    ```
+  </TabItem>
+  <TabItem label="Linux">
+    ```sh
+    curl -fsSL https://wheelhouse.paris/install.sh | sh
+    ```
+  </TabItem>
+  <TabItem label="GitHub Actions">
+    ```yaml
+    - uses: Wheelhouse-Paris/setup-action@v1
+    ```
+  </TabItem>
+</Tabs>
+
+## Verify installation
+
+```sh
+wh --version
+wh status
+```
+
+## Next steps
+
+Follow the [Quick Start](/getting-started/quick-start) to deploy your first agent.
