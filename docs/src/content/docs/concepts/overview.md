@@ -8,8 +8,8 @@ Wheelhouse is built around a central typed object bus — the **stream** — aro
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │    Agent    │────▶│   Stream    │◀────│   Surface   │
-│ (publisher/ │     │ (ZMQ broker)│     │  (Telegram, │
-│ subscriber) │◀────│             │────▶│  CLI, custom│
+│ (publisher/ │     │  (pub/sub   │     │  (Telegram, │
+│ subscriber) │◀────│    bus)     │────▶│  CLI, custom│
 └─────────────┘     └──────┬──────┘     └─────────────┘
                            │
               ┌────────────┼────────────┐
@@ -20,6 +20,6 @@ Wheelhouse is built around a central typed object bus — the **stream** — aro
          └────────┘  └──────────┘  └────────┘
 ```
 
-The broker implements ZMQ XPUB/XSUB — any number of publishers and subscribers can participate in a stream simultaneously.
+The stream implements ZMQ XPUB/XSUB — any number of publishers and subscribers can participate simultaneously.
 
 See individual concept pages for details on each component.

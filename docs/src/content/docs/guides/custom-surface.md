@@ -58,10 +58,12 @@ surfaces:
     streams: [main]
 ```
 
-## Test without a broker
+## Test without a running topology
 
 ```python
-async with wheelhouse.MockSurface("my-surface") as surface:
-    await surface.connect("main")
-    # Full API, no broker required
+from wheelhouse.testing import MockConnection
+
+wh = MockConnection("main")
+wh.publish(TextMessage(text="Hello from my surface"))
+received = wh.last_published()
 ```

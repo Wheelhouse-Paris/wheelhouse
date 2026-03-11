@@ -32,8 +32,8 @@ The `wh` CLI is the primary control plane for Wheelhouse — used by human opera
 | `wh ps` | List running components |
 | `wh ls` | List all deployed topologies |
 | `wh logs <agent>` | Stream agent logs |
-| `wh status` | Broker health and metrics |
-| `wh restart` | Restart the broker |
+| `wh status` | Topology health and metrics |
+| `wh restart` | Restart the topology |
 | `wh stream tail <name>` | Live stream of objects |
 | `wh secrets init` | Initialize credential wizard |
 | `wh completion <shell>` | Generate shell completion |
