@@ -23,4 +23,11 @@ secrets/
 # Editor
 .idea/
 .vscode/
+.cursor/
+.windsurf/
 *.swp
+
+# BMAD / AI tooling
+_bmad/
+_bmad-output/
+.claude/
