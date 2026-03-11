@@ -5,6 +5,14 @@ description: Autonomous operators that observe, decide, and act
 
 An **agent** is an autonomous process that subscribes to streams, makes decisions, and publishes results — including modifications to its own infrastructure.
 
+## Startup sequence
+
+An agent loads its [persona](/concepts/personas) before connecting to any stream:
+
+```
+load persona (SOUL.md → IDENTITY.md → MEMORY.md) → connect to streams → begin loop
+```
+
 ## The autonomous loop
 
 ```

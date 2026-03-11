@@ -31,6 +31,8 @@ Streams carry typed objects. Core types shipped with Wheelhouse:
 
 Custom surfaces can register their own types (e.g. `biotech.MoleculeObject`). The `wheelhouse.*` namespace is reserved.
 
+Stream messages from human users carry a `user_id` field referencing a registered User — enabling attribution, auditing, and GDPR-compliant data management.
+
 ## Providers
 
 | Provider | Pub/Sub | Historical Query | Semantic Search |
