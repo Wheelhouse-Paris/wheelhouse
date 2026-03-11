@@ -10,13 +10,13 @@ A **stream** is a real-time, multi-subscriber, typed object bus. It is the conne
 Every stream, regardless of provider, supports:
 
 - **Pub/sub** — any number of publishers and subscribers
-- **Persistence** — objects are stored according to retention configuration
-- **Compaction** — periodic summarization via cron jobs (daily, weekly, monthly)
-- **Git backup** — compaction summaries are committed to git
+- **Persistence** — objects stored in a local append log; no objects lost on restart within the configured retention limit
+- **Compaction** — periodic summarization via cron jobs (daily, weekly, monthly); summaries committed to git
+- **Git backup** — compaction summaries form an auditable, versioned history
 
 ## Object types
 
-Streams carry typed Protobuf objects. Base types shipped with Wheelhouse:
+Streams carry typed objects. Core types shipped with Wheelhouse:
 
 | Type | Description |
 |------|-------------|
@@ -25,9 +25,11 @@ Streams carry typed Protobuf objects. Base types shipped with Wheelhouse:
 | `Reaction` | Reaction to a previous object |
 | `SkillInvocation` | Request to execute a skill |
 | `SkillResult` | Result or error from a skill execution |
-| `CronEvent` | Scheduled trigger from cron provider |
+| `SkillProgress` | Progress signal from a long-running skill |
+| `CronEvent` | Scheduled trigger from a cron job |
+| `TopologyShutdown` | System event published before a clean topology stop |
 
-Custom surfaces can register their own types (e.g. `biotech.MoleculeObject`).
+Custom surfaces can register their own types (e.g. `biotech.MoleculeObject`). The `wheelhouse.*` namespace is reserved.
 
 ## Providers
 
@@ -36,6 +38,8 @@ Custom surfaces can register their own types (e.g. `biotech.MoleculeObject`).
 | `local` | ✅ | — | — |
 | `elasticsearch` | ✅ | ✅ | — |
 | `weaviate` | ✅ | ✅ | ✅ |
+
+Historical query and semantic search are Phase 2 capabilities.
 
 ## Configuration
 
@@ -46,3 +50,5 @@ streams:
     retention:
       max_age: 30d
 ```
+
+A stream without a compaction cron generates a lint warning at `wh deploy lint` time — objects will accumulate without bound.
