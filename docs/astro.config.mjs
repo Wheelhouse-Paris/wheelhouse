@@ -9,11 +9,6 @@ export default defineConfig({
 		starlight({
 			title: 'Wheelhouse',
 			description: 'The operating infrastructure for autonomous agent factories',
-			logo: {
-				light: './src/assets/logo-light.svg',
-				dark: './src/assets/logo-dark.svg',
-				replacesTitle: false,
-			},
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/Wheelhouse-Paris/wheelhouse' },
 				{ icon: 'x.com', label: 'X', href: 'https://x.com/wheelhouse_paris' },

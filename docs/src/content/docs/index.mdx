@@ -1,40 +1,32 @@
 ---
-title: Welcome to Starlight
-description: Get started building your docs site with Starlight.
-template: splash # Remove or comment out this line to display the site sidebar on this page.
+title: Wheelhouse
+description: The operating infrastructure for autonomous agent factories.
+template: splash
 hero:
-  tagline: Congrats on setting up a new Starlight project!
-  image:
-    file: ../../assets/houston.webp
+  tagline: Specify, deploy, monitor, and let your agents operate their own infrastructure.
   actions:
-    - text: Example Guide
-      link: /guides/example/
+    - text: Get Started
+      link: /getting-started/introduction/
       icon: right-arrow
-    - text: Read the Starlight docs
-      link: https://starlight.astro.build
+    - text: GitHub
+      link: https://github.com/Wheelhouse-Paris/wheelhouse
       icon: external
       variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## Next steps
-
 <CardGrid stagger>
-	<Card title="Update content" icon="pencil">
-		Edit `src/content/docs/index.mdx` to see this page change.
-	</Card>
-	<Card title="Change page layout" icon="document">
-		Delete `template: splash` in `src/content/docs/index.mdx` to display a
-		sidebar on this page.
-	</Card>
-	<Card title="Add new content" icon="add-document">
-		Add Markdown or MDX files to `src/content/docs` to create new pages.
-	</Card>
-	<Card title="Configure your site" icon="setting">
-		Edit your `sidebar` and other config in `astro.config.mjs`.
-	</Card>
-	<Card title="Read the docs" icon="open-book">
-		Learn more in [the Starlight Docs](https://starlight.astro.build/).
-	</Card>
+  <Card title="5-minute install" icon="rocket">
+    From `brew install wh` to a running agent in under 5 minutes.
+  </Card>
+  <Card title="Agent as operator" icon="setting">
+    Agents read, modify, and apply their own `.wh` files autonomously.
+  </Card>
+  <Card title="Typed object bus" icon="random">
+    Every stream message has a versioned Protobuf schema — no more fragile JSON-in-markdown.
+  </Card>
+  <Card title="Custom surfaces" icon="puzzle">
+    Build any UI on top of a stream with the Python SDK.
+  </Card>
 </CardGrid>
