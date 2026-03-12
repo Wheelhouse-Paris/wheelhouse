@@ -190,7 +190,7 @@ fn signal_evaluation_respects_guardrail_max_replicas() {
             persona: None,
         }],
         streams: vec![],
-        guardrails: Some(Guardrails { max_replicas: Some(1) }),
+        guardrails: Some(Guardrails { max_replicas: Some(1), ..Default::default() }),
     };
 
     let eval = evaluate_signal("4 daily timeouts on researcher", &topology);

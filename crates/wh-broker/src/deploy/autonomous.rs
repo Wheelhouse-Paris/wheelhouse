@@ -13,9 +13,10 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::deploy::{
-    parse_topology, Change, DeployError, Topology,
+    parse_topology, Change, DeployError, ThresholdLevel, Topology,
 };
 use crate::deploy::apply;
+use crate::deploy::approval::ApprovalRequest;
 use crate::deploy::lint;
 use crate::deploy::plan;
 
@@ -29,10 +30,35 @@ static ERROR_RATE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)high\s+error\s+rate\s+on\s+(\S+)").expect("invalid error rate regex")
 });
 
+/// Impact level of a proposed topology change.
+///
+/// Used by the human validation threshold system to decide whether
+/// a change requires human approval before being applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImpactLevel {
+    /// Low impact — minor change, e.g. scaling by < 25%.
+    Low,
+    /// Medium impact — moderate change, e.g. scaling by 25-50%.
+    Medium,
+    /// High impact — significant change, e.g. scaling by > 50% or removing an agent.
+    High,
+}
+
+/// The result of evaluating a change against the configured threshold.
+#[derive(Debug, Clone)]
+pub enum ThresholdDecision {
+    /// Change is within threshold — proceed autonomously.
+    ProceedAutonomously,
+    /// Change exceeds threshold — requires human approval before applying.
+    RequiresApproval {
+        /// The formatted approval request to send to the operator.
+        request: ApprovalRequest,
+    },
+}
+
 /// Confidence level for a proposed autonomous change.
 ///
 /// Maps to human validation thresholds in Story 7.6.
-/// In this story, all confidence levels proceed without human approval.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangeConfidence {
     /// High confidence — routine scaling based on clear signal.
@@ -203,6 +229,160 @@ pub fn apply_autonomous_change(
     wh_path: &Path,
     agent_name: &str,
 ) -> Result<AutonomousApplyResult, DeployError> {
+    apply_autonomous_change_inner(evaluation, wh_path, agent_name, None)
+}
+
+/// Format a notification for surface publishing after an autonomous apply.
+///
+/// Returns structured data that the agent can publish via its configured surface.
+pub fn format_notification(
+    result: &AutonomousApplyResult,
+    evaluation: &SignalEvaluation,
+) -> AutonomousNotification {
+    let what_changed = match &evaluation.proposed_change {
+        ProposedChange::ScaleAgent {
+            agent_name,
+            from_replicas,
+            to_replicas,
+        } => format!(
+            "Scaled agent '{}' from {} to {} replicas",
+            agent_name, from_replicas, to_replicas
+        ),
+    };
+
+    AutonomousNotification {
+        what_changed,
+        why: evaluation.justification.clone(),
+        commit_ref: result.plan_hash.clone(),
+    }
+}
+
+/// Classify the impact level of a proposed topology change.
+///
+/// Impact classification rules (percentage-based):
+/// - Scaling replicas by > 50%: `High`
+/// - Scaling replicas by 25-50%: `Medium`
+/// - Scaling replicas by < 25%: `Low`
+/// - Removing an agent: `High`
+///
+/// Note: scaling from 1 to 2 is 100% (High), not "just +1".
+#[tracing::instrument(skip_all)]
+pub fn classify_impact(proposed_change: &ProposedChange, _topology: &Topology) -> ImpactLevel {
+    match proposed_change {
+        ProposedChange::ScaleAgent {
+            from_replicas,
+            to_replicas,
+            ..
+        } => {
+            if *from_replicas == 0 {
+                // Scaling from 0 is always high impact
+                return ImpactLevel::High;
+            }
+            let change = *to_replicas as f64 - *from_replicas as f64;
+            let pct = (change.abs() / *from_replicas as f64) * 100.0;
+            // Scale-down is always at least Medium impact
+            if change < 0.0 && pct < 25.0 {
+                return ImpactLevel::Medium;
+            }
+            if pct > 50.0 {
+                ImpactLevel::High
+            } else if pct >= 25.0 {
+                ImpactLevel::Medium
+            } else {
+                ImpactLevel::Low
+            }
+        }
+    }
+}
+
+/// Determine whether a change with the given impact level requires human approval
+/// given the configured threshold.
+///
+/// - `None` threshold: all changes proceed autonomously.
+/// - `Low` threshold: only `Low` impact changes proceed; `Medium` and `High` require approval.
+/// - `Medium` threshold: `Low` and `Medium` proceed; `High` requires approval.
+/// - `High` threshold: all changes proceed (threshold effectively disabled).
+pub fn should_require_approval(impact: &ImpactLevel, threshold: &Option<ThresholdLevel>) -> bool {
+    let threshold = match threshold {
+        None => return false,
+        Some(t) => t,
+    };
+
+    match threshold {
+        ThresholdLevel::Low => {
+            // Only Low impact passes
+            !matches!(impact, ImpactLevel::Low)
+        }
+        ThresholdLevel::Medium => {
+            // Low and Medium pass
+            matches!(impact, ImpactLevel::High)
+        }
+        ThresholdLevel::High => {
+            // All pass
+            false
+        }
+    }
+}
+
+/// Evaluate a proposed change against the topology's configured threshold.
+///
+/// Returns a `ThresholdDecision` indicating whether the change can proceed
+/// autonomously or requires human approval.
+#[tracing::instrument(skip_all)]
+pub fn evaluate_threshold(
+    evaluation: &SignalEvaluation,
+    topology: &Topology,
+) -> ThresholdDecision {
+    let threshold = topology
+        .guardrails
+        .as_ref()
+        .and_then(|g| g.autonomous_apply_threshold);
+
+    let impact = classify_impact(&evaluation.proposed_change, topology);
+
+    if should_require_approval(&impact, &threshold) {
+        let what = match &evaluation.proposed_change {
+            ProposedChange::ScaleAgent { agent_name, from_replicas, to_replicas } => {
+                format!("Scale agent '{}' from {} to {} replicas", agent_name, from_replicas, to_replicas)
+            }
+        };
+        let request = ApprovalRequest {
+            what,
+            why: evaluation.justification.clone(),
+            impact_level: format!("{:?}", impact),
+            instruction: format!(
+                "This change is classified as {:?} impact and exceeds the configured threshold ({:?}). \
+                 Reply 'yes' or 'approve' to proceed, or 'no' / 'reject' to deny.",
+                impact, threshold.unwrap()
+            ),
+        };
+        ThresholdDecision::RequiresApproval { request }
+    } else {
+        ThresholdDecision::ProceedAutonomously
+    }
+}
+
+/// Apply an autonomous topology change with human approval attribution.
+///
+/// This is the approved-path equivalent of `apply_autonomous_change()`.
+/// The commit message includes an `Approved by:` line for audit trail.
+#[tracing::instrument(skip_all, fields(agent_name = %agent_name))]
+pub fn apply_with_approval(
+    evaluation: SignalEvaluation,
+    wh_path: &Path,
+    agent_name: &str,
+    approval_note: &str,
+) -> Result<AutonomousApplyResult, DeployError> {
+    apply_autonomous_change_inner(evaluation, wh_path, agent_name, Some(approval_note))
+}
+
+/// Internal implementation shared between `apply_autonomous_change` and `apply_with_approval`.
+fn apply_autonomous_change_inner(
+    evaluation: SignalEvaluation,
+    wh_path: &Path,
+    agent_name: &str,
+    approval_note: Option<&str>,
+) -> Result<AutonomousApplyResult, DeployError> {
     // Extract change details
     let (target_agent, new_replicas) = match &evaluation.proposed_change {
         ProposedChange::ScaleAgent {
@@ -248,9 +428,15 @@ pub fn apply_autonomous_change(
         }
     };
 
+    let approved_suffix = if approval_note.is_some() {
+        " (human-approved)"
+    } else {
+        ""
+    };
+
     let commit_summary = format!(
-        "[{}] apply: scale agent {} replicas to {}",
-        agent_name, target_agent, new_replicas
+        "[{}] apply: scale agent {} replicas to {}{}",
+        agent_name, target_agent, new_replicas, approved_suffix
     );
 
     Ok(AutonomousApplyResult {
@@ -258,31 +444,6 @@ pub fn apply_autonomous_change(
         plan_hash,
         changes,
     })
-}
-
-/// Format a notification for surface publishing after an autonomous apply.
-///
-/// Returns structured data that the agent can publish via its configured surface.
-pub fn format_notification(
-    result: &AutonomousApplyResult,
-    evaluation: &SignalEvaluation,
-) -> AutonomousNotification {
-    let what_changed = match &evaluation.proposed_change {
-        ProposedChange::ScaleAgent {
-            agent_name,
-            from_replicas,
-            to_replicas,
-        } => format!(
-            "Scaled agent '{}' from {} to {} replicas",
-            agent_name, from_replicas, to_replicas
-        ),
-    };
-
-    AutonomousNotification {
-        what_changed,
-        why: evaluation.justification.clone(),
-        commit_ref: result.plan_hash.clone(),
-    }
 }
 
 #[cfg(test)]
@@ -361,7 +522,7 @@ mod tests {
     fn evaluate_signal_respects_guardrail() {
         let topology = make_topology(
             vec![make_agent("researcher", 1)],
-            Some(Guardrails { max_replicas: Some(1) }),
+            Some(Guardrails { max_replicas: Some(1), ..Default::default() }),
         );
         let eval = evaluate_signal("4 daily timeouts on researcher", &topology);
         assert!(eval.is_none());
@@ -408,6 +569,212 @@ mod tests {
         let donna = topo.agents.iter().find(|a| a.name == "donna").unwrap();
         assert_eq!(donna.replicas, 1);
         assert_eq!(topo.streams.len(), 1);
+    }
+
+    // =========================================================================
+    // Notification tests
+    // =========================================================================
+
+    // =========================================================================
+    // Impact classification tests (Story 7.6)
+    // =========================================================================
+
+    #[test]
+    fn classify_impact_high_for_large_scaling() {
+        let topology = make_topology(vec![], None);
+        // 1 -> 3 = 200% increase = High
+        let change = ProposedChange::ScaleAgent {
+            agent_name: "researcher".to_string(),
+            from_replicas: 1,
+            to_replicas: 3,
+        };
+        assert_eq!(classify_impact(&change, &topology), ImpactLevel::High);
+    }
+
+    #[test]
+    fn classify_impact_high_for_doubling() {
+        let topology = make_topology(vec![], None);
+        // 1 -> 2 = 100% increase = High
+        let change = ProposedChange::ScaleAgent {
+            agent_name: "researcher".to_string(),
+            from_replicas: 1,
+            to_replicas: 2,
+        };
+        assert_eq!(classify_impact(&change, &topology), ImpactLevel::High);
+    }
+
+    #[test]
+    fn classify_impact_medium_for_50_pct() {
+        let topology = make_topology(vec![], None);
+        // 2 -> 3 = 50% increase = Medium
+        let change = ProposedChange::ScaleAgent {
+            agent_name: "researcher".to_string(),
+            from_replicas: 2,
+            to_replicas: 3,
+        };
+        assert_eq!(classify_impact(&change, &topology), ImpactLevel::Medium);
+    }
+
+    #[test]
+    fn classify_impact_low_for_small_increase() {
+        let topology = make_topology(vec![], None);
+        // 5 -> 6 = 20% increase = Low
+        let change = ProposedChange::ScaleAgent {
+            agent_name: "researcher".to_string(),
+            from_replicas: 5,
+            to_replicas: 6,
+        };
+        assert_eq!(classify_impact(&change, &topology), ImpactLevel::Low);
+    }
+
+    #[test]
+    fn classify_impact_high_for_large_scale_down() {
+        let topology = make_topology(vec![], None);
+        // 10 -> 1 = 90% reduction = High
+        let change = ProposedChange::ScaleAgent {
+            agent_name: "researcher".to_string(),
+            from_replicas: 10,
+            to_replicas: 1,
+        };
+        assert_eq!(classify_impact(&change, &topology), ImpactLevel::High);
+    }
+
+    #[test]
+    fn classify_impact_medium_for_small_scale_down() {
+        let topology = make_topology(vec![], None);
+        // 10 -> 9 = 10% reduction, but scale-down floor is Medium
+        let change = ProposedChange::ScaleAgent {
+            agent_name: "researcher".to_string(),
+            from_replicas: 10,
+            to_replicas: 9,
+        };
+        assert_eq!(classify_impact(&change, &topology), ImpactLevel::Medium);
+    }
+
+    #[test]
+    fn classify_impact_high_for_zero_replicas() {
+        let topology = make_topology(vec![], None);
+        // 0 -> 1 = always High
+        let change = ProposedChange::ScaleAgent {
+            agent_name: "researcher".to_string(),
+            from_replicas: 0,
+            to_replicas: 1,
+        };
+        assert_eq!(classify_impact(&change, &topology), ImpactLevel::High);
+    }
+
+    // =========================================================================
+    // Threshold decision tests (Story 7.6)
+    // =========================================================================
+
+    #[test]
+    fn should_require_approval_false_when_no_threshold() {
+        assert!(!should_require_approval(&ImpactLevel::High, &None));
+        assert!(!should_require_approval(&ImpactLevel::Medium, &None));
+        assert!(!should_require_approval(&ImpactLevel::Low, &None));
+    }
+
+    #[test]
+    fn should_require_approval_low_threshold() {
+        let threshold = Some(ThresholdLevel::Low);
+        assert!(!should_require_approval(&ImpactLevel::Low, &threshold));
+        assert!(should_require_approval(&ImpactLevel::Medium, &threshold));
+        assert!(should_require_approval(&ImpactLevel::High, &threshold));
+    }
+
+    #[test]
+    fn should_require_approval_medium_threshold() {
+        let threshold = Some(ThresholdLevel::Medium);
+        assert!(!should_require_approval(&ImpactLevel::Low, &threshold));
+        assert!(!should_require_approval(&ImpactLevel::Medium, &threshold));
+        assert!(should_require_approval(&ImpactLevel::High, &threshold));
+    }
+
+    #[test]
+    fn should_require_approval_high_threshold() {
+        let threshold = Some(ThresholdLevel::High);
+        assert!(!should_require_approval(&ImpactLevel::Low, &threshold));
+        assert!(!should_require_approval(&ImpactLevel::Medium, &threshold));
+        assert!(!should_require_approval(&ImpactLevel::High, &threshold));
+    }
+
+    #[test]
+    fn evaluate_threshold_proceeds_when_no_guardrails() {
+        let topology = make_topology(vec![make_agent("researcher", 1)], None);
+        let eval = SignalEvaluation {
+            signal_summary: "test".to_string(),
+            proposed_change: ProposedChange::ScaleAgent {
+                agent_name: "researcher".to_string(),
+                from_replicas: 1,
+                to_replicas: 3,
+            },
+            justification: "test".to_string(),
+            confidence: ChangeConfidence::High,
+        };
+        assert!(matches!(evaluate_threshold(&eval, &topology), ThresholdDecision::ProceedAutonomously));
+    }
+
+    #[test]
+    fn evaluate_threshold_requires_approval_when_exceeds() {
+        let topology = make_topology(
+            vec![make_agent("researcher", 1)],
+            Some(Guardrails {
+                max_replicas: Some(10),
+                autonomous_apply_threshold: Some(ThresholdLevel::Low),
+                ..Default::default()
+            }),
+        );
+        let eval = SignalEvaluation {
+            signal_summary: "test".to_string(),
+            proposed_change: ProposedChange::ScaleAgent {
+                agent_name: "researcher".to_string(),
+                from_replicas: 1,
+                to_replicas: 2,
+            },
+            justification: "Scaling up".to_string(),
+            confidence: ChangeConfidence::High,
+        };
+        match evaluate_threshold(&eval, &topology) {
+            ThresholdDecision::RequiresApproval { request } => {
+                assert!(!request.what.is_empty());
+                assert!(!request.instruction.is_empty());
+                assert_eq!(request.impact_level, "High");
+            }
+            other => panic!("Expected RequiresApproval, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn evaluate_threshold_proceeds_when_within_threshold() {
+        let topology = make_topology(
+            vec![make_agent("researcher", 5)],
+            Some(Guardrails {
+                max_replicas: Some(10),
+                autonomous_apply_threshold: Some(ThresholdLevel::Low),
+                ..Default::default()
+            }),
+        );
+        let eval = SignalEvaluation {
+            signal_summary: "test".to_string(),
+            proposed_change: ProposedChange::ScaleAgent {
+                agent_name: "researcher".to_string(),
+                from_replicas: 5,
+                to_replicas: 6,
+            },
+            justification: "Scaling up".to_string(),
+            confidence: ChangeConfidence::High,
+        };
+        assert!(matches!(evaluate_threshold(&eval, &topology), ThresholdDecision::ProceedAutonomously));
+    }
+
+    // =========================================================================
+    // Error code tests (Story 7.6)
+    // =========================================================================
+
+    #[test]
+    fn approval_required_error_code() {
+        let err = DeployError::ApprovalRequired("test".to_string());
+        assert_eq!(err.code(), "APPROVAL_REQUIRED");
     }
 
     // =========================================================================
