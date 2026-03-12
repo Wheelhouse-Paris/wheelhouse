@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package wheelhouse.v1;
+
+// TextMessage — plain text content published into a stream.
+message TextMessage {
+  string content = 1;
+  string publisher_id = 2;
+  int64 timestamp_ms = 3;
+
+  // User ID referencing a registered UserProfile (FR59).
+  // Present when message is from a human user via a surface; empty for agent messages.
+  string user_id = 4;
+
+  // Target user ID for response routing (FR59).
+  // Set by agents when responding to a specific user.
+  // Surfaces use this to route responses to the correct chat/session.
+  string reply_to_user_id = 5;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+  reserved "metadata";
+}
+
+// FileMessage — binary or file content published into a stream.
+message FileMessage {
+  string filename = 1;
+  string mime_type = 2;
+  bytes data = 3;
+  string publisher_id = 4;
+  int64 timestamp_ms = 5;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+}
+
+// Reaction — a lightweight reaction to a stream object.
+message Reaction {
+  string target_object_id = 1;
+  string emoji = 2;
+  string publisher_id = 3;
+  int64 timestamp_ms = 4;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+}

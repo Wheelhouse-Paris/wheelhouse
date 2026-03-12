@@ -3,3 +3,17 @@ name = "wh-proto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Protobuf type definitions for Wheelhouse stream objects"
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }

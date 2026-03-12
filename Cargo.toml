@@ -4,6 +4,9 @@ members = [
     "crates/wh-cli",
     "crates/wh-stream",
     "crates/wh-proto",
+    "crates/wh-skill",
+    "crates/wh-user",
+    "crates/wh-telegram",
 ]
 resolver = "2"
 
@@ -16,13 +19,40 @@ repository = "https://github.com/Wheelhouse-Paris/wheelhouse"
 authors = ["The Wheelhouse Paris <hello@wheelhouse.paris>"]
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["full"] }
+# Runtime
+tokio = { version = "1", features = ["test-util"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 serde_yaml = "0.9"
 anyhow = "1"
-thiserror = "1"
+thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json"] }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+keyring = { version = "3", features = ["apple-native", "linux-native"] }
+dialoguer = "0.11"
+console = "0.15"
 prost = "0.13"
+tokio-util = { version = "0.7", features = ["time"] }
+async-trait = "0.1"
 zeromq = "0.4"
+git2 = "0.19"
+sha2 = "0.10"
+tempfile = "3"
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+crc32fast = "1"
+dirs = "5"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+teloxide = { version = "0.13", features = ["macros"] }
+
+# Proto build
+prost-build = "0.13"
+prost-types = "0.13"
+protoc-bin-vendored = "3"
+
+# Internal crates
+wh-proto = { path = "crates/wh-proto" }

@@ -5,49 +5,32 @@ description: Declarative topology configuration for Wheelhouse
 
 A `.wh` file is a declarative YAML topology definition — the Dockerfile of agentic infrastructure.
 
-## Quickstart
-
-Generate a minimal local topology:
-
-```sh
-wh init
-```
-
-This creates a `dev.wh` with a single stream — the minimal starting point for SDK development.
-
 ## Structure
 
 ```yaml
+# topology.wh — minimal working example
 apiVersion: wheelhouse.dev/v1
-kind: Topology
 
+# Streams are the typed message bus connecting all components.
+# Each stream is an append log; objects are retained for the specified duration.
 streams:
-  - name: <stream-name>
-    provider: local | elasticsearch | weaviate
-    retention:
-      max_age: <duration>      # e.g. 30d
-      max_size: <bytes>        # e.g. 1GB
+  - name: main
+    retention: "30d"    # optional duration string; omit to keep forever
+                        # a stream without a compaction cron generates a lint warning
 
+# Agents subscribe to streams, make decisions, and publish results.
+# They can also modify this file autonomously via wh deploy apply.
 agents:
-  - name: <agent-name>
-    image: <container-image>
-    streams: [<stream-names>]
-    max_replicas: <n>          # required guardrail
-    skills:
-      - name: <skill-name>
-        repo: <git-url>
-        ref: <commit-hash>     # pinned commit hash, not a branch
+  - name: donna
+    image: ghcr.io/wheelhouse-paris/agent-claude:latest
+    replicas: 1                 # default: 1
+    streams: [main]             # list of streams this agent subscribes to
+    persona: agents/donna/      # optional: path to SOUL.md / IDENTITY.md / MEMORY.md
 
-surfaces:
-  - name: <surface-name>
-    type: telegram | cli | custom
-    streams: [<stream-names>]
-
-cron:
-  - name: <job-name>
-    schedule: "<cron-expression>"
-    target: <stream-name>
-    action: compact | event
+# Guardrails live here, not on individual agents.
+# This separation ensures agents cannot modify their own constraints.
+guardrails:
+  max_replicas: 2    # topology-wide cap — deployment blocked if any agent exceeds this
 ```
 
 ## Operator safety policy
@@ -86,8 +69,15 @@ wh doctor
 
 ## Guardrails
 
-`max_replicas` is mandatory per agent. Deployment is blocked if exceeded.
-
-Skill `ref` must be a pinned commit hash — branch references are rejected at lint time.
+`max_replicas` in the `guardrails` block caps the maximum replicas allowed for any single agent in the topology. Deployment is blocked if exceeded.
 
 Additional guardrails planned for Phase 2: rate limiting on autonomous apply, anomaly detection on destructive plans.
+
+## Phase 2 — coming soon
+
+The following fields are planned but not yet parsed:
+
+- **`streams[].provider`** — storage backend (local / elasticsearch / weaviate)
+- **`agents[].skills`** — pinned skill references from git
+- **`surfaces`** — surface declarations (telegram, cli, custom)
+- **`cron`** — scheduled job declarations

@@ -1,6 +1,7 @@
 # Rust
 target/
-Cargo.lock
+vendor/
+# Note: Cargo.lock is committed — shipped binary project (KR-02)
 
 # Node / Docs
 docs/node_modules/
@@ -10,6 +11,13 @@ docs/.astro/
 # Wheelhouse runtime
 .wheelhouse/
 *.wh.lock
+
+# Python SDK generated proto files (FP-02)
+sdk/python/wheelhouse/_proto/
+sdk/python/.venv/
+sdk/python/.pytest_cache/
+__pycache__/
+*.pyc
 
 # Secrets
 .env

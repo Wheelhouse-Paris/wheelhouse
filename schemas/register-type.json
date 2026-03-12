@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "register_type control command",
+  "description": "Register a custom Protobuf type with a namespace (ADR-004)",
+  "type": "object",
+  "properties": {
+    "request": {
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "command": { "type": "string", "const": "register_type" },
+        "data": {
+          "type": "object",
+          "properties": {
+            "type_name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*\\.[A-Z][a-zA-Z0-9]*$",
+              "description": "Fully-qualified type name: <namespace>.<TypeName>"
+            },
+            "descriptor_bytes": {
+              "type": "string",
+              "description": "Base64-encoded FileDescriptorProto bytes (optional)"
+            }
+          },
+          "required": ["type_name"]
+        }
+      },
+      "required": ["v", "command", "data"]
+    },
+    "response_success": {
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "status": { "type": "string", "const": "ok" },
+        "data": {
+          "type": "object",
+          "properties": {
+            "type_name": { "type": "string" },
+            "namespace": { "type": "string" },
+            "registered_at": { "type": "string" }
+          },
+          "required": ["type_name", "namespace", "registered_at"]
+        }
+      },
+      "required": ["v", "status", "data"]
+    },
+    "response_error": {
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "status": { "type": "string", "const": "error" },
+        "code": {
+          "type": "string",
+          "enum": ["RESERVED_NAMESPACE", "INVALID_TYPE_NAME", "REGISTRY_FULL"]
+        },
+        "message": { "type": "string" }
+      },
+      "required": ["v", "status", "code", "message"]
+    }
+  }
+}

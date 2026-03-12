@@ -3,7 +3,36 @@ name = "wh-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wheelhouse CLI — unified control plane for operators and agents"
 
 [[bin]]
 name = "wh"
 path = "src/main.rs"
+
+[dependencies]
+wh-proto = { workspace = true }
+wh-broker = { path = "../wh-broker" }
+tokio = { workspace = true, features = ["rt", "macros", "signal", "io-util", "io-std"] }
+zeromq = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+prost = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+keyring = { workspace = true }
+dialoguer = { workspace = true }
+console = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile = { workspace = true }

@@ -7,15 +7,92 @@ on:
     branches: [main]
 
 jobs:
-  test:
-    name: Test
+  # ──────────────────────────────────────────────
+  # Gate: proto-check must pass before anything else
+  # ──────────────────────────────────────────────
+  proto-check:
+    name: Proto Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.85.1"
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify proto hashes
+        run: |
+          COMPUTED=$(find proto -name '*.proto' -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+          EXPECTED=$(cat .proto.sha256)
+          if [ "$COMPUTED" != "$EXPECTED" ]; then
+            echo "FAIL: Proto file hashes do not match."
+            echo "  Expected: $EXPECTED"
+            echo "  Computed: $COMPUTED"
+            echo "Run 'make proto-hash' and commit .proto.sha256"
+            exit 1
+          fi
+          echo "OK: Proto hashes match."
+
+      - name: Verify proto fixtures exist
+        run: |
+          if [ ! -d "tests/fixtures/proto" ] || [ -z "$(ls tests/fixtures/proto/*.bin 2>/dev/null)" ]; then
+            echo "FAIL: Proto fixture files missing (NFR-E1)."
+            exit 1
+          fi
+          echo "OK: Proto fixtures present."
+
+      - name: Run backward-compat tests
+        run: cargo test -p wh-proto --test proto_compat
+
+  # ──────────────────────────────────────────────
+  # Path filter for conditional job execution
+  # ──────────────────────────────────────────────
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
+      proto: ${{ steps.filter.outputs.proto }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'proto/**'
+            python:
+              - 'sdk/python/**'
+              - 'proto/**'
+            proto:
+              - 'proto/**'
+              - '.proto.sha256'
+
+  # ──────────────────────────────────────────────
+  # Rust: cargo test + clippy + fmt
+  # Skips on python-only PRs (SR-03)
+  # ──────────────────────────────────────────────
+  rust:
+    name: Rust
+    needs: [proto-check, changes]
+    if: needs.changes.outputs.rust == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.1"
           components: rustfmt, clippy
 
       - name: Cache Rust
@@ -25,7 +102,46 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
       - name: Test
-        run: cargo test
+        run: cargo test --workspace
+
+  # ──────────────────────────────────────────────
+  # Python: SDK tests
+  # Skips on rust-only PRs (SR-03)
+  # ──────────────────────────────────────────────
+  python:
+    name: Python
+    needs: [proto-check, changes]
+    if: needs.changes.outputs.python == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        working-directory: sdk/python
+        run: uv sync --extra dev
+
+      - name: Run tests
+        working-directory: sdk/python
+        run: uv run pytest
+
+  # ──────────────────────────────────────────────
+  # E2E: integration tests (runs on main + cross-boundary PRs)
+  # ──────────────────────────────────────────────
+  e2e:
+    name: E2E
+    needs: [rust, python]
+    if: always() && !failure() && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: E2E placeholder
+        run: echo "E2E tests will be configured in Story 1.2+"

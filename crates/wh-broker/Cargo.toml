@@ -3,3 +3,37 @@ name = "wh-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wheelhouse message broker — ZMQ routing, stream persistence, and health check"
+
+[[bin]]
+name = "wh-broker"
+path = "src/main.rs"
+
+[dependencies]
+wh-proto = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
+zeromq = { workspace = true }
+prost = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+regex = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio-util = { workspace = true, features = ["rt", "time"] }
+async-trait = { workspace = true }
+rusqlite = { workspace = true }
+crc32fast = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+cron = "0.13"
+prost-types = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+portpicker = "0.1"
+chrono = { workspace = true }

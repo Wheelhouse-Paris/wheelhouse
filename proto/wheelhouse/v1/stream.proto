@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package wheelhouse.v1;
+
+// StreamEnvelope — wrapper for all objects published into a stream.
+// The broker wraps every published object in an envelope for routing and persistence.
+message StreamEnvelope {
+  string stream_name = 1;
+  string object_id = 2;
+  string type_url = 3;
+  bytes payload = 4;
+  string publisher_id = 5;
+  int64 published_at_ms = 6;
+  uint64 sequence_number = 7;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+  reserved "tombstone";
+}
+
+// TypeRegistration — request to register a custom type in the broker type registry (ADR-004).
+message TypeRegistration {
+  string namespace = 1;
+  string type_name = 2;
+  string descriptor = 3;
+  int64 registered_at_ms = 4;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+}
+
+// TypeRegistryEntry — an entry in the broker's type registry.
+message TypeRegistryEntry {
+  string full_name = 1;
+  string namespace = 2;
+  string type_name = 3;
+  string descriptor = 4;
+  bool is_builtin = 5;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+}

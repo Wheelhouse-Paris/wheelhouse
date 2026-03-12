@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package wheelhouse.v1;
+
+// SkillInvocation — request to invoke a skill, published by an agent.
+message SkillInvocation {
+  string skill_name = 1;
+  string agent_id = 2;
+  string invocation_id = 3;
+  map<string, string> parameters = 4;
+  int64 timestamp_ms = 5;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+}
+
+// SkillResult — outcome of a skill invocation.
+message SkillResult {
+  string invocation_id = 1;
+  string skill_name = 2;
+  bool success = 3;
+  string output = 4;
+  string error_message = 5;
+  string error_code = 6;
+  int64 timestamp_ms = 7;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+}
+
+// SkillProgress — intermediate progress update during skill execution (CM-06).
+message SkillProgress {
+  string invocation_id = 1;
+  string skill_name = 2;
+  float progress_percent = 3;
+  string status_message = 4;
+  int64 timestamp_ms = 5;
+
+  // Reserved for future evolution (TT-02)
+  reserved 50 to 100;
+}

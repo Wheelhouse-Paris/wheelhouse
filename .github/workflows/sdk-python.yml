@@ -1,0 +1,66 @@
+name: Python SDK
+
+on:
+  push:
+    paths:
+      - 'sdk/python/**'
+      - 'proto/**'
+  pull_request:
+    paths:
+      - 'sdk/python/**'
+      - 'proto/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        working-directory: sdk/python
+        run: uv pip install -e ".[dev]" --system
+
+      - name: Run tests
+        working-directory: sdk/python
+        run: uv run pytest tests/ -v --tb=short
+
+      - name: Type check
+        working-directory: sdk/python
+        run: uv run pyright wheelhouse/
+
+      - name: Verify import guard
+        working-directory: sdk/python
+        run: |
+          python -c "
+          import sys
+          import importlib
+          # Remove zmq to test import guard
+          zmq_mods = [k for k in sys.modules if k.startswith('zmq')]
+          saved = {k: sys.modules.pop(k) for k in zmq_mods}
+          importlib.import_module('wheelhouse.testing')
+          assert 'zmq' not in sys.modules, 'testing.py imported zmq at module level'
+          print('Import guard check passed')
+          "
+
+      - name: Verify __init__.py exports
+        working-directory: sdk/python
+        run: |
+          python -c "
+          import wheelhouse
+          assert 'connect' in wheelhouse.__all__, 'connect not in __all__'
+          assert 'Surface' in wheelhouse.__all__, 'Surface not in __all__'
+          assert len(wheelhouse.__all__) == 2, f'__all__ has unexpected exports: {wheelhouse.__all__}'
+          print('Export surface check passed')
+          "
