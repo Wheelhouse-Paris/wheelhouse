@@ -299,8 +299,14 @@ impl BrokerState {
         let json = serde_json::to_string_pretty(&metadata)
             .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
 
-        std::fs::create_dir_all(&self.data_dir)?;
-        std::fs::write(self.data_dir.join("streams.json"), json)?;
+        let data_dir = self.data_dir.clone();
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            std::fs::create_dir_all(&data_dir)?;
+            std::fs::write(data_dir.join("streams.json"), json)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
 
         Ok(())
     }
@@ -308,11 +314,20 @@ impl BrokerState {
     /// Load stream registry from `{data_dir}/streams.json` on startup.
     pub async fn load_registry(self: &Arc<Self>) -> Result<(), StreamError> {
         let registry_path = self.data_dir.join("streams.json");
-        if !registry_path.exists() {
-            return Ok(());
-        }
 
-        let json = std::fs::read_to_string(&registry_path)?;
+        let path_clone = registry_path.clone();
+        let json_opt = tokio::task::spawn_blocking(move || -> std::io::Result<Option<String>> {
+            if !path_clone.exists() {
+                return Ok(None);
+            }
+            Ok(Some(std::fs::read_to_string(&path_clone)?))
+        })
+        .await
+        .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+
+        let Some(json) = json_opt else {
+            return Ok(());
+        };
         let metadata: Vec<StreamMetadata> = serde_json::from_str(&json)
             .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
 

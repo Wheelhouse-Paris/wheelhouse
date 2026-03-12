@@ -95,9 +95,16 @@ impl WalWriter {
     }
 
     /// Get total WAL size in bytes for this stream's database file.
-    pub fn db_size_bytes(&self) -> Result<u64, WalError> {
-        let metadata = std::fs::metadata(&self.db_path)?;
-        Ok(metadata.len())
+    ///
+    /// Uses `spawn_blocking` to avoid blocking the async runtime on metadata I/O (PP-03).
+    pub async fn db_size_bytes(&self) -> Result<u64, WalError> {
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let metadata = std::fs::metadata(&db_path)?;
+            Ok(metadata.len())
+        })
+        .await
+        .map_err(|e| WalError::Database(format!("spawn_blocking join error: {e}")))?
     }
 
     /// Delete records older than the given timestamp (milliseconds since epoch).
@@ -125,7 +132,7 @@ impl WalWriter {
     ///
     /// Used for size-based retention enforcement.
     pub async fn enforce_size_limit(&self, max_bytes: u64) -> Result<u64, WalError> {
-        let current_size = self.db_size_bytes()?;
+        let current_size = self.db_size_bytes().await?;
         if current_size <= max_bytes {
             return Ok(0);
         }
