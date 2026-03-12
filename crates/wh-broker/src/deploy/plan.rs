@@ -233,14 +233,10 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
     let desired_streams: std::collections::BTreeMap<&str, &Stream> =
         desired.streams.iter().map(|s| (s.name.as_str(), s)).collect();
 
-    for (name, stream) in &desired_streams {
+    for name in desired_streams.keys() {
         if !current_streams.contains_key(name) {
-            // Include provider info for stream additions (defaults to "local")
-            let provider = stream
-                .retention
-                .as_deref()
-                .map(|_| "local") // Streams always use local provider in MVP
-                .unwrap_or("local");
+            // All streams use local provider in MVP
+            let provider = "local";
             changes.push(Change {
                 op: "+".to_string(),
                 component: format!("stream {name}"),
