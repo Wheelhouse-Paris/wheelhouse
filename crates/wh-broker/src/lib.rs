@@ -44,8 +44,11 @@ pub async fn run_broker(config: BrokerConfig) -> Result<(), BrokerError> {
         "starting Wheelhouse — binding sockets"
     );
 
-    // Create data directory if it doesn't exist
-    std::fs::create_dir_all(config.data_dir())
+    // Create data directory if it doesn't exist (PP-03: spawn_blocking for sync I/O)
+    let data_dir_path = config.data_dir().to_path_buf();
+    tokio::task::spawn_blocking(move || std::fs::create_dir_all(&data_dir_path))
+        .await
+        .map_err(|e| BrokerError::RoutingError(format!("spawn_blocking join error: {e}")))?
         .map_err(|e| BrokerError::RoutingError(format!("Failed to create data directory: {e}")))?;
 
     let state = BrokerState::with_data_dir(config.data_dir().to_path_buf());
