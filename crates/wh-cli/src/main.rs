@@ -10,6 +10,7 @@ use wh_cli::commands::logs::{self, LogsArgs};
 use wh_cli::commands::ps::{self, PsArgs};
 use wh_cli::commands::secrets::SecretsCmd;
 use wh_cli::commands::status;
+use wh_cli::commands::stream::{self, StreamCommand};
 use wh_cli::commands::surface::{self, SurfaceCommand};
 use wh_cli::output::{OutputEnvelope, OutputFormat};
 
@@ -43,6 +44,11 @@ enum Commands {
     Surface {
         #[command(subcommand)]
         command: SurfaceCommand,
+    },
+    /// Manage and observe streams.
+    Stream {
+        #[command(subcommand)]
+        command: StreamCommand,
     },
     /// Check Wheelhouse health and status.
     Status {
@@ -128,6 +134,31 @@ async fn main() {
                     if let Err(e) = surface::run_cli(&stream, &format).await {
                         eprintln!("{e}");
                         std::process::exit(1);
+                    }
+                }
+            }
+        }
+        Commands::Stream { command } => {
+            match command {
+                StreamCommand::Tail(ref args) => {
+                    let fmt = args.format;
+                    let result = stream::execute(args);
+                    if let Err(ref err) = result {
+                        match fmt {
+                            OutputFormat::Json => {
+                                let envelope =
+                                    OutputEnvelope::<()>::error(err.error_code(), err.to_string());
+                                if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                                    eprintln!("{json}");
+                                } else {
+                                    eprintln!("Error: {err}");
+                                }
+                            }
+                            OutputFormat::Human => {
+                                eprintln!("Error: {err}");
+                            }
+                        }
+                        std::process::exit(err.exit_code());
                     }
                 }
             }

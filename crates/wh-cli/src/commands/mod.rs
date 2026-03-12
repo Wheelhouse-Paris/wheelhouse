@@ -5,4 +5,5 @@ pub mod logs;
 pub mod ps;
 pub mod secrets;
 pub mod status;
+pub mod stream;
 pub mod surface;

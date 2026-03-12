@@ -52,6 +52,10 @@ pub enum WhError {
     #[error("Agent not found: {0}")]
     AgentNotFound(String),
 
+    /// Specified stream was not found in the topology.
+    #[error("Stream not found: {0}")]
+    StreamNotFound(String),
+
     /// An internal error occurred.
     #[error("Internal error: {0}")]
     Internal(String),
@@ -92,6 +96,7 @@ impl WhError {
             WhError::PromptFailed(_) => WhErrorCode("PROMPT_FAILED"),
             WhError::NonInteractive => WhErrorCode("NON_INTERACTIVE"),
             WhError::AgentNotFound(_) => WhErrorCode("AGENT_NOT_FOUND"),
+            WhError::StreamNotFound(_) => WhErrorCode("STREAM_NOT_FOUND"),
             WhError::Internal(_) => WhErrorCode("INTERNAL_ERROR"),
             WhError::InternalError(_) => WhErrorCode("INTERNAL_ERROR"),
             WhError::StreamError(_) => WhErrorCode("STREAM_ERROR"),
