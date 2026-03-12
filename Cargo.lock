@@ -1957,6 +1957,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wh-proto",
  "zeromq",
 ]
@@ -1981,6 +1982,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wh-broker",
  "wh-proto",
  "zeromq",
