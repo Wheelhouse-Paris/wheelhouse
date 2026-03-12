@@ -4,6 +4,7 @@ members = [
     "crates/wh-cli",
     "crates/wh-stream",
     "crates/wh-proto",
+    "crates/wh-user",
 ]
 resolver = "2"
 
@@ -26,3 +27,7 @@ tracing-subscriber = { version = "0.3", features = ["json"] }
 clap = { version = "4", features = ["derive"] }
 prost = "0.13"
 zeromq = "0.4"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1"
+tempfile = "3"
