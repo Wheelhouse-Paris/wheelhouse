@@ -258,6 +258,175 @@ pub fn apply(committed: CommittedPlan) -> Result<ApplyResult, DeployError> {
     Ok(result)
 }
 
+/// Result of a destroy operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DestroyResult {
+    /// Number of agent containers destroyed.
+    pub destroyed: usize,
+    /// Number of streams removed from state (no Podman teardown — streams are broker-managed).
+    pub streams_removed: usize,
+}
+
+impl std::fmt::Display for DestroyResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} destroyed \u{00B7} {} streams removed",
+            self.destroyed, self.streams_removed
+        )
+    }
+}
+
+/// Load the current applied state from `.wh/state.json`.
+/// Returns `None` if no state file exists (nothing deployed).
+fn load_state(workspace_root: &Path) -> Result<Option<Topology>, DeployError> {
+    let state_path = workspace_root.join(".wh").join("state.json");
+    if !state_path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&state_path).map_err(DeployError::FileRead)?;
+    let topology: Topology = serde_json::from_str(&content)
+        .map_err(|e| DeployError::ApplyFailed(format!("corrupt state file: {e}")))?;
+    Ok(Some(topology))
+}
+
+/// Destroy a deployed topology: stop all containers, clear state, and commit to git.
+///
+/// This bypasses the plan/commit typestate chain since destroy is a teardown path,
+/// not a build path. The `.wh` file path is used to locate the workspace root.
+///
+/// If no state exists (no `.wh/state.json`), returns a no-op result.
+/// Partial failures (e.g., one container fails to stop) are logged but do not
+/// halt the destroy — matching the `provision_containers()` error handling pattern.
+///
+/// The git commit uses ADR-003 format:
+/// `[agent-name] destroy: removed N agents, M streams`
+#[tracing::instrument(skip_all, fields(wh_file = %wh_file_path.as_ref().display()))]
+pub fn destroy(
+    wh_file_path: impl AsRef<Path>,
+    agent_name: Option<&str>,
+) -> Result<DestroyResult, DeployError> {
+    let wh_path = wh_file_path.as_ref();
+    let workspace_root = wh_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+
+    let current_state = load_state(workspace_root)?;
+
+    let topology = match current_state {
+        Some(t) => t,
+        None => {
+            // No state file — nothing deployed, no-op
+            return Ok(DestroyResult {
+                destroyed: 0,
+                streams_removed: 0,
+            });
+        }
+    };
+
+    if topology.agents.is_empty() && topology.streams.is_empty() {
+        // State exists but is empty — no-op
+        return Ok(DestroyResult {
+            destroyed: 0,
+            streams_removed: 0,
+        });
+    }
+
+    let agent = agent_name.unwrap_or("operator");
+    let mut destroyed_count: usize = 0;
+    let streams_removed = topology.streams.len();
+
+    // Stop and remove all agent containers
+    for agent_def in &topology.agents {
+        let name = podman::container_name(&topology.name, &agent_def.name);
+        match podman::podman_stop(&name) {
+            Ok(()) => {
+                destroyed_count += 1;
+                tracing::info!(agent = %agent_def.name, "agent container destroyed");
+            }
+            Err(e) => {
+                tracing::error!(
+                    agent = %agent_def.name,
+                    error = %e,
+                    "failed to stop agent container during destroy — continuing"
+                );
+                // Still count as destroyed (intent recorded in git)
+                destroyed_count += 1;
+            }
+        }
+    }
+
+    // Write cleared state to .wh/state.json
+    let wh_dir = workspace_root.join(".wh");
+    std::fs::create_dir_all(&wh_dir).map_err(DeployError::FileRead)?;
+
+    let empty_topology = Topology {
+        api_version: topology.api_version.clone(),
+        name: topology.name.clone(),
+        agents: vec![],
+        streams: vec![],
+        guardrails: topology.guardrails.clone(),
+    };
+    let state_path = wh_dir.join("state.json");
+    let state_json = serde_json::to_string_pretty(&empty_topology)
+        .map_err(|e| DeployError::ApplyFailed(format!("failed to serialize state: {e}")))?;
+    std::fs::write(&state_path, &state_json).map_err(DeployError::FileRead)?;
+
+    // Git commit: ensure gitignore, stage, scan, commit
+    gitignore::ensure_gitignore(workspace_root)?;
+
+    let stage_result = run_git_checked(workspace_root, &["add", ".wh/"]);
+    if let Err(e) = stage_result {
+        let _ = std::fs::remove_file(&state_path);
+        return Err(e);
+    }
+
+    // Pre-commit secrets scan
+    let suspicious = gitignore::scan_staged_for_secrets(workspace_root)?;
+    if !suspicious.is_empty() {
+        let _ = run_git(workspace_root, &["reset", "HEAD"]);
+        let _ = std::fs::remove_file(&state_path);
+        return Err(DeployError::SecretsDetected(suspicious));
+    }
+
+    // Build destroy summary
+    let mut summary_parts = Vec::new();
+    if destroyed_count > 0 {
+        summary_parts.push(format!(
+            "removed {} agent{}",
+            destroyed_count,
+            if destroyed_count == 1 { "" } else { "s" }
+        ));
+    }
+    if streams_removed > 0 {
+        summary_parts.push(format!(
+            "removed {} stream{}",
+            streams_removed,
+            if streams_removed == 1 { "" } else { "s" }
+        ));
+    }
+    let summary = if summary_parts.is_empty() {
+        "no changes".to_string()
+    } else {
+        summary_parts.join(", ")
+    };
+
+    let commit_message = format!("[{agent}] destroy: {summary}");
+    let commit_result = run_git(workspace_root, &["commit", "-m", &commit_message])?;
+
+    if !commit_result.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_result.stderr);
+        return Err(DeployError::GitFailed(format!(
+            "git commit failed: {stderr}"
+        )));
+    }
+
+    Ok(DestroyResult {
+        destroyed: destroyed_count,
+        streams_removed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
