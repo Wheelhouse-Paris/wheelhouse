@@ -79,7 +79,7 @@ impl CronSkillChain {
 
         // Step 3: Await handler completion and SkillInvocationPublished event
         // Wait for the spawned task to complete
-        let _ = handle.await.map_err(|e| ChainError::InvocationFailed {
+        handle.await.map_err(|e| ChainError::InvocationFailed {
             job_name: job_name.clone(),
             reason: format!("handler task panicked: {}", e),
         })?;

@@ -11,11 +11,13 @@ use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tracing::instrument;
 
+type PendingTimers = Arc<Mutex<HashMap<(String, String), tokio::task::JoinHandle<()>>>>;
+
 /// Tracks pending messages and fires acknowledgement signals when responses are slow.
 pub struct AckTracker {
     timeout: Duration,
     /// Pending timers keyed by (user_id, message_id).
-    pending: Arc<Mutex<HashMap<(String, String), tokio::task::JoinHandle<()>>>>,
+    pending: PendingTimers,
 }
 
 impl AckTracker {

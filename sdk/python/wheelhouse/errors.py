@@ -29,7 +29,22 @@ class ConnectionError(WheelhouseError):  # noqa: A001 — intentionally shadows 
 class PublishTimeout(WheelhouseError):
     """publish_confirmed() timed out waiting for WAL acknowledgement (SCV-08)."""
 
-    pass
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        stream: str | None = None,
+        timeout: float | None = None,
+        code: str | None = "PUBLISH_TIMEOUT",
+    ):
+        if message is None:
+            parts = []
+            if stream:
+                parts.append(f"stream '{stream}'")
+            if timeout is not None:
+                parts.append(f"timeout {timeout}s")
+            message = "Publish timed out" + (f": {', '.join(parts)}" if parts else "")
+        super().__init__(message, code=code)
 
 
 class StreamNotFound(WheelhouseError):

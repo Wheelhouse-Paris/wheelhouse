@@ -97,8 +97,7 @@ pub async fn run_cli(stream: &str, format_str: &str) -> Result<(), WhError> {
     // Validate inputs before any connection attempt (architecture spec)
     validate_stream_name(stream)?;
 
-    let output_format =
-        OutputFormat::from_str_value(format_str).map_err(|e| WhError::StreamError(e))?;
+    let output_format = OutputFormat::from_str_value(format_str).map_err(WhError::StreamError)?;
 
     let mut conn = StubConnection::new();
     // Take the receiver before moving into tasks

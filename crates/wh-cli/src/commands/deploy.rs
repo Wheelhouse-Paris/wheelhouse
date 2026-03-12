@@ -257,16 +257,14 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
     let tty = is_tty();
 
     // AC #3: Non-interactive mode requires --yes
-    if !yes {
-        if !tty {
-            let msg = output::format_error(
-                "APPLY_NO_CONFIRM",
-                "cannot prompt for confirmation in non-interactive mode. Use --yes to skip.",
-                format,
-            );
-            eprintln!("{msg}");
-            return error::EXIT_ERROR;
-        }
+    if !yes && !tty {
+        let msg = output::format_error(
+            "APPLY_NO_CONFIRM",
+            "cannot prompt for confirmation in non-interactive mode. Use --yes to skip.",
+            format,
+        );
+        eprintln!("{msg}");
+        return error::EXIT_ERROR;
     }
 
     let linted = match lint::lint(file) {

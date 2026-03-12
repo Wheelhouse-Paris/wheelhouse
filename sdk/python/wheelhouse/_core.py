@@ -210,7 +210,7 @@ class Connection:
                 await health_socket.recv()
             except zmq.ZMQError:
                 raise ConnectionError(
-                    "Wheelhouse is not running or not reachable",
+                    f"Wheelhouse is not running or not reachable at {self._endpoint}",
                     code="CONNECTION_ERROR",
                 )
             finally:

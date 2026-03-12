@@ -7,6 +7,7 @@ use wh_proto::UserProfile;
 use crate::error::UserError;
 
 /// Git timeout for all subprocess calls (CM-04).
+#[allow(dead_code)]
 const GIT_TIMEOUT_SECS: u64 = 30;
 
 /// Handles git operations for user profile persistence.
