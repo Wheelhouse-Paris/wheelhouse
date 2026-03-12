@@ -3,59 +3,48 @@
 //! Typed errors using `thiserror`. `anyhow` is never used in library modules (SCV-04).
 //! User-facing messages never mention "broker", "connection refused", or port numbers (RT-B1).
 
-use std::fmt;
-
-/// Exit codes per ADR-014:
-/// - 0 = success
-/// - 1 = error
-/// - 2 = plan change detected
 pub const EXIT_SUCCESS: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
 pub const EXIT_PLAN_CHANGE: i32 = 2;
 
-/// Machine-readable error codes (SCREAMING_SNAKE_CASE per SCV-01).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorCode {
-    ConnectionError,
-    InternalError,
-}
-
-impl ErrorCode {
-    /// Returns the SCREAMING_SNAKE_CASE string representation.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ErrorCode::ConnectionError => "CONNECTION_ERROR",
-            ErrorCode::InternalError => "INTERNAL_ERROR",
-        }
-    }
-}
-
-impl fmt::Display for ErrorCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Typed error hierarchy for the CLI.
-///
-/// All variants produce user-friendly messages using approved vocabulary (RT-B1).
+/// Typed error hierarchy for the `wh` CLI.
 #[derive(Debug, thiserror::Error)]
 pub enum WhError {
     /// Wheelhouse is not running (control socket unreachable).
     #[error("Wheelhouse not running")]
     ConnectionError,
 
+    /// Git is not installed or not found on PATH.
+    #[error("Git not found: {0}")]
+    GitNotFound(String),
+
+    /// Keychain operation failed (macOS Keychain / Linux Secret Service).
+    #[error("Keychain error: {0}")]
+    KeychainError(String),
+
+    /// Interactive prompt failed (e.g., stdin closed).
+    #[error("Prompt failed: {0}")]
+    PromptFailed(String),
+
+    /// Command requires an interactive terminal but stdin is not a TTY.
+    #[error("Interactive terminal required")]
+    NonInteractive,
+
     /// An internal error occurred.
-    #[error("{0}")]
-    InternalError(String),
+    #[error("Internal error: {0}")]
+    Internal(String),
 }
 
 impl WhError {
-    /// Returns the machine-readable error code.
-    pub fn code(&self) -> ErrorCode {
+    /// Returns the machine-readable error code (SCREAMING_SNAKE_CASE per SCV-01).
+    pub fn error_code(&self) -> &'static str {
         match self {
-            WhError::ConnectionError => ErrorCode::ConnectionError,
-            WhError::InternalError(_) => ErrorCode::InternalError,
+            WhError::ConnectionError => "CONNECTION_ERROR",
+            WhError::GitNotFound(_) => "GIT_NOT_FOUND",
+            WhError::KeychainError(_) => "KEYCHAIN_ERROR",
+            WhError::PromptFailed(_) => "PROMPT_FAILED",
+            WhError::NonInteractive => "NON_INTERACTIVE",
+            WhError::Internal(_) => "INTERNAL_ERROR",
         }
     }
 

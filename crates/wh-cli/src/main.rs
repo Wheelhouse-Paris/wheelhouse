@@ -6,38 +6,57 @@
 use clap::{Parser, Subcommand};
 
 use wh_cli::commands::ps::{self, PsArgs};
-use wh_cli::output::json;
-use wh_cli::output::OutputFormat;
+use wh_cli::commands::secrets::SecretsCmd;
+use wh_cli::output::{OutputEnvelope, OutputFormat};
 
-/// Wheelhouse CLI — manage your agent topology.
-#[derive(Parser)]
+/// wh — the Wheelhouse CLI.
+///
+/// Unified control plane for operators and agents.
+#[derive(Debug, Parser)]
 #[command(name = "wh", version, about)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Commands {
     /// List all deployed components with their live status.
     Ps(PsArgs),
+    /// Manage Wheelhouse secrets and credentials.
+    Secrets {
+        #[command(subcommand)]
+        cmd: SecretsCmd,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    let result = match &cli.command {
-        Commands::Ps(args) => ps::execute(args).map_err(|e| (e, args.format)),
+    let (result, format) = match cli.command {
+        Commands::Ps(args) => {
+            let fmt = args.format;
+            (ps::execute(&args).map_err(|e| Box::new(e) as Box<dyn std::error::Error>), fmt)
+        }
+        Commands::Secrets { cmd } => {
+            let fmt = cmd.format();
+            (cmd.run().map_err(|e| Box::new(e) as Box<dyn std::error::Error>), fmt)
+        }
     };
 
-    if let Err((err, format)) = result {
-        let exit_code = err.exit_code();
+    if let Err(e) = result {
+        let exit_code = 1i32;
         match format {
             OutputFormat::Json => {
-                json::print_json_error(&err);
+                let envelope = OutputEnvelope::<()>::error("ERROR", e.to_string());
+                if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                    eprintln!("{json}");
+                } else {
+                    eprintln!("Error: {e}");
+                }
             }
             OutputFormat::Human => {
-                eprintln!("Error: {err}");
+                eprintln!("Error: {e}");
             }
         }
         std::process::exit(exit_code);
