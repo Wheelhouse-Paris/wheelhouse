@@ -54,6 +54,20 @@ pub enum DeployCommand {
         #[arg(long)]
         agent_name: Option<String>,
     },
+    /// Destroy a deployed topology — stop all containers and clear state (FR3)
+    Destroy {
+        /// Path to the .wh topology file
+        file: PathBuf,
+        /// Skip interactive confirmation
+        #[arg(long)]
+        yes: bool,
+        /// Output format
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+        /// Agent name for git commit attribution (defaults to "operator")
+        #[arg(long)]
+        agent_name: Option<String>,
+    },
 }
 
 impl DeployCommand {
@@ -66,6 +80,9 @@ impl DeployCommand {
             }
             DeployCommand::Apply { file, yes, format, agent_name } => {
                 execute_apply(&file, yes, format, agent_name.as_deref())
+            }
+            DeployCommand::Destroy { file, yes, format, agent_name } => {
+                execute_destroy(&file, yes, format, agent_name.as_deref())
             }
         }
     }
@@ -317,6 +334,80 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
                         "created": apply_result.created,
                         "changed": apply_result.changed,
                         "destroyed": apply_result.destroyed
+                    }
+                })
+            );
+        }
+    }
+
+    error::EXIT_SUCCESS
+}
+
+fn execute_destroy(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Option<&str>) -> i32 {
+    let tty = is_tty();
+
+    // Require --yes in non-interactive mode (matches execute_apply pattern)
+    if !yes && !tty {
+        let msg = output::format_error(
+            "DESTROY_NO_CONFIRM",
+            "cannot prompt for confirmation in non-interactive mode. Use --yes to skip.",
+            format,
+        );
+        eprintln!("{msg}");
+        return error::EXIT_ERROR;
+    }
+
+    // Validate the topology file exists and is parseable
+    if let Err(e) = lint::lint(file) {
+        let msg = output::format_error(e.code(), &e.to_string(), format);
+        eprintln!("{msg}");
+        return error::EXIT_ERROR;
+    }
+
+    // Show what will be destroyed and prompt for confirmation
+    if !yes {
+        eprintln!("This will destroy all deployed components from topology '{}'.", file.display());
+        eprintln!("All Podman containers will be stopped and removed.");
+        eprintln!();
+
+        if !prompt_confirmation() {
+            eprintln!("Destroy cancelled.");
+            return error::EXIT_SUCCESS;
+        }
+    }
+
+    // Execute destroy
+    progress_step("Destroying topology...", tty);
+    let destroy_result = match apply::destroy(file, agent_name) {
+        Ok(r) => r,
+        Err(e) => {
+            progress_done("", tty);
+            let msg = output::format_error(e.code(), &e.to_string(), format);
+            eprintln!("{msg}");
+            return error::EXIT_ERROR;
+        }
+    };
+    progress_done("Topology destroyed.", tty);
+
+    // Output result
+    match format {
+        OutputFormat::Human => {
+            if destroy_result.destroyed == 0 && destroy_result.streams_removed == 0 {
+                println!("Nothing to destroy. No components were deployed.");
+            } else {
+                println!("{destroy_result}");
+            }
+        }
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "v": 1,
+                    "status": "ok",
+                    "data": {
+                        "destroyed": true,
+                        "agents_removed": destroy_result.destroyed,
+                        "streams_removed": destroy_result.streams_removed
                     }
                 })
             );
