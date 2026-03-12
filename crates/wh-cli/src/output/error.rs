@@ -96,3 +96,22 @@ pub fn deploy_error_code(err: &DeployError) -> &'static str {
 pub fn exit_code_for_deploy_error(_err: &DeployError) -> i32 {
     EXIT_ERROR
 }
+
+/// Errors produced by the `.wh` file lint engine.
+#[derive(Debug, thiserror::Error)]
+pub enum LintError {
+    #[error("failed to read file: {0}")]
+    FileReadError(std::io::Error),
+
+    #[error("failed to parse YAML: {0}")]
+    YamlParseError(String),
+}
+
+impl LintError {
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            LintError::FileReadError(_) => "LINT_FILE_ERROR",
+            LintError::YamlParseError(_) => "LINT_PARSE_ERROR",
+        }
+    }
+}

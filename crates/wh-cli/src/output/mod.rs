@@ -6,6 +6,8 @@ pub mod error;
 pub mod json;
 pub mod table;
 
+pub use error::LintError;
+
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -56,7 +58,7 @@ impl OutputEnvelope<()> {
     }
 }
 
-/// Standard API response envelope (alias for OutputEnvelope, used by deploy commands).
+/// Standard API response envelope (used by deploy commands).
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T: Serialize> {
     pub v: u32,
@@ -69,6 +71,15 @@ pub struct ApiResponse<T: Serialize> {
 pub struct ApiError {
     pub v: u32,
     pub status: String,
+    pub code: String,
+    pub message: String,
+}
+
+/// JSON error envelope (used by commands that return Result<i32, WhError>).
+#[derive(Debug, Serialize)]
+pub struct ErrorEnvelope {
+    pub v: u32,
+    pub status: &'static str,
     pub code: String,
     pub message: String,
 }
@@ -90,6 +101,17 @@ impl ApiError {
             status: "error".to_string(),
             code: code.to_string(),
             message: message.to_string(),
+        }
+    }
+}
+
+impl ErrorEnvelope {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            v: 1,
+            status: "error",
+            code: code.into(),
+            message: message.into(),
         }
     }
 }
