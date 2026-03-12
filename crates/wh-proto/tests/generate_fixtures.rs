@@ -45,9 +45,13 @@ fn generate_v1_fixtures() {
     // CronEvent fixture
     let cron_msg = wh_proto::CronEvent {
         job_name: "daily-compaction".to_string(),
-        stream_name: "system-events".to_string(),
-        cron_expression: "0 0 * * *".to_string(),
-        fired_at_ms: 1710000000000,
+        action: "compact".to_string(),
+        schedule: "0 0 * * *".to_string(),
+        triggered_at: Some(prost_types::Timestamp {
+            seconds: 1710000000,
+            nanos: 0,
+        }),
+        payload: std::collections::HashMap::new(),
     };
     let path = format!("{FIXTURE_DIR}/v1_cron_event.bin");
     std::fs::write(&path, cron_msg.encode_to_vec()).expect("Failed to write CronEvent fixture");
