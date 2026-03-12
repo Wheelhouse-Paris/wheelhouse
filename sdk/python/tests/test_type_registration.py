@@ -48,7 +48,7 @@ class TestRegisterTypeDecorator:
     def test_registers_class_in_global_registry(self):
         @register_type("biotech.MoleculeObject")
         class MoleculeObject:
-            pass
+            name: str = ""
 
         assert "biotech.MoleculeObject" in _registered_types
         assert _registered_types["biotech.MoleculeObject"] is MoleculeObject
@@ -56,7 +56,7 @@ class TestRegisterTypeDecorator:
     def test_sets_wh_type_name_attribute(self):
         @register_type("pharma.DrugCompound")
         class DrugCompound:
-            pass
+            compound_id: str = ""
 
         assert DrugCompound._wh_type_name == "pharma.DrugCompound"  # type: ignore
 
@@ -65,23 +65,23 @@ class TestRegisterTypeDecorator:
 
             @register_type("wheelhouse.Forbidden")
             class Forbidden:
-                pass
+                name: str = ""
 
     def test_rejects_invalid_name_at_decoration_time(self):
         with pytest.raises(InvalidTypeNameError):
 
             @register_type("NoNamespace")
             class Bad:
-                pass
+                name: str = ""
 
     def test_two_namespaces_same_type_name(self):
         @register_type("biotech.MoleculeObject")
         class BiotechMolecule:
-            pass
+            name: str = ""
 
         @register_type("pharma.MoleculeObject")
         class PharmaMolecule:
-            pass
+            name: str = ""
 
         assert "biotech.MoleculeObject" in _registered_types
         assert "pharma.MoleculeObject" in _registered_types
@@ -95,22 +95,22 @@ class TestConnect:
     def setup_method(self):
         _registered_types.clear()
 
-    def test_connect_mock_mode(self):
+    async def test_connect_mock_mode(self):
         from wheelhouse import connect
 
-        surface = connect(mock=True)
-        assert surface.connected
+        surface = await connect(mock=True)
+        assert surface._connected
 
-    def test_connect_mock_registers_types(self):
+    async def test_connect_mock_registers_types(self):
         @register_type("test.MockType")
         class MockType:
-            pass
+            name: str = ""
 
         from wheelhouse import connect
 
         # Mock mode should succeed without a running broker
-        surface = connect(mock=True)
-        assert surface.connected
+        surface = await connect(mock=True)
+        assert surface._connected
 
     def test_connect_without_broker_raises_connection_error(self):
         from wheelhouse import connect

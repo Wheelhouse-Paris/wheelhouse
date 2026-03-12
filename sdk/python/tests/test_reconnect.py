@@ -59,8 +59,8 @@ class TestAutoReconnect:
         from wheelhouse._core import Connection
 
         conn = Connection("tcp://127.0.0.1:5555")
-        assert hasattr(conn, "_registered_types")
-        assert isinstance(conn._registered_types, dict)
+        assert hasattr(conn, "_instance_types")
+        assert isinstance(conn._instance_types, dict)
 
     def test_register_type(self):
         """Given a connection,
@@ -72,5 +72,5 @@ class TestAutoReconnect:
 
         conn = Connection("tcp://127.0.0.1:5555")
         conn.register_type("TextMessage", TextMessage)
-        assert "TextMessage" in conn._registered_types
-        assert conn._registered_types["TextMessage"] is TextMessage
+        assert "TextMessage" in conn._instance_types
+        assert conn._instance_types["TextMessage"] is TextMessage
