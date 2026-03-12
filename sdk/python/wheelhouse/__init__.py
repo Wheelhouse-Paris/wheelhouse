@@ -17,11 +17,48 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from wheelhouse._core import connect as connect  # noqa: F401
+__version__ = "0.1.0"
+
+from wheelhouse._core import connect as _real_connect  # noqa: F401
 from wheelhouse._core import register_type as register_type  # noqa: F401
 
+# Re-export user-facing error types for convenient `except wheelhouse.PublishTimeout` (AC #4)
+from wheelhouse.errors import ConnectionError as ConnectionError  # noqa: A004, F401
+from wheelhouse.errors import PublishTimeout as PublishTimeout  # noqa: F401
+from wheelhouse.errors import StreamNotFound as StreamNotFound  # noqa: F401
+
 # Restrict public API surface
-__all__ = ["connect", "Surface", "register_type"]
+__all__ = [
+    "connect",
+    "Surface",
+    "register_type",
+    "ConnectionError",
+    "PublishTimeout",
+    "StreamNotFound",
+]
+
+
+async def connect(
+    endpoint: str | None = None, *, mock: bool = False
+) -> Any:  # Returns Connection | MockConnection
+    """Connect to Wheelhouse.
+
+    Args:
+        endpoint: Wheelhouse endpoint URL. If not provided, uses WH_URL
+                  environment variable, or defaults to tcp://127.0.0.1:5555.
+        mock: If True, returns a MockConnection for testing without a running
+              Wheelhouse instance (NFR-D4).
+
+    Returns:
+        A Connection (or MockConnection) for publishing and subscribing.
+
+    Raises:
+        wheelhouse.ConnectionError: If Wheelhouse is not running (real mode only).
+    """
+    if mock:
+        from wheelhouse.testing import MockConnection
+        return MockConnection()
+    return await _real_connect(endpoint)
 
 
 class Surface:

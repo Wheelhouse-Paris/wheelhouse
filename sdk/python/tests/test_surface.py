@@ -57,13 +57,23 @@ class TestModuleExports:
 
         assert hasattr(wheelhouse, "Surface")
 
-    def test_init_does_not_export_errors(self):
-        """wheelhouse.__init__ does NOT re-export errors (MA-02)."""
+    def test_init_exports_user_facing_errors(self):
+        """wheelhouse.__init__ re-exports user-facing error types for AC #4.
+
+        AC #4 requires `except wheelhouse.PublishTimeout` to work.
+        Only user-facing errors are re-exported; internal errors stay in wheelhouse.errors.
+        """
         import wheelhouse
 
-        assert not hasattr(wheelhouse, "ConnectionError")
-        assert not hasattr(wheelhouse, "PublishTimeout")
-        assert not hasattr(wheelhouse, "StreamNotFound")
+        # User-facing errors must be available from wheelhouse namespace (AC #4)
+        assert hasattr(wheelhouse, "ConnectionError")
+        assert hasattr(wheelhouse, "PublishTimeout")
+        assert hasattr(wheelhouse, "StreamNotFound")
+
+        # Internal errors should NOT be on the top-level namespace
+        assert not hasattr(wheelhouse, "RegistrationError")
+        assert not hasattr(wheelhouse, "ReservedNamespaceError")
+        assert not hasattr(wheelhouse, "InvalidTypeNameError")
 
     def test_init_does_not_export_internals(self):
         """wheelhouse.__all__ does NOT include internal modules."""
