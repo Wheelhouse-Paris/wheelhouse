@@ -178,10 +178,60 @@ fn execute_plan(file: &PathBuf, format: OutputFormat, force_destroy_all: bool, c
     }
 }
 
+/// Check if a file descriptor is a TTY.
+fn is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+/// Prompt the user for confirmation. Returns true if user confirms.
+fn prompt_confirmation() -> bool {
+    use std::io::{BufRead, Write};
+
+    eprint!("Apply changes? (yes/no) ");
+    let _ = std::io::stderr().flush();
+
+    let stdin = std::io::stdin();
+    let mut line = String::new();
+    if stdin.lock().read_line(&mut line).is_err() {
+        return false;
+    }
+    line.trim().eq_ignore_ascii_case("yes")
+}
+
+/// Simple progress indicator — writes to stderr.
+fn progress_step(msg: &str, is_tty: bool) {
+    if is_tty {
+        eprint!("\r\x1b[K{msg}");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+    } else {
+        eprintln!("{msg}");
+    }
+}
+
+/// Clear the progress line (TTY only).
+fn progress_done(msg: &str, is_tty: bool) {
+    if is_tty {
+        eprintln!("\r\x1b[K{msg}");
+    } else {
+        eprintln!("{msg}");
+    }
+}
+
 fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Option<&str>) -> i32 {
+    let tty = is_tty();
+
+    // AC #3: Non-interactive mode requires --yes
     if !yes {
-        eprintln!("Error: interactive confirmation not yet supported. Use --yes to skip.");
-        return error::EXIT_ERROR;
+        if !tty {
+            let msg = output::format_error(
+                "APPLY_NO_CONFIRM",
+                "cannot prompt for confirmation in non-interactive mode. Use --yes to skip.",
+                format,
+            );
+            eprintln!("{msg}");
+            return error::EXIT_ERROR;
+        }
     }
 
     let linted = match lint::lint(file) {
@@ -193,7 +243,8 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
         }
     };
 
-    let plan_output = match plan::plan(linted) {
+    // Use plan_with_options to ensure self-destruct detection (CM-05)
+    let plan_output = match plan::plan_with_options(linted, false) {
         Ok(p) => p,
         Err(e) => {
             let msg = output::format_error(e.code(), &e.to_string(), format);
@@ -213,30 +264,60 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
         return error::EXIT_SUCCESS;
     }
 
+    // AC #1: Show plan and prompt for confirmation (unless --yes)
+    if !yes {
+        let plan_data = PlanData::from(&plan_output);
+        eprintln!("{plan_data}");
+
+        if !prompt_confirmation() {
+            eprintln!("Apply cancelled.");
+            return error::EXIT_SUCCESS;
+        }
+    }
+
+    // Commit the plan to git
+    progress_step("Committing topology changes...", tty);
     let committed = match apply::commit(plan_output, agent_name) {
         Ok(c) => c,
         Err(e) => {
+            progress_done("", tty);
             let msg = output::format_error(e.code(), &e.to_string(), format);
             eprintln!("{msg}");
             return error::EXIT_ERROR;
         }
     };
+    progress_done("Topology changes committed.", tty);
 
-    if let Err(e) = apply::apply(committed) {
-        let msg = output::format_error(e.code(), &e.to_string(), format);
-        eprintln!("{msg}");
-        return error::EXIT_ERROR;
-    }
+    // AC #1: Spinner during provisioning
+    progress_step("Provisioning containers...", tty);
+    let apply_result = match apply::apply(committed) {
+        Ok(r) => r,
+        Err(e) => {
+            progress_done("", tty);
+            let msg = output::format_error(e.code(), &e.to_string(), format);
+            eprintln!("{msg}");
+            return error::EXIT_ERROR;
+        }
+    };
+    progress_done("Provisioning complete.", tty);
 
+    // AC #2: Summary line
     match format {
-        OutputFormat::Human => println!("Topology applied successfully."),
+        OutputFormat::Human => {
+            println!("{apply_result}");
+        }
         OutputFormat::Json => {
             println!(
                 "{}",
                 serde_json::json!({
                     "v": 1,
                     "status": "ok",
-                    "data": { "applied": true }
+                    "data": {
+                        "applied": true,
+                        "created": apply_result.created,
+                        "changed": apply_result.changed,
+                        "destroyed": apply_result.destroyed
+                    }
                 })
             );
         }

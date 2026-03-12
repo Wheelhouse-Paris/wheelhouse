@@ -11,7 +11,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use crate::deploy::plan::PlanOutput;
-use crate::deploy::{DeployError, Topology};
+use crate::deploy::podman::{self, ApplyResult};
+use crate::deploy::{Change, DeployError, Topology};
 
 /// Default timeout for git subprocess calls (CM-04).
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -23,11 +24,11 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 #[must_use = "a CommittedPlan must be passed to apply() — do not discard"]
 #[derive(Debug)]
 pub struct CommittedPlan {
-    #[allow(dead_code)]
     pub(crate) desired_topology: Topology,
     #[allow(dead_code)]
     pub(crate) source_path: PathBuf,
     pub(crate) plan_hash: String,
+    pub(crate) changes: Vec<Change>,
 }
 
 impl CommittedPlan {
@@ -37,7 +38,7 @@ impl CommittedPlan {
 }
 
 /// Find the git binary, checking common paths.
-fn find_git() -> &'static str {
+pub(crate) fn find_git() -> &'static str {
     // Try common paths for git
     for path in &["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"] {
         if std::path::Path::new(path).exists() {
@@ -53,7 +54,7 @@ fn find_git() -> &'static str {
 ///
 /// Spawns git as a subprocess and polls for completion. If the timeout
 /// fires, the process is killed and `DeployError::GitTimeout` is returned.
-fn run_git(
+pub(crate) fn run_git(
     workspace_root: &Path,
     args: &[&str],
 ) -> Result<std::process::Output, DeployError> {
@@ -91,7 +92,7 @@ fn run_git(
 }
 
 /// Run a git command and check that it succeeded.
-fn run_git_checked(
+pub(crate) fn run_git_checked(
     workspace_root: &Path,
     args: &[&str],
 ) -> Result<std::process::Output, DeployError> {
@@ -141,6 +142,7 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
     let agent = agent_name.unwrap_or("operator");
     let summary = change_summary(&plan);
     let plan_hash = plan.plan_hash().to_string();
+    let changes = plan.changes().to_vec();
 
     let workspace_root = plan
         .source_path()
@@ -191,21 +193,37 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
         desired_topology: plan.desired_topology,
         source_path: plan.source_path,
         plan_hash,
+        changes,
     })
 }
 
-/// Apply the committed plan: finalize the deployment.
+/// Apply the committed plan: provision containers and finalize the deployment.
 ///
-/// This step persists the topology state. Since we already wrote state.json
-/// during commit, this step is a no-op in MVP (FM-04: idempotent).
-/// Future stories will add broker state updates here.
+/// State was already persisted to `.wh/state.json` during commit.
+/// This step provisions Podman containers for agent changes:
+/// - Additions: start new containers
+/// - Removals: stop and remove containers
+/// - Modifications: restart containers
+///
+/// Stream changes are no-ops (local provider, handled by broker).
+/// FM-04: Idempotent — applying same .wh twice = same result (no changes on second run).
 #[tracing::instrument(skip_all)]
-pub fn apply(committed: CommittedPlan) -> Result<(), DeployError> {
-    // State already persisted in commit step.
-    // Future: broker state update goes here.
-    // FM-04: Idempotent — applying same .wh twice = same result.
-    let _ = committed; // consume the token
-    Ok(())
+pub fn apply(committed: CommittedPlan) -> Result<ApplyResult, DeployError> {
+    if committed.changes.is_empty() {
+        return Ok(ApplyResult {
+            created: 0,
+            changed: 0,
+            destroyed: 0,
+        });
+    }
+
+    let result = podman::provision_containers(
+        &committed.desired_topology.name,
+        &committed.changes,
+        &committed.desired_topology.agents,
+    );
+
+    Ok(result)
 }
 
 #[cfg(test)]
