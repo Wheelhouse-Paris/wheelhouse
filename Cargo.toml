@@ -4,6 +4,7 @@ members = [
     "crates/wh-cli",
     "crates/wh-stream",
     "crates/wh-proto",
+    "crates/wh-skill",
 ]
 resolver = "2"
 
@@ -28,6 +29,8 @@ tracing-subscriber = { version = "0.3", features = ["json"] }
 clap = { version = "4", features = ["derive"] }
 prost = "0.13"
 zeromq = "0.4"
+git2 = "0.19"
+tempfile = "3"
 
 # Proto build
 prost-build = "0.13"
