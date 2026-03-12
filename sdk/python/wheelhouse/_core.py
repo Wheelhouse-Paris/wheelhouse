@@ -101,6 +101,23 @@ def _validate_type_name(type_name: str) -> tuple[str, str]:
     return namespace, short_name
 
 
+def _validate_type_schema(cls: type) -> None:
+    """Validate that a class has at least one data field (annotation).
+
+    Raises TypeError if the class has no annotations — schema validation
+    runs in both mock and real mode, it is not a no-op (AC #4, Story 6.3).
+
+    Uses vars(cls) to check only the class's own annotations, not inherited ones.
+    """
+    own_annotations = vars(cls).get("__annotations__", {})
+    if not own_annotations:
+        raise TypeError(
+            f"Type '{cls.__name__}' has no data fields (no type annotations). "
+            f"@register_type requires at least one typed attribute, e.g.: "
+            f"'name: str = \"\"'"
+        )
+
+
 def register_type(type_name: str) -> Callable:
     """Decorator to register a custom Protobuf type with a namespace.
 
@@ -109,13 +126,21 @@ def register_type(type_name: str) -> Callable:
         class MoleculeObject:
             ...
 
-    The type is validated immediately. Registration with the running Wheelhouse
-    instance happens on connect() and is re-done automatically on reconnect (CM-07).
+    The type is validated immediately — both name format and schema are checked
+    at decoration time. Registration with the running Wheelhouse instance happens
+    on connect() and is re-done automatically on reconnect (CM-07).
+
+    Raises:
+        InvalidTypeNameError: If type_name format is invalid.
+        ReservedNamespaceError: If type_name uses reserved 'wheelhouse.*' namespace.
+        TypeError: If the decorated class has no data fields (AC #4, Story 6.3).
     """
     # Validate format immediately (fail fast)
     _validate_type_name(type_name)
 
     def decorator(cls: type) -> type:
+        # Validate schema — class must have at least one typed field
+        _validate_type_schema(cls)
         _registered_types[type_name] = cls
         cls._wh_type_name = type_name  # type: ignore[attr-defined]
         return cls

@@ -91,11 +91,32 @@ class MockConnection:
         """Get all messages published in this mock session."""
         return list(self._messages)
 
+    def get_published(self, stream: str | None = None) -> list[tuple[str, Any]]:
+        """Get published messages, optionally filtered by stream name.
+
+        Args:
+            stream: If provided, return only messages published to this stream.
+                    If None, return all published messages.
+
+        Returns:
+            List of (stream_name, message) tuples.
+        """
+        if stream is None:
+            return list(self.published)
+        return [(s, m) for s, m in self.published if s == stream]
+
     def clear(self) -> None:
         """Clear all mock state."""
         self.published.clear()
         self.confirmed.clear()
         self._messages.clear()
+
+    def reset(self) -> None:
+        """Reset all mock state — alias for clear().
+
+        More intuitive name for test setup/teardown.
+        """
+        self.clear()
 
     async def close(self) -> None:
         """Close the mock connection."""
