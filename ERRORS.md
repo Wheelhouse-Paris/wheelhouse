@@ -15,6 +15,7 @@ Use `--format json` to get machine-parseable error output with the code as a num
 | WH-2003 | APPLY_ERROR | Deploy apply failed. The deployment could not be completed. | Check the error message for the specific failure. Common causes: missing container images, insufficient permissions, port conflicts. Run `wh deploy plan` first to preview changes. |
 | WH-3001 | STREAM_ERROR | Stream operation failed. The requested stream does not exist or is not accessible. | Verify the stream name with `wh ps`. Ensure the topology includes the stream and that Wheelhouse is running. |
 | WH-4001 | CONFIG_ERROR | Configuration error. A configuration file is missing, malformed, or contains invalid values. | Check the indicated file path and field. Ensure YAML syntax is valid and all required fields are present. |
+| WH-4002 | SECRET_NOT_FOUND | A required secret is not configured. Neither an environment variable nor an OS keychain entry was found for the requested credential. | Run `wh secrets init` to configure credentials. Alternatively, set the corresponding environment variable (e.g., `ANTHROPIC_API_KEY`). |
 | WH-9001 | INTERNAL_ERROR | An unexpected internal error occurred. This indicates a bug in Wheelhouse. | Please report this error at https://github.com/Wheelhouse-Paris/wheelhouse/issues with the full error output and steps to reproduce. |
 
 ## JSON Error Format

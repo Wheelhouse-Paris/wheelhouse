@@ -101,6 +101,10 @@ pub enum WhError {
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 
+    /// A required secret is not configured (neither env var nor keychain).
+    #[error("Secret '{0}' not configured. Run 'wh secrets init' to set up credentials.")]
+    SecretNotFound(String),
+
     /// Generic error (used by ControlClient).
     #[error("{0}")]
     Other(String),
@@ -127,6 +131,7 @@ impl WhError {
             WhError::StreamError(_) => WhErrorCode("STREAM_ERROR"),
             WhError::Timeout => WhErrorCode("TIMEOUT"),
             WhError::InvalidResponse(_) => WhErrorCode("INVALID_RESPONSE"),
+            WhError::SecretNotFound(_) => WhErrorCode("SECRET_NOT_FOUND"),
             WhError::Other(_) => WhErrorCode("INTERNAL_ERROR"),
         }
     }
