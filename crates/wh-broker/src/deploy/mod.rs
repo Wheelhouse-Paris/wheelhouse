@@ -7,6 +7,7 @@
 //! See ADR-003 for design rationale.
 
 pub mod apply;
+pub mod approval;
 pub mod autonomous;
 pub mod lint;
 pub mod memory;
@@ -15,6 +16,19 @@ pub mod plan;
 pub mod podman;
 
 use serde::{Deserialize, Serialize};
+
+/// Threshold level for autonomous apply — determines which impact levels require human approval.
+///
+/// - `Low`: only low-impact changes proceed automatically; medium and high require approval.
+/// - `Medium`: low and medium-impact changes proceed; high requires approval.
+/// - `High`: all changes proceed automatically (effectively disables threshold).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThresholdLevel {
+    Low,
+    Medium,
+    High,
+}
 
 /// Guardrails for a topology — safety constraints that block deployment if exceeded.
 ///
@@ -25,6 +39,14 @@ pub struct Guardrails {
     /// Maximum allowed replicas for any single agent in this topology.
     #[serde(default)]
     pub max_replicas: Option<u32>,
+    /// Threshold level for autonomous apply — determines which impact levels
+    /// require human approval before applying. `None` = all changes proceed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autonomous_apply_threshold: Option<ThresholdLevel>,
+    /// Timeout in seconds for pending human approval requests.
+    /// Default: 86400 (24 hours).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_timeout_secs: Option<u64>,
 }
 
 /// Represents a parsed and validated `.wh` topology file.
@@ -127,6 +149,9 @@ pub enum DeployError {
 
     #[error("persona load failed: {0}")]
     PersonaLoadFailed(String),
+
+    #[error("approval required: {0}")]
+    ApprovalRequired(String),
 }
 
 impl DeployError {
@@ -145,6 +170,7 @@ impl DeployError {
             DeployError::PodmanNotFound(_) => "PODMAN_NOT_FOUND",
             DeployError::PodmanFailed(_) => "PODMAN_FAILED",
             DeployError::PersonaLoadFailed(_) => "PERSONA_LOAD_FAILED",
+            DeployError::ApprovalRequired(_) => "APPROVAL_REQUIRED",
         }
     }
 }
