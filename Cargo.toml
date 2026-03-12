@@ -28,6 +28,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 keyring = { version = "3", features = ["apple-native", "linux-native"] }
 dialoguer = "0.11"
 console = "0.15"

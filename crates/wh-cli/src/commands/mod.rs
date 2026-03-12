@@ -1,5 +1,6 @@
 //! CLI command modules.
 
+pub mod completion;
 pub mod deploy;
 pub mod logs;
 pub mod ps;
