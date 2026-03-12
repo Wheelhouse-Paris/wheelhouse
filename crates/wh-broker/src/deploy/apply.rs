@@ -217,10 +217,16 @@ pub fn apply(committed: CommittedPlan) -> Result<ApplyResult, DeployError> {
         });
     }
 
+    let workspace_root = committed
+        .source_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+
     let result = podman::provision_containers(
         &committed.desired_topology.name,
         &committed.changes,
         &committed.desired_topology.agents,
+        Some(workspace_root),
     );
 
     Ok(result)

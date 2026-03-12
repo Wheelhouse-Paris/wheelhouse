@@ -224,6 +224,15 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     to: Some(serde_json::json!(desired_agent.image)),
                 });
             }
+            if current_agent.persona != desired_agent.persona {
+                changes.push(Change {
+                    op: "~".to_string(),
+                    component: format!("agent {name}"),
+                    field: Some("persona".to_string()),
+                    from: Some(serde_json::json!(current_agent.persona)),
+                    to: Some(serde_json::json!(desired_agent.persona)),
+                });
+            }
         }
     }
 
@@ -484,6 +493,7 @@ mod tests {
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec!["main".to_string()],
+                persona: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -525,6 +535,7 @@ mod tests {
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
+                persona: None,
             }],
             streams: vec![],
             guardrails: None,
@@ -644,6 +655,7 @@ mod tests {
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
+                persona: None,
             }],
             streams: vec![],
             guardrails: None,
@@ -683,6 +695,7 @@ mod tests {
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
+                persona: None,
             }],
             streams: vec![],
             guardrails: None,
@@ -722,6 +735,7 @@ mod tests {
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
+                persona: None,
             }],
             streams: vec![],
             guardrails: None,

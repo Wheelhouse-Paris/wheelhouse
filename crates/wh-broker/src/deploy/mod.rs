@@ -10,6 +10,7 @@ pub mod apply;
 pub mod autonomous;
 pub mod lint;
 pub mod memory;
+pub mod persona;
 pub mod plan;
 pub mod podman;
 
@@ -52,6 +53,10 @@ pub struct Agent {
     pub replicas: u32,
     #[serde(default)]
     pub streams: Vec<String>,
+    /// Optional path to persona files directory (e.g., `agents/donna/`).
+    /// Contains SOUL.md, IDENTITY.md, and MEMORY.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
 }
 
 fn default_replicas() -> u32 {
@@ -119,6 +124,9 @@ pub enum DeployError {
 
     #[error("Podman operation failed: {0}")]
     PodmanFailed(String),
+
+    #[error("persona load failed: {0}")]
+    PersonaLoadFailed(String),
 }
 
 impl DeployError {
@@ -136,6 +144,7 @@ impl DeployError {
             DeployError::SelfDestructDetected(_) => "SELF_DESTRUCT_DETECTED",
             DeployError::PodmanNotFound(_) => "PODMAN_NOT_FOUND",
             DeployError::PodmanFailed(_) => "PODMAN_FAILED",
+            DeployError::PersonaLoadFailed(_) => "PERSONA_LOAD_FAILED",
         }
     }
 }
@@ -253,12 +262,14 @@ agents:
                     image: "z:latest".to_string(),
                     replicas: 1,
                     streams: vec![],
+                    persona: None,
                 },
                 Agent {
                     name: "alpha".to_string(),
                     image: "a:latest".to_string(),
                     replicas: 1,
                     streams: vec![],
+                    persona: None,
                 },
             ],
             streams: vec![
@@ -276,5 +287,43 @@ agents:
         let canonical = canonicalize_topology(topo);
         assert_eq!(canonical.agents[0].name, "alpha");
         assert_eq!(canonical.streams[0].name, "a-stream");
+    }
+
+    #[test]
+    fn parse_topology_with_persona_field() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: donna
+    image: agent-claude:latest
+    streams: [main]
+    persona: agents/donna/
+streams:
+  - name: main
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.agents[0].persona, Some("agents/donna/".to_string()));
+    }
+
+    #[test]
+    fn parse_topology_without_persona_defaults_to_none() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+streams:
+  - name: main
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.agents[0].persona, None);
+    }
+
+    #[test]
+    fn persona_load_failed_error_code() {
+        let err = DeployError::PersonaLoadFailed("test".to_string());
+        assert_eq!(err.code(), "PERSONA_LOAD_FAILED");
     }
 }
