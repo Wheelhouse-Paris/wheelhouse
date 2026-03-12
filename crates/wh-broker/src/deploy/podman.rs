@@ -201,6 +201,33 @@ pub fn podman_run(
     Ok(())
 }
 
+/// Build command arguments for `podman stop`.
+///
+/// Returns the argument list for stopping a container.
+pub fn build_stop_args(container_name: &str) -> Vec<String> {
+    vec!["stop".to_string(), container_name.to_string()]
+}
+
+/// Build command arguments for `podman rm -f`.
+///
+/// Returns the argument list for force-removing a container.
+pub fn build_rm_args(container_name: &str) -> Vec<String> {
+    vec!["rm".to_string(), "-f".to_string(), container_name.to_string()]
+}
+
+/// Build command arguments for `podman ps --filter`.
+///
+/// Returns the argument list for checking if a container is running.
+pub fn build_ps_args(container_name: &str) -> Vec<String> {
+    vec![
+        "ps".to_string(),
+        "--filter".to_string(),
+        format!("name={container_name}"),
+        "--format".to_string(),
+        "{{.Status}}".to_string(),
+    ]
+}
+
 /// Stop and remove an agent container.
 ///
 /// Runs `podman stop` then `podman rm`. Ignores errors from stop
@@ -269,23 +296,27 @@ pub fn provision_containers(
         match change.op.as_str() {
             "+" => {
                 // Find the agent in the topology to get its image and streams
-                let agent = agents.iter().find(|a| a.name == agent_name);
-                if let Some(agent) = agent {
-                    match podman_run(
-                        topology_name,
-                        &agent.name,
-                        &agent.image,
-                        &agent.streams,
-                        None,
-                    ) {
-                        Ok(()) => result.created += 1,
-                        Err(e) => {
-                            tracing::error!(
-                                agent = %agent.name,
-                                error = %e,
-                                "failed to start agent container — retry with `wh deploy apply`"
-                            );
-                        }
+                let Some(agent) = agents.iter().find(|a| a.name == agent_name) else {
+                    tracing::warn!(
+                        agent = %agent_name,
+                        "agent not found in topology — skipping container creation"
+                    );
+                    continue;
+                };
+                match podman_run(
+                    topology_name,
+                    &agent.name,
+                    &agent.image,
+                    &agent.streams,
+                    None,
+                ) {
+                    Ok(()) => result.created += 1,
+                    Err(e) => {
+                        tracing::error!(
+                            agent = %agent.name,
+                            error = %e,
+                            "failed to start agent container — retry with `wh deploy apply`"
+                        );
                     }
                 }
             }
@@ -305,26 +336,30 @@ pub fn provision_containers(
             "~" => {
                 // For modifications, restart the container
                 let name = container_name(topology_name, agent_name);
-                let agent = agents.iter().find(|a| a.name == agent_name);
-                if let Some(agent) = agent {
-                    // Stop old
-                    let _ = podman_stop(&name);
-                    // Start new
-                    match podman_run(
-                        topology_name,
-                        &agent.name,
-                        &agent.image,
-                        &agent.streams,
-                        None,
-                    ) {
-                        Ok(()) => result.changed += 1,
-                        Err(e) => {
-                            tracing::error!(
-                                agent = %agent.name,
-                                error = %e,
-                                "failed to restart agent container — retry with `wh deploy apply`"
-                            );
-                        }
+                let Some(agent) = agents.iter().find(|a| a.name == agent_name) else {
+                    tracing::warn!(
+                        agent = %agent_name,
+                        "agent not found in topology — skipping container restart"
+                    );
+                    continue;
+                };
+                // Stop old
+                let _ = podman_stop(&name);
+                // Start new
+                match podman_run(
+                    topology_name,
+                    &agent.name,
+                    &agent.image,
+                    &agent.streams,
+                    None,
+                ) {
+                    Ok(()) => result.changed += 1,
+                    Err(e) => {
+                        tracing::error!(
+                            agent = %agent.name,
+                            error = %e,
+                            "failed to restart agent container — retry with `wh deploy apply`"
+                        );
                     }
                 }
             }
@@ -411,5 +446,44 @@ mod tests {
     fn apply_result_display() {
         let result = ApplyResult { created: 1, changed: 0, destroyed: 2 };
         assert_eq!(result.to_string(), "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed");
+    }
+
+    #[test]
+    fn build_stop_args_correct() {
+        let args = build_stop_args("wh-dev-researcher");
+        assert_eq!(args, vec!["stop", "wh-dev-researcher"]);
+    }
+
+    #[test]
+    fn build_rm_args_correct() {
+        let args = build_rm_args("wh-dev-researcher");
+        assert_eq!(args, vec!["rm", "-f", "wh-dev-researcher"]);
+    }
+
+    #[test]
+    fn build_ps_args_correct() {
+        let args = build_ps_args("wh-dev-researcher");
+        assert_eq!(args[0], "ps");
+        assert_eq!(args[1], "--filter");
+        assert_eq!(args[2], "name=wh-dev-researcher");
+        assert_eq!(args[3], "--format");
+        assert_eq!(args[4], "{{.Status}}");
+    }
+
+    #[test]
+    fn provision_containers_skips_unknown_agent() {
+        // Agent "ghost" is in the change list but not in the agents vec
+        let changes = vec![
+            Change {
+                op: "+".to_string(),
+                component: "agent ghost".to_string(),
+                field: None,
+                from: None,
+                to: None,
+            },
+        ];
+        let result = provision_containers("dev", &changes, &[]);
+        // Should skip gracefully, not panic, and not increment created
+        assert_eq!(result.created, 0);
     }
 }
