@@ -1,22 +1,22 @@
-"""Test utilities for Wheelhouse SDK.
+"""Wheelhouse test utilities — MockConnection for development without a running Wheelhouse.
 
-Usage:
-    from wheelhouse.testing import MockConnection
-
-This module has an import guard: ZMQ is NOT imported at module level,
-so it can be used in environments without ZMQ installed.
+Import guard: ZMQ is NOT imported at module level,
+so it can be used in environments without ZMQ installed (CF-07).
 """
 
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
+from wheelhouse.types import TypedMessage
+
 
 class MockConnection:
     """A mock connection for testing surfaces and handlers without a running Wheelhouse.
 
     Records all published messages and allows simulating incoming messages
-    to subscriptions.
+    to subscriptions. Supports both async (publish/subscribe) and sync
+    (get_messages) access patterns.
 
     Example:
         mock = MockConnection()
@@ -30,49 +30,33 @@ class MockConnection:
         self.confirmed: list[tuple[str, Any, float]] = []
         self._subscriptions: dict[str, list[Callable[[Any], Awaitable[None]]]] = {}
         self._registered_types: dict[str, type] = {}
+        self._messages: list[TypedMessage] = []
         self._connected = True
 
     async def publish(self, stream: str, message: Any) -> None:
-        """Record a published message.
-
-        Args:
-            stream: Target stream name.
-            message: The message object.
-        """
+        """Record a published message."""
         self.published.append((stream, message))
+        type_name = type(message).__name__
+        self._messages.append(TypedMessage.known(type_name, message))
 
     async def publish_confirmed(
         self, stream: str, message: Any, timeout: float = 5.0
     ) -> None:
-        """Record a confirmed publish.
-
-        Args:
-            stream: Target stream name.
-            message: The message object.
-            timeout: Timeout value (recorded but not enforced in mock).
-        """
+        """Record a confirmed publish."""
         self.confirmed.append((stream, message, timeout))
+        type_name = type(message).__name__
+        self._messages.append(TypedMessage.known(type_name, message))
 
     async def subscribe(
         self, stream: str, handler: Callable[[Any], Awaitable[None]]
     ) -> None:
-        """Register a subscription handler.
-
-        Args:
-            stream: Stream name.
-            handler: Async handler function.
-        """
+        """Register a subscription handler."""
         if stream not in self._subscriptions:
             self._subscriptions[stream] = []
         self._subscriptions[stream].append(handler)
 
     async def simulate_message(self, stream: str, message: Any) -> None:
-        """Simulate an incoming message to all handlers subscribed to a stream.
-
-        Args:
-            stream: The stream the message arrives on.
-            message: The message to deliver to handlers.
-        """
+        """Simulate an incoming message to all handlers subscribed to a stream."""
         handlers = self._subscriptions.get(stream, [])
         for handler in handlers:
             await handler(message)
@@ -80,6 +64,16 @@ class MockConnection:
     def register_type(self, type_name: str, type_class: type) -> None:
         """Register a custom type (for mock compatibility)."""
         self._registered_types[type_name] = type_class
+
+    def get_messages(self) -> list[TypedMessage]:
+        """Get all messages published in this mock session."""
+        return list(self._messages)
+
+    def clear(self) -> None:
+        """Clear all mock state."""
+        self.published.clear()
+        self.confirmed.clear()
+        self._messages.clear()
 
     async def close(self) -> None:
         """Close the mock connection."""

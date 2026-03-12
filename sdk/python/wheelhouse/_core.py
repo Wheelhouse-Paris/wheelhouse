@@ -1,8 +1,6 @@
 """Internal implementation module for Wheelhouse Python SDK.
 
-This module is not part of the public API. Import from wheelhouse directly:
-    import wheelhouse
-    conn = await wheelhouse.connect()
+Do NOT import from this module directly — use `import wheelhouse` or `from wheelhouse import ...`.
 """
 
 from __future__ import annotations
@@ -16,7 +14,12 @@ from typing import Any, Callable, Awaitable
 import zmq
 import zmq.asyncio
 
-from wheelhouse.errors import ConnectionError, PublishTimeout
+from wheelhouse.errors import (
+    ConnectionError,
+    InvalidTypeNameError,
+    PublishTimeout,
+    ReservedNamespaceError,
+)
 from wheelhouse.types import TextMessage
 
 logger = logging.getLogger("wheelhouse")
@@ -29,6 +32,9 @@ RECONNECT_BASE_MS = 100
 RECONNECT_MULTIPLIER = 2
 RECONNECT_CAP_S = 5.0
 RECONNECT_JITTER_MAX_MS = 100
+
+# Global registry of types decorated with @register_type
+_registered_types: dict[str, type] = {}
 
 
 def _calculate_backoff(attempt: int) -> float:
@@ -53,6 +59,70 @@ def _resolve_endpoint(endpoint: str | None) -> str:
     return os.environ.get("WH_URL", DEFAULT_ENDPOINT)
 
 
+def _validate_type_name(type_name: str) -> tuple[str, str]:
+    """Validate and parse a fully-qualified type name.
+
+    Returns (namespace, short_name) or raises InvalidTypeNameError / ReservedNamespaceError.
+    """
+    if "." not in type_name:
+        raise InvalidTypeNameError(
+            f"Type name '{type_name}' must be in format '<namespace>.<TypeName>'",
+            code="INVALID_TYPE_NAME",
+        )
+
+    dot_pos = type_name.index(".")
+    namespace = type_name[:dot_pos]
+    short_name = type_name[dot_pos + 1:]
+
+    if not namespace:
+        raise InvalidTypeNameError(
+            f"Type name '{type_name}' has empty namespace",
+            code="INVALID_TYPE_NAME",
+        )
+
+    if not short_name:
+        raise InvalidTypeNameError(
+            f"Type name '{type_name}' has empty type name",
+            code="INVALID_TYPE_NAME",
+        )
+
+    if "." in short_name:
+        raise InvalidTypeNameError(
+            f"Type name '{type_name}' must have exactly one dot separator",
+            code="INVALID_TYPE_NAME",
+        )
+
+    if namespace == "wheelhouse":
+        raise ReservedNamespaceError(
+            f"Namespace 'wheelhouse' is reserved and cannot be registered (ADR-004)",
+            code="RESERVED_NAMESPACE",
+        )
+
+    return namespace, short_name
+
+
+def register_type(type_name: str) -> Callable:
+    """Decorator to register a custom Protobuf type with a namespace.
+
+    Usage:
+        @wheelhouse.register_type("biotech.MoleculeObject")
+        class MoleculeObject:
+            ...
+
+    The type is validated immediately. Registration with the running Wheelhouse
+    instance happens on connect() and is re-done automatically on reconnect (CM-07).
+    """
+    # Validate format immediately (fail fast)
+    _validate_type_name(type_name)
+
+    def decorator(cls: type) -> type:
+        _registered_types[type_name] = cls
+        cls._wh_type_name = type_name  # type: ignore[attr-defined]
+        return cls
+
+    return decorator
+
+
 MessageHandler = Callable[[Any], Awaitable[None]]
 
 
@@ -69,7 +139,7 @@ class Connection:
         self._pub_socket: zmq.asyncio.Socket | None = None
         self._sub_socket: zmq.asyncio.Socket | None = None
         self._subscriptions: dict[str, list[MessageHandler]] = {}
-        self._registered_types: dict[str, type] = {}
+        self._instance_types: dict[str, type] = {}
         self._connected = False
         self._listener_task: asyncio.Task[None] | None = None
         self._closing = False
@@ -97,8 +167,8 @@ class Connection:
                 await health_socket.recv()
             except zmq.ZMQError:
                 raise ConnectionError(
-                    endpoint=self._endpoint,
-                    cause="Wheelhouse is not running or not reachable",
+                    "Wheelhouse is not running or not reachable",
+                    code="CONNECTION_ERROR",
                 )
             finally:
                 if not health_socket.closed:
@@ -121,8 +191,8 @@ class Connection:
         except zmq.ZMQError as exc:
             self._cleanup_sockets()
             raise ConnectionError(
-                endpoint=self._endpoint,
-                cause="Wheelhouse is not running or not reachable",
+                "Wheelhouse is not running or not reachable",
+                code="CONNECTION_ERROR",
             ) from exc
 
     def _cleanup_sockets(self) -> None:
@@ -139,16 +209,11 @@ class Connection:
         self._connected = False
 
     async def publish(self, stream: str, message: Any) -> None:
-        """Publish a typed message to a stream (fire-and-forget).
-
-        Args:
-            stream: Target stream name.
-            message: A Protobuf-compatible message object (e.g., TextMessage).
-        """
+        """Publish a typed message to a stream (fire-and-forget)."""
         if not self._connected or self._pub_socket is None:
             raise ConnectionError(
-                endpoint=self._endpoint,
-                cause="Not connected to Wheelhouse",
+                "Not connected to Wheelhouse",
+                code="NOT_CONNECTED",
             )
 
         data = message.SerializeToString()
@@ -158,33 +223,24 @@ class Connection:
     async def publish_confirmed(
         self, stream: str, message: Any, timeout: float = 5.0
     ) -> None:
-        """Publish a message and wait for broker acknowledgement.
-
-        Args:
-            stream: Target stream name.
-            message: A Protobuf-compatible message object.
-            timeout: Maximum seconds to wait for confirmation. Defaults to 5.0.
-
-        Raises:
-            PublishTimeout: If acknowledgement is not received within timeout.
-        """
+        """Publish a message and wait for broker acknowledgement."""
         if not self._connected or self._pub_socket is None:
             raise ConnectionError(
-                endpoint=self._endpoint,
-                cause="Not connected to Wheelhouse",
+                "Not connected to Wheelhouse",
+                code="NOT_CONNECTED",
             )
 
         data = message.SerializeToString()
         topic = f"{stream}:{type(message).__name__}".encode("utf-8")
         await self._pub_socket.send_multipart([topic, data])
 
-        # Wait for acknowledgement with timeout
-        # In MVP, we use a simple timeout-based approach
-        # Full broker ack protocol will be refined in later stories
         try:
             await asyncio.wait_for(self._wait_for_ack(stream), timeout=timeout)
         except asyncio.TimeoutError:
-            raise PublishTimeout(stream=stream, timeout=timeout)
+            raise PublishTimeout(
+                f"Publish to stream '{stream}' was not confirmed within {timeout}s",
+                code="PUBLISH_TIMEOUT",
+            )
 
     async def _wait_for_ack(self, stream: str) -> None:
         """Wait for broker acknowledgement of a published message.
@@ -198,16 +254,11 @@ class Connection:
         await asyncio.sleep(0)  # Yield control
 
     async def subscribe(self, stream: str, handler: MessageHandler) -> None:
-        """Subscribe to a stream with an async handler callback.
-
-        Args:
-            stream: Stream name to subscribe to.
-            handler: Async function called with each deserialized message.
-        """
+        """Subscribe to a stream with an async handler callback."""
         if not self._connected or self._sub_socket is None:
             raise ConnectionError(
-                endpoint=self._endpoint,
-                cause="Not connected to Wheelhouse",
+                "Not connected to Wheelhouse",
+                code="NOT_CONNECTED",
             )
 
         if stream not in self._subscriptions:
@@ -264,10 +315,18 @@ class Connection:
                 break
 
     def _deserialize(self, type_name: str, data: bytes) -> Any:
-        """Deserialize a message based on its type name."""
-        # Check registered types first
-        if type_name in self._registered_types:
-            return self._registered_types[type_name].FromString(data)
+        """Deserialize a message based on its type name.
+
+        Checks instance-level types first, then global @register_type registry,
+        then falls back to known built-in types.
+        """
+        # Check instance-level registered types
+        if type_name in self._instance_types:
+            return self._instance_types[type_name].FromString(data)
+
+        # Check global @register_type registry (CM-07)
+        if type_name in _registered_types:
+            return _registered_types[type_name].FromString(data)
 
         # Fall back to known types
         if type_name == "TextMessage":
@@ -284,7 +343,7 @@ class Connection:
         """
         attempt = 0
         saved_subscriptions = dict(self._subscriptions)
-        saved_types = dict(self._registered_types)
+        saved_instance_types = dict(self._instance_types)
 
         while not self._closing:
             delay = _calculate_backoff(attempt)
@@ -299,8 +358,8 @@ class Connection:
                 self._cleanup_sockets()
                 await self._connect()
 
-                # Re-register custom types BEFORE subscriptions (CM-07)
-                self._registered_types = saved_types
+                # Restore instance-level types BEFORE subscriptions (CM-07)
+                self._instance_types = saved_instance_types
 
                 # Re-register all subscriptions
                 self._subscriptions = {}
@@ -315,13 +374,15 @@ class Connection:
                 continue
 
     def register_type(self, type_name: str, type_class: type) -> None:
-        """Register a custom Protobuf type for deserialization.
+        """Register a custom Protobuf type for this connection instance.
+
+        For global registration across all connections, use the @register_type decorator.
 
         Args:
             type_name: The Protobuf type name (e.g., "MyCustomType").
             type_class: The betterproto dataclass type.
         """
-        self._registered_types[type_name] = type_class
+        self._instance_types[type_name] = type_class
 
     async def close(self) -> None:
         """Close the connection and release all resources."""
@@ -348,6 +409,10 @@ class Connection:
         await self.close()
 
 
+# Surface is an alias for Connection for API consistency
+Surface = Connection
+
+
 async def connect(endpoint: str | None = None) -> Connection:
     """Connect to Wheelhouse.
 
@@ -360,8 +425,7 @@ async def connect(endpoint: str | None = None) -> Connection:
 
     Raises:
         wheelhouse.errors.ConnectionError: If Wheelhouse is not running or
-            not reachable. Error message includes the endpoint address and
-            a human-readable cause.
+            not reachable.
     """
     resolved = _resolve_endpoint(endpoint)
     conn = Connection(resolved)

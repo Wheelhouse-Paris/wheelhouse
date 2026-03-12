@@ -14,8 +14,8 @@ proto-python:
 		echo "Install: curl -LsSf https://astral.sh/uv/install.sh | sh"; \
 		exit 1; \
 	fi
-	env -i HOME="$(HOME)" PATH="$(PATH)" \
-		python3 -m grpc_tools.protoc \
+	@mkdir -p $(OUT_DIR)
+	uv run --extra dev python -m grpc_tools.protoc \
 		-I$(PROTO_DIR) \
 		--python_betterproto_out=$(OUT_DIR) \
 		$(PROTO_DIR)/wheelhouse/v1/*.proto
@@ -23,14 +23,14 @@ proto-python:
 
 ## Run Python SDK tests
 test:
-	uv run pytest tests/ -v
+	uv run --extra dev pytest tests/ -v
 
 ## Lint and type-check
 lint:
-	uv run pyright wheelhouse/
-	uv run pytest tests/ -v --tb=short
+	uv run --extra dev pyright wheelhouse/
+	uv run --extra dev pytest tests/ -v --tb=short
 
 ## Clean generated files
 clean:
-	find $(OUT_DIR) -name '*.py' ! -name '__init__.py' -delete
+	find $(OUT_DIR) -name '*.py' ! -name '__init__.py' -delete 2>/dev/null || true
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

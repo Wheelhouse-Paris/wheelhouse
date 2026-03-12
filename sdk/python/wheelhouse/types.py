@@ -1,17 +1,17 @@
 """Canonical type import path for Wheelhouse Protobuf types.
 
 Usage:
-    from wheelhouse.types import TextMessage
+    from wheelhouse.types import TextMessage, TypedMessage
 
-Note: Until proto/ files exist (Epic 1), this module provides stub
+Note: Until proto/ files exist (Epic 1), TextMessage and FileMessage are stub
 dataclass types that mirror the expected betterproto-generated interface.
-Once proto generation is set up, these stubs will be replaced by
-generated types from wheelhouse._proto.
+TypedMessage is a permanent abstraction for received messages with unknown types.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -31,7 +31,6 @@ class TextMessage:
         STUB: Uses simple encoding. Will be replaced by betterproto-generated
         binary Protobuf serialization once proto/ files exist (Epic 1).
         """
-        # Temporary: JSON-like encoding. Real betterproto uses binary protobuf.
         import json
         return json.dumps({"content": self.content, "user_id": self.user_id, "stream_name": self.stream_name}).encode("utf-8")
 
@@ -65,3 +64,34 @@ class FileMessage:
     content: bytes = field(default_factory=bytes)
     mime_type: str = ""
     user_id: str = ""
+
+
+class TypedMessage:
+    """Received message — known type is deserialized, unknown type has raw bytes.
+
+    Per AC #2: if the receiver knows the type, it gets a deserialized instance.
+    If the receiver does not know the type, it gets raw bytes + type name string.
+    Never a silent failure or crash.
+    """
+
+    def __init__(
+        self,
+        type_name: str,
+        data: Any | None = None,
+        raw_bytes: bytes | None = None,
+        is_known: bool = False,
+    ):
+        self.type_name = type_name
+        self.data = data
+        self.raw_bytes = raw_bytes
+        self.is_known = is_known
+
+    @classmethod
+    def known(cls, type_name: str, data: Any) -> "TypedMessage":
+        """Create a message with a known, deserialized type."""
+        return cls(type_name=type_name, data=data, is_known=True)
+
+    @classmethod
+    def unknown(cls, type_name: str, raw_bytes: bytes) -> "TypedMessage":
+        """Create a message with an unknown type — raw bytes + type name (AC #2)."""
+        return cls(type_name=type_name, raw_bytes=raw_bytes, is_known=False)

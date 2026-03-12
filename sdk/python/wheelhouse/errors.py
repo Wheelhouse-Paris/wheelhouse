@@ -1,39 +1,62 @@
-"""Wheelhouse SDK error types.
+"""Wheelhouse SDK error types (MA-02).
 
-Import errors directly:
+Callers import errors directly:
     from wheelhouse.errors import ConnectionError, PublishTimeout, StreamNotFound
 """
 
 
-class ConnectionError(Exception):
-    """Raised when the SDK cannot connect to Wheelhouse.
+class WheelhouseError(Exception):
+    """Base class for all Wheelhouse SDK errors."""
 
-    The error message includes the endpoint address and a human-readable cause.
-    Never exposes internal details (ZMQ, socket types, port numbers).
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
+
+
+class ConnectionError(WheelhouseError):  # noqa: A001 — intentionally shadows builtin per MA-02
+    """Wheelhouse is not running or unreachable.
+
+    User-facing: never says 'broker' or 'connection refused' (RT-B1).
+
+    Note: This intentionally shadows Python's builtin ConnectionError per the
+    architecture spec (MA-02). Import as `from wheelhouse.errors import ConnectionError`
+    or use the qualified name `wheelhouse.errors.ConnectionError`.
     """
 
-    def __init__(self, endpoint: str, cause: str) -> None:
-        self.endpoint = endpoint
-        self.cause = cause
-        super().__init__(
-            f"Could not connect to Wheelhouse at {endpoint}: {cause}"
-        )
+    pass
 
 
-class PublishTimeout(Exception):
-    """Raised when publish_confirmed() does not receive acknowledgement within the timeout."""
+class PublishTimeout(WheelhouseError):
+    """publish_confirmed() timed out waiting for WAL acknowledgement (SCV-08)."""
 
-    def __init__(self, stream: str, timeout: float) -> None:
-        self.stream = stream
-        self.timeout = timeout
-        super().__init__(
-            f"Publish to stream '{stream}' was not confirmed within {timeout}s"
-        )
+    pass
 
 
-class StreamNotFound(Exception):
-    """Raised when the specified stream does not exist."""
+class StreamNotFound(WheelhouseError):
+    """Requested stream does not exist."""
 
-    def __init__(self, stream: str) -> None:
-        self.stream = stream
-        super().__init__(f"Stream '{stream}' not found")
+    pass
+
+
+class RegistrationError(WheelhouseError):
+    """Type registration was rejected by Wheelhouse."""
+
+    pass
+
+
+class ReservedNamespaceError(RegistrationError):
+    """Attempted to register a type under the reserved 'wheelhouse.*' namespace (ADR-004)."""
+
+    pass
+
+
+class InvalidTypeNameError(RegistrationError):
+    """Type name does not match required format '<namespace>.<TypeName>'."""
+
+    pass
+
+
+class RegistryFullError(RegistrationError):
+    """Type registry has reached its capacity limit (RT-05)."""
+
+    pass

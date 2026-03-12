@@ -12,6 +12,13 @@ docs/.astro/
 .wheelhouse/
 *.wh.lock
 
+# Python SDK generated proto files (FP-02)
+sdk/python/wheelhouse/_proto/
+sdk/python/.venv/
+sdk/python/.pytest_cache/
+__pycache__/
+*.pyc
+
 # Secrets
 .env
 .env.*

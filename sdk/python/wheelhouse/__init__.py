@@ -10,6 +10,7 @@ Usage:
 Types: from wheelhouse.types import TextMessage
 Errors: from wheelhouse.errors import ConnectionError, PublishTimeout
 Testing: from wheelhouse.testing import MockConnection
+Custom types: @wheelhouse.register_type("myapp.MyType")
 """
 
 from __future__ import annotations
@@ -17,9 +18,10 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable
 
 from wheelhouse._core import connect as connect  # noqa: F401
+from wheelhouse._core import register_type as register_type  # noqa: F401
 
 # Restrict public API surface
-__all__ = ["connect", "Surface"]
+__all__ = ["connect", "Surface", "register_type"]
 
 
 class Surface:

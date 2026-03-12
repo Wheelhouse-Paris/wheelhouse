@@ -20,6 +20,41 @@ pub mod wheelhouse {
 // `use wh_proto::TextMessage;` instead of `use wh_proto::wheelhouse::v1::TextMessage;`
 pub use wheelhouse::v1::*;
 
+/// Result of attempting to receive and deserialize a typed message.
+///
+/// Per AC #2: if the receiver knows the type, it gets deserialized data.
+/// If the receiver does not know the type, it gets raw bytes + type name.
+/// Never a silent failure or crash.
+#[derive(Debug, Clone)]
+pub enum TypedMessage {
+    /// Type was known and deserialized successfully.
+    Known {
+        type_name: String,
+        /// Deserialized data — generic bytes that the application layer interprets.
+        data: Vec<u8>,
+    },
+    /// Type was unknown — raw bytes returned with type name for inspection.
+    Unknown {
+        type_name: String,
+        raw_bytes: Vec<u8>,
+    },
+}
+
+impl TypedMessage {
+    /// Get the type name regardless of known/unknown status.
+    pub fn type_name(&self) -> &str {
+        match self {
+            TypedMessage::Known { type_name, .. } => type_name,
+            TypedMessage::Unknown { type_name, .. } => type_name,
+        }
+    }
+
+    /// Check if the type was known.
+    pub fn is_known(&self) -> bool {
+        matches!(self, TypedMessage::Known { .. })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +263,37 @@ mod tests {
         let msg = TextMessage::decode(&[] as &[u8]).unwrap();
         assert!(msg.content.is_empty());
         assert_eq!(msg.timestamp_ms, 0);
+    }
+
+    // ── TypedMessage ────────────────────────────────────────
+
+    #[test]
+    fn typed_message_unknown_type_returns_raw_bytes() {
+        let msg = TypedMessage::Unknown {
+            type_name: "biotech.MoleculeObject".to_string(),
+            raw_bytes: vec![1, 2, 3],
+        };
+        assert!(!msg.is_known());
+        assert_eq!(msg.type_name(), "biotech.MoleculeObject");
+        match msg {
+            TypedMessage::Unknown {
+                type_name,
+                raw_bytes,
+            } => {
+                assert_eq!(type_name, "biotech.MoleculeObject");
+                assert_eq!(raw_bytes, vec![1, 2, 3]);
+            }
+            _ => panic!("Expected Unknown variant"),
+        }
+    }
+
+    #[test]
+    fn typed_message_known_type() {
+        let msg = TypedMessage::Known {
+            type_name: "biotech.MoleculeObject".to_string(),
+            data: vec![1, 2, 3],
+        };
+        assert!(msg.is_known());
+        assert_eq!(msg.type_name(), "biotech.MoleculeObject");
     }
 }
