@@ -127,7 +127,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: sdk/python
-        run: uv sync --dev
+        run: uv sync --extra dev
 
       - name: Run tests
         working-directory: sdk/python
