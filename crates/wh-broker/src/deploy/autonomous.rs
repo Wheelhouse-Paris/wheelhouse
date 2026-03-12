@@ -234,7 +234,7 @@ pub fn apply_autonomous_change(
         let committed = apply::commit(plan_output, Some(agent_name))?;
 
         // Apply the committed plan
-        apply::apply(committed)?;
+        let _apply_result = apply::apply(committed)?;
 
         Ok((plan_hash, changes))
     })();
