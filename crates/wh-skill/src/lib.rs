@@ -39,7 +39,7 @@ pub use cache::SkillCache;
 pub use config::{SkillRef, SkillsConfig};
 pub use directory::SkillDirectory;
 pub use error::SkillError;
-pub use executor::{LocalSkillExecutor, SkillExecutorEvent};
+pub use executor::{LocalSkillExecutor, SkillExecutor, SkillExecutorEvent};
 pub use invocation::{SkillInvocationOutcome, SkillInvocationRequest};
 pub use manifest::SkillManifest;
 pub use pipeline::InvocationPipeline;

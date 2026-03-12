@@ -444,3 +444,239 @@ async fn same_skill_different_versions_cached_independently() {
 
     assert_eq!(pipeline.cache().len(), 1, "one version cached");
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Story 5-4: Timeout + cache integration tests
+// ══════════════════════════════════════════════════════════════════════
+
+/// Given a skill execution times out, the skill IS still cached (loading succeeded).
+/// The timeout only affects execution, not the cached LoadedSkill.
+#[tokio::test]
+async fn timeout_does_not_remove_cached_skill() {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::Duration;
+
+    use wh_skill::executor::SkillExecutor;
+    use wh_skill::repository::LoadedSkill;
+
+    struct SlowTestExecutor;
+    impl SkillExecutor for SlowTestExecutor {
+        fn execute<'a>(
+            &'a self,
+            _request: &'a SkillInvocationRequest,
+            _skill: &'a LoadedSkill,
+            _tx: &'a mpsc::Sender<SkillExecutorEvent>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async { tokio::time::sleep(Duration::from_secs(1)).await })
+        }
+    }
+
+    let (tmp, _oid) = create_repo_with_skill("alpha", "1.0.0");
+    let allowlist = SkillAllowlist::new(vec!["alpha".to_string()]);
+
+    let alpha_config = SkillsConfig {
+        skills_repo: tmp.path().to_path_buf(),
+        skills: vec![SkillRef {
+            name: "alpha".into(),
+            version: "1.0.0".into(),
+        }],
+    };
+    let skill_repo = wh_skill::SkillRepository::open(tmp.path()).unwrap();
+
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(alpha_config), Some(skill_repo))
+        .with_timeout(Duration::from_millis(50))
+        .with_executor(Box::new(SlowTestExecutor));
+
+    let request = SkillInvocationRequest {
+        skill_name: "alpha".to_string(),
+        agent_id: "agent-1".to_string(),
+        invocation_id: "inv-cache-timeout".to_string(),
+        parameters: HashMap::new(),
+        timestamp_ms: 1710000000000,
+    };
+
+    let (tx, mut rx) = mpsc::channel(10);
+    pipeline.process(request, tx).await.unwrap();
+
+    // Drain events
+    while let Ok(_) = rx.try_recv() {}
+
+    // Skill should still be cached (loading from git succeeded, only execution timed out)
+    assert_eq!(
+        pipeline.cache().len(),
+        1,
+        "Skill should be cached even though execution timed out"
+    );
+}
+
+/// All error paths produce a terminal Completed event (no silent failures).
+#[tokio::test]
+async fn all_error_paths_produce_completed_event() {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::time::Duration;
+
+    use wh_skill::executor::SkillExecutor;
+    use wh_skill::repository::LoadedSkill;
+
+    struct PanicTestExecutor;
+    impl SkillExecutor for PanicTestExecutor {
+        fn execute<'a>(
+            &'a self,
+            _request: &'a SkillInvocationRequest,
+            _skill: &'a LoadedSkill,
+            _tx: &'a mpsc::Sender<SkillExecutorEvent>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+            Box::pin(async { panic!("integration test panic") })
+        }
+    }
+
+    // Test 1: SKILL_NOT_PERMITTED
+    {
+        let allowlist = SkillAllowlist::new(vec![]);
+        let mut pipeline = InvocationPipeline::new(allowlist, None, None);
+        let (tx, mut rx) = mpsc::channel(10);
+        let request = SkillInvocationRequest {
+            skill_name: "x".to_string(),
+            agent_id: "a".to_string(),
+            invocation_id: "not-permitted".to_string(),
+            parameters: HashMap::new(),
+            timestamp_ms: 0,
+        };
+        pipeline.process(request, tx).await.unwrap();
+        let event = rx.recv().await.unwrap();
+        assert!(
+            matches!(event, SkillExecutorEvent::Completed { .. }),
+            "SKILL_NOT_PERMITTED must produce Completed"
+        );
+    }
+
+    // Test 2: SKILL_LOAD_FAILED
+    {
+        let allowlist = SkillAllowlist::new(vec!["x".to_string()]);
+        let mut pipeline = InvocationPipeline::new(allowlist, None, None);
+        let (tx, mut rx) = mpsc::channel(10);
+        let request = SkillInvocationRequest {
+            skill_name: "x".to_string(),
+            agent_id: "a".to_string(),
+            invocation_id: "load-failed".to_string(),
+            parameters: HashMap::new(),
+            timestamp_ms: 0,
+        };
+        pipeline.process(request, tx).await.unwrap();
+        let event = rx.recv().await.unwrap();
+        assert!(
+            matches!(event, SkillExecutorEvent::Completed { .. }),
+            "SKILL_LOAD_FAILED must produce Completed"
+        );
+    }
+
+    // Test 3: SKILL_FETCH_FAILED
+    {
+        let allowlist = SkillAllowlist::new(vec!["x".to_string()]);
+        let config = SkillsConfig {
+            skills_repo: "/none".into(),
+            skills: vec![SkillRef {
+                name: "x".into(),
+                version: "1.0.0".into(),
+            }],
+        };
+        let mut pipeline = InvocationPipeline::new(allowlist, Some(config), None);
+        let (tx, mut rx) = mpsc::channel(10);
+        let request = SkillInvocationRequest {
+            skill_name: "x".to_string(),
+            agent_id: "a".to_string(),
+            invocation_id: "fetch-failed".to_string(),
+            parameters: HashMap::new(),
+            timestamp_ms: 0,
+        };
+        pipeline.process(request, tx).await.unwrap();
+        let event = rx.recv().await.unwrap();
+        assert!(
+            matches!(event, SkillExecutorEvent::Completed { .. }),
+            "SKILL_FETCH_FAILED must produce Completed"
+        );
+    }
+
+    // Test 4: SKILL_EXECUTION_FAILED (panic)
+    {
+        let (tmp, _oid) = create_repo_with_skill("alpha", "1.0.0");
+        let allowlist = SkillAllowlist::new(vec!["alpha".to_string()]);
+        let alpha_config = SkillsConfig {
+            skills_repo: tmp.path().to_path_buf(),
+            skills: vec![SkillRef {
+                name: "alpha".into(),
+                version: "1.0.0".into(),
+            }],
+        };
+        let skill_repo = wh_skill::SkillRepository::open(tmp.path()).unwrap();
+        let mut pipeline =
+            InvocationPipeline::new(allowlist, Some(alpha_config), Some(skill_repo))
+                .with_executor(Box::new(PanicTestExecutor));
+        let (tx, mut rx) = mpsc::channel(10);
+        let request = SkillInvocationRequest {
+            skill_name: "alpha".to_string(),
+            agent_id: "a".to_string(),
+            invocation_id: "panic-fail".to_string(),
+            parameters: HashMap::new(),
+            timestamp_ms: 0,
+        };
+        pipeline.process(request, tx).await.unwrap();
+        let event = rx.recv().await.unwrap();
+        assert!(
+            matches!(event, SkillExecutorEvent::Completed { .. }),
+            "SKILL_EXECUTION_FAILED must produce Completed"
+        );
+    }
+
+    // Test 5: SKILL_TIMEOUT
+    {
+        struct SlowTestExec;
+        impl SkillExecutor for SlowTestExec {
+            fn execute<'a>(
+                &'a self,
+                _request: &'a SkillInvocationRequest,
+                _skill: &'a LoadedSkill,
+                _tx: &'a mpsc::Sender<SkillExecutorEvent>,
+            ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+                Box::pin(async { tokio::time::sleep(Duration::from_secs(10)).await })
+            }
+        }
+
+        let (tmp, _oid) = create_repo_with_skill("alpha", "1.0.0");
+        let allowlist = SkillAllowlist::new(vec!["alpha".to_string()]);
+        let alpha_config = SkillsConfig {
+            skills_repo: tmp.path().to_path_buf(),
+            skills: vec![SkillRef {
+                name: "alpha".into(),
+                version: "1.0.0".into(),
+            }],
+        };
+        let skill_repo2 = wh_skill::SkillRepository::open(tmp.path()).unwrap();
+        let mut pipeline =
+            InvocationPipeline::new(allowlist, Some(alpha_config), Some(skill_repo2))
+                .with_timeout(Duration::from_millis(50))
+                .with_executor(Box::new(SlowTestExec));
+        let (tx, mut rx) = mpsc::channel(10);
+        let request = SkillInvocationRequest {
+            skill_name: "alpha".to_string(),
+            agent_id: "a".to_string(),
+            invocation_id: "timeout-fail".to_string(),
+            parameters: HashMap::new(),
+            timestamp_ms: 0,
+        };
+        pipeline.process(request, tx).await.unwrap();
+        // Drain to find Completed
+        let mut has_completed = false;
+        while let Ok(event) = rx.try_recv() {
+            if matches!(event, SkillExecutorEvent::Completed { .. }) {
+                has_completed = true;
+            }
+        }
+        assert!(
+            has_completed,
+            "SKILL_TIMEOUT must produce Completed"
+        );
+    }
+}
