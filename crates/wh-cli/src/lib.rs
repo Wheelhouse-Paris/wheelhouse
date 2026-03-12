@@ -14,6 +14,7 @@ use clap::{Parser, Subcommand};
 use commands::completion::CompletionArgs;
 use commands::deploy::DeployCommand;
 use commands::logs::LogsArgs;
+use commands::memory::MemoryCommand;
 use commands::ps::PsArgs;
 use commands::secrets::SecretsCmd;
 use commands::stream::StreamCommand;
@@ -62,6 +63,11 @@ pub enum Commands {
         /// Output format: human (default) or json.
         #[arg(long, default_value = "human")]
         format: OutputFormat,
+    },
+    /// Manage agent memory (MEMORY.md) files.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
     },
     /// Generate shell completion scripts.
     Completion(CompletionArgs),

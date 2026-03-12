@@ -94,6 +94,10 @@ async fn main() {
                 }
             }
         }
+        Commands::Memory { command } => {
+            let exit_code = command.execute();
+            std::process::exit(exit_code);
+        }
         Commands::Stream { command } => {
             stream::execute(&command).await;
         }

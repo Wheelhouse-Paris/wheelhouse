@@ -9,6 +9,7 @@
 pub mod apply;
 pub mod autonomous;
 pub mod lint;
+pub mod memory;
 pub mod plan;
 pub mod podman;
 
