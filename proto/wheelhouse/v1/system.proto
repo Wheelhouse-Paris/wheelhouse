@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package wheelhouse.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// CronEvent is published by the broker's embedded cron scheduler
+// to a target stream when a cron job fires.
+// System type (RT-01): broker-internal only, external publish attempts are dropped.
+message CronEvent {
+  // Name of the cron job as declared in the .wh file
+  string job_name = 1;
+  // Action type: "compact" or "event"
+  string action = 2;
+  // The cron schedule expression that triggered this event
+  string schedule = 3;
+  // UTC timestamp when the cron job fired
+  google.protobuf.Timestamp triggered_at = 4;
+  // Optional payload declared in the .wh file cron section
+  map<string, string> payload = 5;
+}

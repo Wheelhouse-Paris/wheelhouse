@@ -3,3 +3,20 @@ name = "wh-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+wh-proto = { path = "../wh-proto" }
+serde.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing.workspace = true
+thiserror.workspace = true
+cron = "0.13"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+prost.workspace = true
+prost-types = "0.13"
+
+[dev-dependencies]
+tempfile = "3"
+tracing-subscriber.workspace = true
