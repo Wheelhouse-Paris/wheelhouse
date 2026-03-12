@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wheelhouse": {
+      "command": "python",
+      "args": ["mcp/wheelhouse-mcp/server.py"]
+    }
+  }
+}
