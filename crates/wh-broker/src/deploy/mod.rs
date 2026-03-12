@@ -12,6 +12,17 @@ pub mod plan;
 
 use serde::{Deserialize, Serialize};
 
+/// Guardrails for a topology — safety constraints that block deployment if exceeded.
+///
+/// Placed inline in the `.wh` file under a `guardrails:` key.
+/// All fields are optional; omitting the section entirely means no constraints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct Guardrails {
+    /// Maximum allowed replicas for any single agent in this topology.
+    #[serde(default)]
+    pub max_replicas: Option<u32>,
+}
+
 /// Represents a parsed and validated `.wh` topology file.
 ///
 /// A topology declares the desired state of agents, streams, and surfaces.
@@ -24,6 +35,9 @@ pub struct Topology {
     pub agents: Vec<Agent>,
     #[serde(default)]
     pub streams: Vec<Stream>,
+    /// Optional guardrails for safety constraints (e.g., max_replicas).
+    #[serde(default)]
+    pub guardrails: Option<Guardrails>,
 }
 
 /// An agent declaration within a topology.
@@ -90,6 +104,9 @@ pub enum DeployError {
 
     #[error("git operation timed out after {0}s")]
     GitTimeout(u64),
+
+    #[error("policy violation: {0}")]
+    PolicyViolation(String),
 }
 
 impl DeployError {
@@ -103,6 +120,7 @@ impl DeployError {
             DeployError::ApplyFailed(_) => "APPLY_FAILED",
             DeployError::GitFailed(_) => "GIT_FAILED",
             DeployError::GitTimeout(_) => "GIT_TIMEOUT",
+            DeployError::PolicyViolation(_) => "POLICY_VIOLATION",
         }
     }
 }
@@ -238,6 +256,7 @@ agents:
                     retention: None,
                 },
             ],
+            guardrails: None,
         };
         let canonical = canonicalize_topology(topo);
         assert_eq!(canonical.agents[0].name, "alpha");

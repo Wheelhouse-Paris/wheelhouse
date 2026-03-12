@@ -34,6 +34,9 @@ pub enum DeployCommand {
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
+        /// Agent name for git commit attribution (defaults to "operator")
+        #[arg(long)]
+        agent_name: Option<String>,
     },
 }
 
@@ -42,7 +45,9 @@ impl DeployCommand {
     pub fn execute(self) -> i32 {
         match self {
             DeployCommand::Plan { file, format } => execute_plan(&file, format),
-            DeployCommand::Apply { file, yes, format } => execute_apply(&file, yes, format),
+            DeployCommand::Apply { file, yes, format, agent_name } => {
+                execute_apply(&file, yes, format, agent_name.as_deref())
+            }
         }
     }
 }
@@ -80,7 +85,7 @@ fn execute_plan(file: &PathBuf, format: OutputFormat) -> i32 {
     }
 }
 
-fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat) -> i32 {
+fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Option<&str>) -> i32 {
     if !yes {
         eprintln!("Error: interactive confirmation not yet supported. Use --yes to skip.");
         return error::EXIT_ERROR;
@@ -118,7 +123,7 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat) -> i32 {
     }
 
     // Commit to git
-    let committed = match apply::commit(plan_output, None) {
+    let committed = match apply::commit(plan_output, agent_name) {
         Ok(c) => c,
         Err(e) => {
             let msg = output::format_error(e.code(), &e.to_string(), format);

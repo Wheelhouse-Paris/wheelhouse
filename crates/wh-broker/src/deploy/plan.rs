@@ -293,6 +293,7 @@ pub fn plan(linted: LintedFile) -> Result<PlanOutput, DeployError> {
                 name: desired.name.clone(),
                 agents: vec![],
                 streams: vec![],
+                guardrails: None,
             };
             diff_topologies(&empty, &desired)
         }
@@ -301,6 +302,20 @@ pub fn plan(linted: LintedFile) -> Result<PlanOutput, DeployError> {
     let has_changes = !changes.is_empty();
     let plan_hash = compute_plan_hash(&changes);
     let topology_name = desired.name.clone();
+
+    // Guardrail validation (RT-04): check max_replicas constraint
+    if let Some(ref guardrails) = desired.guardrails {
+        if let Some(max_replicas) = guardrails.max_replicas {
+            for agent in &desired.agents {
+                if agent.replicas > max_replicas {
+                    return Err(DeployError::PolicyViolation(format!(
+                        "agent '{}' requests {} replicas, exceeds max_replicas {}",
+                        agent.name, agent.replicas, max_replicas
+                    )));
+                }
+            }
+        }
+    }
 
     // No policy system yet — return empty hash
     let policy_snapshot_hash = String::new();
@@ -363,6 +378,7 @@ mod tests {
                 name: "main".to_string(),
                 retention: Some("7d".to_string()),
             }],
+            guardrails: None,
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -400,6 +416,7 @@ mod tests {
                 streams: vec![],
             }],
             streams: vec![],
+            guardrails: None,
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -480,6 +497,7 @@ mod tests {
             name: "dev".to_string(),
             agents: vec![],
             streams: vec![],
+            guardrails: None,
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -517,6 +535,7 @@ mod tests {
                 streams: vec![],
             }],
             streams: vec![],
+            guardrails: None,
         };
         std::fs::write(
             wh_dir.join("state.json"),

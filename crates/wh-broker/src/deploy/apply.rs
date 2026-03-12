@@ -234,6 +234,7 @@ mod tests {
                 name: "dev".to_string(),
                 agents: vec![],
                 streams: vec![],
+                guardrails: None,
             },
             source_path: PathBuf::from("test.wh"),
         };
@@ -264,6 +265,7 @@ mod tests {
                 name: "dev".to_string(),
                 agents: vec![],
                 streams: vec![],
+                guardrails: None,
             },
             source_path: PathBuf::from("test.wh"),
         };
