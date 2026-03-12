@@ -12,14 +12,22 @@ use wh_cli::commands::status;
 use wh_cli::commands::stream;
 use wh_cli::commands::surface::{self, SurfaceCommand};
 use wh_cli::output::{OutputEnvelope, OutputFormat};
-use wh_cli::{Cli, Commands};
+use wh_cli::{Cli, Commands, GETTING_STARTED_HINT};
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
-    match cli.command {
+    let command = match cli.command {
+        None => {
+            println!("{GETTING_STARTED_HINT}");
+            return;
+        }
+        Some(cmd) => cmd,
+    };
+
+    match command {
         Commands::Ps(args) => {
             let fmt = args.format;
             let result = ps::execute(&args).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);

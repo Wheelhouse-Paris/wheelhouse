@@ -425,7 +425,9 @@ pub fn plan_with_self_check(
     linted: LintedFile,
     calling_agent: Option<&str>,
 ) -> Result<PlanOutput, DeployError> {
-    let plan_output = plan(linted)?;
+    // Operator mode (None): skip all self-destruct checks, including destroy-all guard.
+    let force_destroy_all = calling_agent.is_none();
+    let plan_output = plan_with_options(linted, force_destroy_all)?;
 
     if let Some(agent_name) = calling_agent {
         let target_component = format!("agent {agent_name}");

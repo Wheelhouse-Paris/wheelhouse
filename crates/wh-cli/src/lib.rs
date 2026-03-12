@@ -27,11 +27,18 @@ use output::OutputFormat;
 /// wh — the Wheelhouse CLI.
 ///
 /// Unified control plane for operators and agents.
+/// Concise getting-started hint shown when wh is invoked with no arguments (AC#5).
+pub const GETTING_STARTED_HINT: &str = "\
+Wheelhouse — local-first agent orchestration
+  wh secrets init    Configure credentials
+  wh deploy apply    Deploy your topology
+  wh --help          Show all commands";
+
 #[derive(Debug, Parser)]
-#[command(name = "wh", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("WH_GIT_HASH"), ", ", env!("WH_TARGET_TRIPLE"), ")"), about)]
+#[command(name = "wh", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("WH_GIT_HASH"), ", ", env!("WH_TARGET_TRIPLE"), ")"), about, subcommand_required = false)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 /// Top-level CLI subcommands.
