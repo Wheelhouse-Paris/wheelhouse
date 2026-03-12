@@ -446,6 +446,118 @@ fn apply_autonomous_change_inner(
     })
 }
 
+// =============================================================================
+// Story 2.8: Agent Reads Its Own .wh — Autonomous Loop Smoke Test
+// =============================================================================
+
+/// A parsed summary of a `.wh` topology file.
+///
+/// Produced by `read_own_topology()` when an agent reads its own `.wh` file
+/// at startup to validate the read path of the autonomous loop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopologySummary {
+    /// The topology name from the `.wh` file.
+    pub topology_name: String,
+    /// Number of agents declared in the topology.
+    pub agent_count: usize,
+    /// Number of streams declared in the topology.
+    pub stream_count: usize,
+    /// The raw YAML content of the `.wh` file.
+    pub raw_yaml: String,
+    /// Human-readable summary, e.g. "Topology 'dev': 2 agents, 1 stream".
+    pub summary: String,
+}
+
+/// An event representing an agent publishing its topology summary to the stream.
+///
+/// This struct captures what would be published as a `TextMessage` to the stream,
+/// including agent attribution for the log publisher field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopologyPublishEvent {
+    /// The name of the agent that read and published the topology.
+    pub agent_name: String,
+    /// Human-readable topology summary.
+    pub summary: String,
+    /// The raw `.wh` YAML content.
+    pub content: String,
+    /// ISO 8601 timestamp of when the event was created.
+    pub timestamp: String,
+}
+
+/// Read and parse the agent's own `.wh` topology file.
+///
+/// Returns a `TopologySummary` with the parsed metadata and a human-readable
+/// summary string. This proves the agent can locate and parse its `.wh` file
+/// from the git-backed filesystem.
+///
+/// # Errors
+///
+/// Returns `DeployError::FileRead` if the file cannot be read, or
+/// `DeployError::YamlParse`/`DeployError::InvalidTopology` if the YAML is malformed.
+#[tracing::instrument(skip_all, fields(wh_path = %wh_path.display()))]
+pub fn read_own_topology(wh_path: &Path) -> Result<TopologySummary, DeployError> {
+    let raw_yaml = std::fs::read_to_string(wh_path).map_err(DeployError::FileRead)?;
+    let topology = parse_topology(&raw_yaml)?;
+
+    let agent_count = topology.agents.len();
+    let stream_count = topology.streams.len();
+
+    let agents_word = if agent_count == 1 { "agent" } else { "agents" };
+    let streams_word = if stream_count == 1 { "stream" } else { "streams" };
+
+    let summary = format!(
+        "Topology '{}': {} {}, {} {}",
+        topology.name, agent_count, agents_word, stream_count, streams_word
+    );
+
+    Ok(TopologySummary {
+        topology_name: topology.name,
+        agent_count,
+        stream_count,
+        raw_yaml,
+        summary,
+    })
+}
+
+/// Format a topology summary into a publish event with agent attribution.
+///
+/// Creates a `TopologyPublishEvent` that represents what the agent would
+/// publish as a `TextMessage` to the stream.
+#[tracing::instrument(skip_all, fields(agent_name = %agent_name))]
+pub fn publish_topology_summary(summary: &TopologySummary, agent_name: &str) -> TopologyPublishEvent {
+    TopologyPublishEvent {
+        agent_name: agent_name.to_string(),
+        summary: summary.summary.clone(),
+        content: summary.raw_yaml.clone(),
+        timestamp: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
+/// Smoke test: read the agent's own `.wh` file and produce a publish event.
+///
+/// Orchestrates the full read path: `read_own_topology()` -> `publish_topology_summary()`
+/// -> log the event -> return. This is the function an agent calls at startup to prove
+/// it can read its own `.wh` file from the git-backed filesystem.
+///
+/// # Errors
+///
+/// Propagates errors from `read_own_topology()`.
+#[tracing::instrument(skip_all, fields(agent_name = %agent_name))]
+pub fn smoke_test_read_loop(wh_path: &Path, agent_name: &str) -> Result<TopologyPublishEvent, DeployError> {
+    let summary = read_own_topology(wh_path)?;
+
+    tracing::info!(
+        agent_name = %agent_name,
+        topology_name = %summary.topology_name,
+        agent_count = summary.agent_count,
+        stream_count = summary.stream_count,
+        "agent read own .wh file and published topology summary"
+    );
+
+    let event = publish_topology_summary(&summary, agent_name);
+    Ok(event)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,5 +916,45 @@ mod tests {
         assert!(!notification.commit_ref.is_empty());
         assert!(notification.what_changed.contains("researcher"));
         assert_eq!(notification.commit_ref, "sha256:abc123");
+    }
+
+    // =========================================================================
+    // Story 2.8: read_own_topology tests
+    // =========================================================================
+
+    #[test]
+    fn read_own_topology_returns_valid_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let wh_path = dir.path().join("topology.wh");
+        std::fs::write(&wh_path, "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: donna\n    image: d:latest\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\n").unwrap();
+
+        let summary = read_own_topology(&wh_path).unwrap();
+        assert_eq!(summary.topology_name, "dev");
+        assert_eq!(summary.agent_count, 2);
+        assert_eq!(summary.stream_count, 1);
+        assert_eq!(summary.summary, "Topology 'dev': 2 agents, 1 stream");
+        assert!(!summary.raw_yaml.is_empty());
+    }
+
+    #[test]
+    fn read_own_topology_missing_file_returns_error() {
+        let result = read_own_topology(std::path::Path::new("/nonexistent/topology.wh"));
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DeployError::FileRead(_)));
+    }
+
+    #[test]
+    fn publish_topology_summary_contains_agent_attribution() {
+        let summary = TopologySummary {
+            topology_name: "dev".to_string(),
+            agent_count: 1,
+            stream_count: 1,
+            raw_yaml: "api_version: wheelhouse.dev/v1\nname: dev\n".to_string(),
+            summary: "Topology 'dev': 1 agent, 1 stream".to_string(),
+        };
+        let event = publish_topology_summary(&summary, "donna");
+        assert_eq!(event.agent_name, "donna");
+        assert!(!event.timestamp.is_empty());
+        assert!(event.content.contains("wheelhouse.dev/v1"));
     }
 }
