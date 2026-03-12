@@ -1,6 +1,7 @@
 # Rust
 target/
-Cargo.lock
+vendor/
+# Note: Cargo.lock is committed — shipped binary project (KR-02)
 
 # Node / Docs
 docs/node_modules/

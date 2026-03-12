@@ -1,0 +1,27 @@
+[project]
+name = "wheelhouse"
+version = "0.1.0"
+description = "Wheelhouse Python SDK — stream participant library"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    { name = "The Wheelhouse Paris", email = "hello@wheelhouse.paris" },
+]
+dependencies = [
+    "betterproto>=2.0.0b7",
+    "grpclib>=0.4.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

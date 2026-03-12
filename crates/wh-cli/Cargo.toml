@@ -3,7 +3,17 @@ name = "wh-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wheelhouse CLI — unified control plane for operators and agents"
 
 [[bin]]
 name = "wh"
 path = "src/main.rs"
+
+[dependencies]
+wh-proto = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+clap = { workspace = true }
+prost = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
