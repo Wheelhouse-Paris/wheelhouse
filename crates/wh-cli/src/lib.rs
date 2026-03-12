@@ -8,3 +8,61 @@ pub mod commands;
 pub mod lint;
 pub mod model;
 pub mod output;
+
+use clap::{Parser, Subcommand};
+
+use commands::completion::CompletionArgs;
+use commands::deploy::DeployCommand;
+use commands::logs::LogsArgs;
+use commands::ps::PsArgs;
+use commands::secrets::SecretsCmd;
+use commands::stream::StreamCommand;
+use commands::surface::SurfaceCommand;
+use output::OutputFormat;
+
+/// wh — the Wheelhouse CLI.
+///
+/// Unified control plane for operators and agents.
+#[derive(Debug, Parser)]
+#[command(name = "wh", version, about)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+/// Top-level CLI subcommands.
+#[derive(Debug, Subcommand)]
+pub enum Commands {
+    /// List all deployed components with their live status.
+    Ps(PsArgs),
+    /// Tail structured logs from a specific agent.
+    Logs(LogsArgs),
+    /// Manage Wheelhouse secrets and credentials.
+    Secrets {
+        #[command(subcommand)]
+        cmd: SecretsCmd,
+    },
+    /// Manage topology deployment.
+    Deploy {
+        #[command(subcommand)]
+        command: DeployCommand,
+    },
+    /// Manage surfaces (CLI, Telegram, etc.).
+    Surface {
+        #[command(subcommand)]
+        command: SurfaceCommand,
+    },
+    /// Manage and observe streams.
+    Stream {
+        #[command(subcommand)]
+        command: StreamCommand,
+    },
+    /// Check Wheelhouse health and status.
+    Status {
+        /// Output format: human (default) or json.
+        #[arg(long, default_value = "human")]
+        format: OutputFormat,
+    },
+    /// Generate shell completion scripts.
+    Completion(CompletionArgs),
+}

@@ -3,60 +3,16 @@
 //! Error handling uses `WhError` with manual exit codes.
 //! All library modules use typed errors via `thiserror` (SCV-04).
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
-use wh_cli::commands::deploy::DeployCommand;
-use wh_cli::commands::logs::{self, LogsArgs};
-use wh_cli::commands::ps::{self, PsArgs};
-use wh_cli::commands::secrets::SecretsCmd;
+use wh_cli::commands::completion;
+use wh_cli::commands::logs;
+use wh_cli::commands::ps;
 use wh_cli::commands::status;
-use wh_cli::commands::stream::{self, StreamCommand};
+use wh_cli::commands::stream;
 use wh_cli::commands::surface::{self, SurfaceCommand};
 use wh_cli::output::{OutputEnvelope, OutputFormat};
-
-/// wh — the Wheelhouse CLI.
-///
-/// Unified control plane for operators and agents.
-#[derive(Debug, Parser)]
-#[command(name = "wh", version, about)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Debug, Subcommand)]
-enum Commands {
-    /// List all deployed components with their live status.
-    Ps(PsArgs),
-    /// Tail structured logs from a specific agent.
-    Logs(LogsArgs),
-    /// Manage Wheelhouse secrets and credentials.
-    Secrets {
-        #[command(subcommand)]
-        cmd: SecretsCmd,
-    },
-    /// Manage topology deployment.
-    Deploy {
-        #[command(subcommand)]
-        command: DeployCommand,
-    },
-    /// Manage surfaces (CLI, Telegram, etc.).
-    Surface {
-        #[command(subcommand)]
-        command: SurfaceCommand,
-    },
-    /// Manage and observe streams.
-    Stream {
-        #[command(subcommand)]
-        command: StreamCommand,
-    },
-    /// Check Wheelhouse health and status.
-    Status {
-        /// Output format: human (default) or json.
-        #[arg(long, default_value = "human")]
-        format: OutputFormat,
-    },
-}
+use wh_cli::{Cli, Commands};
 
 #[tokio::main]
 async fn main() {
@@ -143,6 +99,9 @@ async fn main() {
         }
         Commands::Status { format } => {
             status::execute(format).await;
+        }
+        Commands::Completion(args) => {
+            completion::execute(&args);
         }
     }
 }
