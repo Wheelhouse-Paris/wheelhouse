@@ -8,6 +8,7 @@
 
 pub mod apply;
 pub mod autonomous;
+pub mod gitignore;
 pub mod lint;
 pub mod memory;
 pub mod persona;
@@ -127,6 +128,9 @@ pub enum DeployError {
 
     #[error("persona load failed: {0}")]
     PersonaLoadFailed(String),
+
+    #[error("secrets detected in staged files: {0:?}")]
+    SecretsDetected(Vec<String>),
 }
 
 impl DeployError {
@@ -145,6 +149,7 @@ impl DeployError {
             DeployError::PodmanNotFound(_) => "PODMAN_NOT_FOUND",
             DeployError::PodmanFailed(_) => "PODMAN_FAILED",
             DeployError::PersonaLoadFailed(_) => "PERSONA_LOAD_FAILED",
+            DeployError::SecretsDetected(_) => "SECRETS_DETECTED",
         }
     }
 }

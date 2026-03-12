@@ -3,6 +3,7 @@
 pub mod compact;
 pub mod completion;
 pub mod deploy;
+pub mod doctor;
 pub mod logs;
 pub mod memory;
 pub mod ps;

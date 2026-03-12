@@ -15,6 +15,7 @@ use clap::{Parser, Subcommand};
 use commands::compact::CompactArgs;
 use commands::completion::CompletionArgs;
 use commands::deploy::DeployCommand;
+use commands::doctor::DoctorArgs;
 use commands::logs::LogsArgs;
 use commands::memory::MemoryCommand;
 use commands::ps::PsArgs;
@@ -75,4 +76,6 @@ pub enum Commands {
     Compact(CompactArgs),
     /// Generate shell completion scripts.
     Completion(CompletionArgs),
+    /// Check git repository health and secrets exclusion (FM-07).
+    Doctor(DoctorArgs),
 }

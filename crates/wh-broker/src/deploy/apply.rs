@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use crate::deploy::gitignore;
 use crate::deploy::plan::PlanOutput;
 use crate::deploy::podman::{self, ApplyResult};
 use crate::deploy::{Change, DeployError, Topology};
@@ -163,9 +164,15 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("topology.wh"));
 
-    // Stage the state file and topology file — check for errors
+    // Ensure .wh/.gitignore exists BEFORE staging to prevent WAL/secrets/lock files
+    // from being accidentally committed (NFR-S2, FR30).
+    gitignore::ensure_gitignore(workspace_root)?;
+
+    // Stage the entire .wh/ directory (state.json, .gitignore, personas, cron,
+    // users, compaction summaries) and the topology file (FR28).
+    // The .wh/.gitignore excludes WAL, secrets, and lock files automatically.
     let stage_result = (|| -> Result<(), DeployError> {
-        run_git_checked(workspace_root, &["add", ".wh/state.json"])?;
+        run_git_checked(workspace_root, &["add", ".wh/"])?;
         run_git_checked(workspace_root, &["add", &wh_file_name.to_string_lossy()])?;
         Ok(())
     })();
@@ -174,6 +181,15 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
         // Cleanup: remove state file to avoid corrupting future plans
         let _ = std::fs::remove_file(&state_path);
         return Err(e);
+    }
+
+    // Pre-commit safety net: scan staged files for accidental secrets (NFR-S2).
+    let suspicious = gitignore::scan_staged_for_secrets(workspace_root)?;
+    if !suspicious.is_empty() {
+        // Unstage everything to prevent partial commit
+        let _ = run_git(workspace_root, &["reset", "HEAD"]);
+        let _ = std::fs::remove_file(&state_path);
+        return Err(DeployError::SecretsDetected(suspicious));
     }
 
     // Commit with ADR-003 format
@@ -198,6 +214,16 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
 }
 
 /// Apply the committed plan: provision containers and finalize the deployment.
+///
+/// ## Recovery Sequence (NFR-I3)
+///
+/// To restore infrastructure on a new machine:
+/// 1. `git clone <repo>` — restores topology config, personas, cron, user profiles
+/// 2. `wh broker start` — starts the Wheelhouse broker process
+/// 3. `wh deploy apply topology.wh` — provisions agents and streams
+///
+/// WAL content (in-flight messages) and secrets are NOT restored via git.
+/// Secrets must be re-configured via `wh secrets init`.
 ///
 /// State was already persisted to `.wh/state.json` during commit.
 /// This step provisions Podman containers for agent changes:
