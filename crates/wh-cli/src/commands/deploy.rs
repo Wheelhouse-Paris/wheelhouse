@@ -32,6 +32,10 @@ pub enum DeployCommand {
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
+        /// Agent name for self-destruct detection (CM-05). When provided,
+        /// the plan will be rejected if it would remove this agent.
+        #[arg(long)]
+        calling_agent: Option<String>,
     },
     /// Apply a topology, optionally without prompting
     Apply {
@@ -54,7 +58,9 @@ impl DeployCommand {
     pub fn execute(self) -> i32 {
         match self {
             DeployCommand::Lint { file, format } => execute_lint(&file, format),
-            DeployCommand::Plan { file, format } => execute_plan(&file, format),
+            DeployCommand::Plan { file, format, calling_agent } => {
+                execute_plan(&file, format, calling_agent.as_deref())
+            }
             DeployCommand::Apply { file, yes, format, agent_name } => {
                 execute_apply(&file, yes, format, agent_name.as_deref())
             }
@@ -125,7 +131,7 @@ fn execute_lint(file: &PathBuf, format: OutputFormat) -> i32 {
     if result.has_errors() { error::EXIT_ERROR } else { error::EXIT_SUCCESS }
 }
 
-fn execute_plan(file: &PathBuf, format: OutputFormat) -> i32 {
+fn execute_plan(file: &PathBuf, format: OutputFormat, calling_agent: Option<&str>) -> i32 {
     let linted = match lint::lint(file) {
         Ok(l) => l,
         Err(e) => {
@@ -135,7 +141,11 @@ fn execute_plan(file: &PathBuf, format: OutputFormat) -> i32 {
         }
     };
 
-    let plan_output = match plan::plan(linted) {
+    let plan_output = match if calling_agent.is_some() {
+        plan::plan_with_self_check(linted, calling_agent)
+    } else {
+        plan::plan(linted)
+    } {
         Ok(p) => p,
         Err(e) => {
             let msg = output::format_error(e.code(), &e.to_string(), format);

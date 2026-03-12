@@ -334,6 +334,46 @@ pub fn plan(linted: LintedFile) -> Result<PlanOutput, DeployError> {
     })
 }
 
+/// Execute the plan step with self-destruct detection (CM-05).
+///
+/// Wraps `plan()` and validates that the calling agent is not removed in the diff.
+/// If `calling_agent` is `None`, self-destruct detection is skipped (operator mode).
+/// If `calling_agent` is `Some(name)`, the plan is rejected if the agent would be
+/// removed or scaled to 0 replicas.
+#[tracing::instrument(skip_all, fields(calling_agent = ?calling_agent))]
+pub fn plan_with_self_check(
+    linted: LintedFile,
+    calling_agent: Option<&str>,
+) -> Result<PlanOutput, DeployError> {
+    let plan_output = plan(linted)?;
+
+    if let Some(agent_name) = calling_agent {
+        let target_component = format!("agent {agent_name}");
+        for change in plan_output.changes() {
+            // Check for direct removal
+            if change.op == "-" && change.component == target_component {
+                return Err(DeployError::SelfDestructDetected(format!(
+                    "agent '{}' cannot remove itself from the topology",
+                    agent_name
+                )));
+            }
+            // Check for scaling to 0 replicas (functionally equivalent to removal)
+            if change.op == "~"
+                && change.component == target_component
+                && change.field.as_deref() == Some("replicas")
+                && change.to == Some(serde_json::json!(0))
+            {
+                return Err(DeployError::SelfDestructDetected(format!(
+                    "agent '{}' cannot scale itself to 0 replicas",
+                    agent_name
+                )));
+            }
+        }
+    }
+
+    Ok(plan_output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

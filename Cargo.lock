@@ -1825,6 +1825,7 @@ dependencies = [
  "anyhow",
  "portpicker",
  "prost",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",
