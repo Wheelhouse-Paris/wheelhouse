@@ -6,8 +6,11 @@
 //! Human-readable output uses approved vocabulary — never "broker" (RT-B1).
 
 use clap::{Args, Subcommand};
+use prost::Message;
 use serde::Serialize;
 use serde_json::json;
+use wh_proto::{StreamEnvelope, TextMessage};
+use zeromq::{PubSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
 
 use crate::client::ControlClient;
 use crate::output::error::WhError;
@@ -37,6 +40,27 @@ pub enum StreamCommand {
     Delete {
         /// Stream name to delete.
         name: String,
+    },
+    /// Publish a typed message to a stream.
+    Publish {
+        /// Stream name to publish to.
+        stream_name: String,
+        /// Message content.
+        message: String,
+        /// Protobuf type name (default: TextMessage).
+        #[arg(long, default_value = "TextMessage")]
+        r#type: String,
+        /// Publisher identity.
+        #[arg(long, default_value = "cli")]
+        publisher: String,
+    },
+    /// Subscribe to a stream and display messages in real time.
+    Subscribe {
+        /// Stream name to subscribe to.
+        stream_name: String,
+        /// Output format: human (default) or json.
+        #[arg(long, value_enum, default_value = "human")]
+        format: OutputFormat,
     },
     /// Observe stream objects in real time.
     Tail(StreamTailArgs),
@@ -119,12 +143,262 @@ pub async fn execute(cmd: &StreamCommand) {
                 Err(e) => e.exit(),
             }
         }
+        StreamCommand::Publish {
+            stream_name,
+            message,
+            r#type,
+            publisher,
+        } => {
+            if let Err(e) = execute_publish(stream_name, message, r#type, publisher).await {
+                e.exit();
+            }
+        }
+        StreamCommand::Subscribe {
+            stream_name,
+            format,
+        } => {
+            if let Err(e) = execute_subscribe(stream_name, format).await {
+                e.exit();
+            }
+        }
         StreamCommand::Tail(args) => {
             if let Err(e) = execute_tail(args) {
                 e.exit();
             }
         }
     }
+}
+
+// ── Publish helper (Story 1.4) ──────────────────────────────────────────────
+
+/// Publish a typed message to a stream via ZMQ PUB socket.
+///
+/// Builds a StreamEnvelope client-side, connects to the broker's SUB endpoint,
+/// and sends the envelope as `{stream_name}\0{envelope_bytes}`.
+/// The broker assigns the authoritative sequence_number and published_at_ms.
+async fn execute_publish(
+    stream_name: &str,
+    message: &str,
+    type_name: &str,
+    publisher: &str,
+) -> Result<(), WhError> {
+    let sub_endpoint = std::env::var("WH_SUB_ENDPOINT").unwrap_or_else(|_| {
+        let port = std::env::var("WH_SUB_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(5556);
+        format!("tcp://127.0.0.1:{port}")
+    });
+
+    // Build the inner message based on type
+    let (type_url, payload_bytes) = match type_name {
+        "TextMessage" => {
+            let msg = TextMessage {
+                content: message.to_string(),
+                publisher_id: publisher.to_string(),
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            };
+            (
+                "wheelhouse.v1.TextMessage".to_string(),
+                msg.encode_to_vec(),
+            )
+        }
+        other => {
+            // For unknown types, encode message content as raw bytes
+            (
+                format!("wheelhouse.v1.{other}"),
+                message.as_bytes().to_vec(),
+            )
+        }
+    };
+
+    // Build StreamEnvelope
+    let envelope = StreamEnvelope {
+        stream_name: stream_name.to_string(),
+        object_id: uuid::Uuid::new_v4().to_string(),
+        type_url,
+        payload: payload_bytes,
+        publisher_id: publisher.to_string(),
+        published_at_ms: chrono::Utc::now().timestamp_millis(),
+        sequence_number: 0, // Broker assigns authoritative value
+    };
+
+    let envelope_bytes = envelope.encode_to_vec();
+
+    // Build wire format: stream_name\0envelope_bytes
+    let mut wire: Vec<u8> = Vec::with_capacity(stream_name.len() + 1 + envelope_bytes.len());
+    wire.extend_from_slice(stream_name.as_bytes());
+    wire.push(0);
+    wire.extend_from_slice(&envelope_bytes);
+
+    // Connect PUB socket to broker's SUB endpoint
+    let mut pub_socket = PubSocket::new();
+    pub_socket
+        .connect(&sub_endpoint)
+        .await
+        .map_err(|_| WhError::ConnectionError)?;
+
+    // ZMQ PUB sockets need a brief delay for connection establishment.
+    // Without this, the first message may be silently dropped because the
+    // subscription handshake between PUB and SUB has not completed yet.
+    // 100ms is sufficient for localhost; fire-and-forget semantics (WW-02).
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let msg = ZmqMessage::from(wire);
+    pub_socket
+        .send(msg)
+        .await
+        .map_err(|e| WhError::Other(format!("Failed to publish: {e}")))?;
+
+    println!("Published to stream '{stream_name}'");
+    Ok(())
+}
+
+// ── Subscribe helper (Story 1.4) ────────────────────────────────────────────
+
+/// Subscribe to a stream and display messages in real time.
+///
+/// Connects to the broker's PUB endpoint, subscribes to the stream topic prefix,
+/// and loops receiving and decoding StreamEnvelope messages.
+async fn execute_subscribe(
+    stream_name: &str,
+    format: &OutputFormat,
+) -> Result<(), WhError> {
+    let pub_endpoint = std::env::var("WH_PUB_ENDPOINT").unwrap_or_else(|_| {
+        let port = std::env::var("WH_PUB_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(5555);
+        format!("tcp://127.0.0.1:{port}")
+    });
+
+    let mut sub_socket = SubSocket::new();
+    sub_socket
+        .connect(&pub_endpoint)
+        .await
+        .map_err(|_| WhError::ConnectionError)?;
+
+    // Subscribe to stream topic prefix
+    let topic = format!("{stream_name}\0");
+    sub_socket
+        .subscribe(&topic)
+        .await
+        .map_err(|e| WhError::Other(format!("Failed to subscribe: {e}")))?;
+
+    eprintln!("Subscribed to stream '{stream_name}' — waiting for messages...");
+
+    loop {
+        tokio::select! {
+            biased;
+
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nDisconnected");
+                break;
+            }
+
+            result = sub_socket.recv() => {
+                match result {
+                    Ok(msg) => {
+                        let raw: Vec<u8> = msg.try_into().unwrap_or_default();
+                        // Strip stream_name\0 prefix
+                        if let Some(null_pos) = raw.iter().position(|&b| b == 0) {
+                            let payload = &raw[null_pos + 1..];
+                            display_envelope(payload, format);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "subscribe recv error");
+                        tokio::task::yield_now().await;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Decode and display a StreamEnvelope payload.
+fn display_envelope(payload: &[u8], format: &OutputFormat) {
+    match StreamEnvelope::decode(payload) {
+        Ok(envelope) => {
+            match format {
+                OutputFormat::Json => {
+                    let json_val = envelope_to_json(&envelope);
+                    println!(
+                        "{}",
+                        serde_json::to_string(&json_val).unwrap_or_default()
+                    );
+                }
+                OutputFormat::Human => {
+                    let timestamp = chrono::DateTime::from_timestamp_millis(envelope.published_at_ms)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let type_short = envelope
+                        .type_url
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(&envelope.type_url);
+                    let content = decode_inner_content(&envelope);
+                    println!(
+                        "[{}] [{}] [{}] {}",
+                        timestamp, type_short, envelope.publisher_id, content
+                    );
+                }
+            }
+        }
+        Err(_) => {
+            // Raw message — not a StreamEnvelope
+            let hex = payload
+                .iter()
+                .take(64)
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!("[raw] {hex}");
+        }
+    }
+}
+
+/// Decode the inner payload of a StreamEnvelope based on type_url.
+fn decode_inner_content(envelope: &StreamEnvelope) -> String {
+    match envelope.type_url.as_str() {
+        "wheelhouse.v1.TextMessage" => {
+            match TextMessage::decode(envelope.payload.as_slice()) {
+                Ok(text) => text.content,
+                Err(_) => format!("<decode error: {} bytes>", envelope.payload.len()),
+            }
+        }
+        _ => {
+            // Unknown type — show hex summary
+            let hex = envelope
+                .payload
+                .iter()
+                .take(32)
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if envelope.payload.len() > 32 {
+                format!("{hex}... ({} bytes)", envelope.payload.len())
+            } else {
+                hex
+            }
+        }
+    }
+}
+
+/// Convert a StreamEnvelope to a JSON value for --format json output.
+fn envelope_to_json(envelope: &StreamEnvelope) -> serde_json::Value {
+    let inner_content = decode_inner_content(envelope);
+    json!({
+        "stream_name": envelope.stream_name,
+        "object_id": envelope.object_id,
+        "type_url": envelope.type_url,
+        "publisher_id": envelope.publisher_id,
+        "published_at_ms": envelope.published_at_ms,
+        "sequence_number": envelope.sequence_number,
+        "content": inner_content
+    })
 }
 
 // ── Stream list helper ──────────────────────────────────────────────────────

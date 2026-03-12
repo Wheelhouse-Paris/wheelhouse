@@ -42,6 +42,7 @@ regex = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 crc32fast = "1"
 dirs = "5"
+uuid = { version = "1", features = ["v4"] }
 
 # Proto build
 prost-build = "0.13"

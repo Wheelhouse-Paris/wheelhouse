@@ -58,6 +58,9 @@ pub struct StreamInfo {
     pub created_at: SystemTime,
     /// Total messages written to WAL.
     pub message_count: AtomicU64,
+    /// Per-stream monotonically increasing sequence number (FR54).
+    /// Initialized from WAL record count on startup for continuity across restarts.
+    pub sequence_counter: AtomicU64,
     /// WAL writer for this stream.
     pub wal_writer: WalWriter,
 }
@@ -214,12 +217,15 @@ impl BrokerState {
 
         let wal_writer = WalWriter::open(&self.data_dir, name)?;
 
+        let record_count = wal_writer.record_count().await.unwrap_or(0);
+
         let info = StreamInfo {
             name: name.to_string(),
             retention_duration,
             retention_size_bytes,
             created_at: SystemTime::now(),
             message_count: AtomicU64::new(0),
+            sequence_counter: AtomicU64::new(record_count),
             wal_writer,
         };
 
@@ -345,6 +351,7 @@ impl BrokerState {
                 retention_size_bytes: meta.retention_size_bytes,
                 created_at,
                 message_count: AtomicU64::new(message_count),
+                sequence_counter: AtomicU64::new(message_count),
                 wal_writer,
             };
 
