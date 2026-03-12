@@ -78,17 +78,38 @@ pub struct PlanData {
 impl std::fmt::Display for PlanData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if !self.has_changes {
-            writeln!(f, "No changes detected. Topology is up to date.")?;
+            writeln!(f, "No changes. Infrastructure is up-to-date.")?;
             return Ok(());
         }
 
         writeln!(f, "Changes detected in topology '{}':", self.topology_name)?;
         writeln!(f)?;
+
+        let mut create_count: usize = 0;
+        let mut update_count: usize = 0;
+        let mut destroy_count: usize = 0;
+
         for change in &self.changes {
             match change.op.as_str() {
-                "+" => writeln!(f, "  + {}", change.component)?,
-                "-" => writeln!(f, "  - {}", change.component)?,
+                "+" => {
+                    create_count += 1;
+                    // Show provider info for streams if available
+                    if let Some(to) = &change.to {
+                        if let Some(provider) = to.get("provider").and_then(|v| v.as_str()) {
+                            writeln!(f, "  + {} (new, provider: {})", change.component, provider)?;
+                        } else {
+                            writeln!(f, "  + {} (new)", change.component)?;
+                        }
+                    } else {
+                        writeln!(f, "  + {} (new)", change.component)?;
+                    }
+                }
+                "-" => {
+                    destroy_count += 1;
+                    writeln!(f, "  - {} (destroy)", change.component)?;
+                }
                 "~" => {
+                    update_count += 1;
                     if let (Some(field), Some(from), Some(to)) =
                         (&change.field, &change.from, &change.to)
                     {
@@ -101,7 +122,18 @@ impl std::fmt::Display for PlanData {
             }
         }
         writeln!(f)?;
+        writeln!(
+            f,
+            "{} to create \u{00B7} {} to update \u{00B7} {} to destroy",
+            create_count, update_count, destroy_count
+        )?;
+        writeln!(f)?;
         writeln!(f, "Plan hash: {}", self.plan_hash)?;
+
+        for warning in &self.warnings {
+            writeln!(f, "Warning: {}", warning)?;
+        }
+
         Ok(())
     }
 }
@@ -159,7 +191,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
     }
 
     // Removed agents
-    for (name, _) in &current_agents {
+    for name in current_agents.keys() {
         if !desired_agents.contains_key(name) {
             changes.push(Change {
                 op: "-".to_string(),
@@ -201,19 +233,27 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
     let desired_streams: std::collections::BTreeMap<&str, &Stream> =
         desired.streams.iter().map(|s| (s.name.as_str(), s)).collect();
 
-    for (name, _) in &desired_streams {
+    for (name, stream) in &desired_streams {
         if !current_streams.contains_key(name) {
+            // Include provider info for stream additions (defaults to "local")
+            let provider = stream
+                .retention
+                .as_deref()
+                .map(|_| "local") // Streams always use local provider in MVP
+                .unwrap_or("local");
             changes.push(Change {
                 op: "+".to_string(),
                 component: format!("stream {name}"),
                 field: None,
                 from: None,
-                to: None,
+                to: Some(serde_json::json!({
+                    "provider": provider,
+                })),
             });
         }
     }
 
-    for (name, _) in &current_streams {
+    for name in current_streams.keys() {
         if !desired_streams.contains_key(name) {
             changes.push(Change {
                 op: "-".to_string(),
@@ -271,8 +311,19 @@ fn compute_plan_hash(changes: &[Change]) -> String {
 /// The plan is a pure in-memory diff with no side effects (ADR-003).
 /// Compares the desired state (from the linted file) against the current
 /// applied state (from `.wh/state.json`, or empty if first deploy).
+///
+/// If `force_destroy_all` is false and the plan would destroy all agents
+/// from a non-empty current state, returns `DeployError::PolicyViolation` (CM-05).
 #[tracing::instrument(skip_all, fields(topology = %linted.topology().name))]
 pub fn plan(linted: LintedFile) -> Result<PlanOutput, DeployError> {
+    plan_with_options(linted, false)
+}
+
+/// Execute the plan step with options.
+///
+/// `force_destroy_all`: if true, allows plans that would destroy all agents (CM-05).
+#[tracing::instrument(skip_all, fields(topology = %linted.topology().name))]
+pub fn plan_with_options(linted: LintedFile, force_destroy_all: bool) -> Result<PlanOutput, DeployError> {
     let desired = canonicalize_topology(linted.topology.clone());
     let workspace_root = linted
         .source_path
@@ -317,10 +368,34 @@ pub fn plan(linted: LintedFile) -> Result<PlanOutput, DeployError> {
         }
     }
 
+    // Self-destruct detection (CM-05): block plans that would destroy all agents
+    // from a non-empty current state, unless --force-destroy-all is provided.
+    let current_has_agents = current
+        .as_ref()
+        .map(|t| !t.agents.is_empty())
+        .unwrap_or(false);
+    let desired_has_no_agents = desired.agents.is_empty();
+    let is_self_destruct = current_has_agents && desired_has_no_agents;
+
+    if is_self_destruct && !force_destroy_all {
+        return Err(DeployError::PolicyViolation(
+            "plan would destroy all agents (self-destruct detected). \
+             Use --force-destroy-all to proceed."
+                .to_string(),
+        ));
+    }
+
     // No policy system yet — return empty hash
     let policy_snapshot_hash = String::new();
 
-    let warnings = Vec::new();
+    let mut warnings = Vec::new();
+
+    if is_self_destruct && force_destroy_all {
+        warnings.push(
+            "all agents will be destroyed — self-destruct plan approved with --force-destroy-all"
+                .to_string(),
+        );
+    }
 
     Ok(PlanOutput {
         has_changes,
@@ -550,10 +625,165 @@ mod tests {
         )
         .unwrap();
 
+        // This removes all agents (self-destruct), so --force-destroy-all is needed (CM-05)
         let linted = crate::deploy::lint::lint(&wh_path).unwrap();
-        let plan_output = plan(linted).unwrap();
+        let plan_output = plan_with_options(linted, true).unwrap();
 
         assert!(plan_output.has_changes());
         assert_eq!(plan_output.changes()[0].op, "-");
+    }
+
+    #[test]
+    fn plan_blocks_self_destruct_without_force_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let wh_dir = dir.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        let topology = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![Agent {
+                name: "researcher".to_string(),
+                image: "r:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+            }],
+            streams: vec![],
+            guardrails: None,
+        };
+        std::fs::write(
+            wh_dir.join("state.json"),
+            serde_json::to_string(&topology).unwrap(),
+        )
+        .unwrap();
+
+        let wh_path = dir.path().join("topology.wh");
+        std::fs::write(
+            &wh_path,
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents: []\n",
+        )
+        .unwrap();
+
+        let linted = crate::deploy::lint::lint(&wh_path).unwrap();
+        let err = plan(linted).unwrap_err();
+        assert!(matches!(err, DeployError::PolicyViolation(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("self-destruct"), "error should mention self-destruct: {msg}");
+        assert!(msg.contains("--force-destroy-all"), "error should mention --force-destroy-all: {msg}");
+    }
+
+    #[test]
+    fn plan_self_destruct_with_force_includes_warning() {
+        let dir = tempfile::tempdir().unwrap();
+        let wh_dir = dir.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        let topology = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![Agent {
+                name: "researcher".to_string(),
+                image: "r:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+            }],
+            streams: vec![],
+            guardrails: None,
+        };
+        std::fs::write(
+            wh_dir.join("state.json"),
+            serde_json::to_string(&topology).unwrap(),
+        )
+        .unwrap();
+
+        let wh_path = dir.path().join("topology.wh");
+        std::fs::write(
+            &wh_path,
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents: []\n",
+        )
+        .unwrap();
+
+        let linted = crate::deploy::lint::lint(&wh_path).unwrap();
+        let plan_output = plan_with_options(linted, true).unwrap();
+
+        assert!(plan_output.has_changes());
+        assert!(!plan_output.warnings().is_empty(), "should have self-destruct warning");
+        assert!(
+            plan_output.warnings()[0].contains("destroy"),
+            "warning should mention destroy: {}",
+            plan_output.warnings()[0]
+        );
+    }
+
+    #[test]
+    fn plan_data_display_shows_new_annotations_and_summary() {
+        let plan_data = PlanData {
+            has_changes: true,
+            changes: vec![
+                Change {
+                    op: "+".to_string(),
+                    component: "agent researcher".to_string(),
+                    field: None,
+                    from: None,
+                    to: Some(serde_json::json!({"image": "r:latest", "replicas": 1})),
+                },
+                Change {
+                    op: "+".to_string(),
+                    component: "stream main".to_string(),
+                    field: None,
+                    from: None,
+                    to: Some(serde_json::json!({"provider": "local"})),
+                },
+            ],
+            plan_hash: "sha256:abc123".to_string(),
+            topology_name: "dev".to_string(),
+            policy_snapshot_hash: String::new(),
+            warnings: vec![],
+        };
+
+        let output = format!("{plan_data}");
+        assert!(output.contains("+ agent researcher (new)"), "should show (new): {output}");
+        assert!(output.contains("+ stream main (new, provider: local)"), "should show stream with provider: {output}");
+        assert!(output.contains("2 to create"), "should show create count: {output}");
+        assert!(output.contains("0 to update"), "should show update count: {output}");
+        assert!(output.contains("0 to destroy"), "should show destroy count: {output}");
+    }
+
+    #[test]
+    fn plan_data_display_shows_no_changes_message() {
+        let plan_data = PlanData {
+            has_changes: false,
+            changes: vec![],
+            plan_hash: "sha256:empty".to_string(),
+            topology_name: "dev".to_string(),
+            policy_snapshot_hash: String::new(),
+            warnings: vec![],
+        };
+
+        let output = format!("{plan_data}");
+        assert!(output.contains("No changes"), "should show no changes: {output}");
+        assert!(output.contains("up-to-date"), "should show up-to-date: {output}");
+    }
+
+    #[test]
+    fn plan_data_display_shows_destroy_annotation() {
+        let plan_data = PlanData {
+            has_changes: true,
+            changes: vec![Change {
+                op: "-".to_string(),
+                component: "agent researcher".to_string(),
+                field: None,
+                from: None,
+                to: None,
+            }],
+            plan_hash: "sha256:abc".to_string(),
+            topology_name: "dev".to_string(),
+            policy_snapshot_hash: String::new(),
+            warnings: vec![],
+        };
+
+        let output = format!("{plan_data}");
+        assert!(output.contains("- agent researcher (destroy)"), "should show (destroy): {output}");
+        assert!(output.contains("1 to destroy"), "should show destroy count: {output}");
     }
 }
