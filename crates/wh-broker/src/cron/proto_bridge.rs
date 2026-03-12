@@ -34,12 +34,13 @@ pub fn build_skill_invocation_from_cron(
 }
 
 /// Build a TextMessage proto.
-pub fn build_text_message(content: &str, author_id: &str) -> wh_proto::TextMessage {
+pub fn build_text_message(content: &str, publisher_id: &str) -> wh_proto::TextMessage {
     wh_proto::TextMessage {
         content: content.to_string(),
-        author_id: author_id.to_string(),
+        publisher_id: publisher_id.to_string(),
         timestamp_ms: now_ms(),
-        metadata: Default::default(),
+        user_id: String::new(),
+        reply_to_user_id: String::new(),
     }
 }
 
@@ -53,7 +54,7 @@ pub fn build_skill_progress(
     wh_proto::SkillProgress {
         invocation_id: invocation_id.to_string(),
         skill_name: skill_name.to_string(),
-        progress_percent: percent,
+        progress_percent: percent as f32,
         status_message: message.to_string(),
         timestamp_ms: now_ms(),
     }
@@ -81,6 +82,7 @@ mod tests {
     use super::*;
     use crate::cron::chain::ChainEvent;
     use std::collections::HashMap;
+    use prost_types::Timestamp;
 
     #[test]
     fn build_skill_invocation_has_correct_fields() {
@@ -88,7 +90,9 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
+            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
             payload: [("input".into(), "hello".into())].into_iter().collect(),
+            target_stream: "test-stream".into(),
         };
 
         let inv = build_skill_invocation_from_cron(&event, "echo", "agent-1");
@@ -105,7 +109,9 @@ mod tests {
             job_name: "test".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
+            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
             payload: HashMap::new(),
+            target_stream: "test-stream".into(),
         };
 
         let inv1 = build_skill_invocation_from_cron(&event, "echo", "agent-1");
@@ -117,7 +123,7 @@ mod tests {
     fn build_text_message_has_correct_fields() {
         let msg = build_text_message("hello world", "agent-1");
         assert_eq!(msg.content, "hello world");
-        assert_eq!(msg.author_id, "agent-1");
+        assert_eq!(msg.publisher_id, "agent-1");
         assert!(msg.timestamp_ms > 0);
     }
 
@@ -126,7 +132,7 @@ mod tests {
         let progress = build_skill_progress("inv-1", "echo", 0, "started");
         assert_eq!(progress.invocation_id, "inv-1");
         assert_eq!(progress.skill_name, "echo");
-        assert_eq!(progress.progress_percent, 0);
+        assert!((progress.progress_percent - 0.0_f32).abs() < f32::EPSILON);
         assert_eq!(progress.status_message, "started");
         assert!(progress.timestamp_ms > 0);
     }

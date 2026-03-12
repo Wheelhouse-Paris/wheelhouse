@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use prost_types::Timestamp;
 use tokio::sync::mpsc;
 use wh_broker::cron::chain::{ChainEvent, NotificationType};
 use wh_broker::cron::dispatcher::CronEventDispatcher;
@@ -39,7 +40,9 @@ async fn test_ac1_full_chain_completes_without_human_intervention() {
         job_name: "echo-cron".into(),
         action: "event".into(),
         schedule: "*/1 * * * *".into(),
+        triggered_at: Timestamp { seconds: 0, nanos: 0 },
         payload: [("input".into(), "hello".into())].into_iter().collect(),
+        target_stream: "test-stream".into(),
     };
 
     let outcome = chain.process_cron_event(event).await.unwrap();
@@ -69,7 +72,9 @@ async fn test_ac2_chain_events_in_order_with_timestamps() {
         job_name: "echo-cron".into(),
         action: "event".into(),
         schedule: "*/1 * * * *".into(),
+        triggered_at: Timestamp { seconds: 0, nanos: 0 },
         payload: HashMap::new(),
+        target_stream: "test-stream".into(),
     };
 
     let outcome = chain.process_cron_event(event).await.unwrap();
@@ -129,7 +134,9 @@ async fn test_ac3_skill_failure_produces_error_text_and_notification() {
         job_name: "failing-cron".into(),
         action: "event".into(),
         schedule: "*/1 * * * *".into(),
+        triggered_at: Timestamp { seconds: 0, nanos: 0 },
         payload: HashMap::new(),
+        target_stream: "test-stream".into(),
     };
 
     let outcome = chain.process_cron_event(event).await.unwrap();
@@ -179,7 +186,9 @@ async fn test_ac2_all_event_types_present_in_chain_log() {
         job_name: "echo-cron".into(),
         action: "event".into(),
         schedule: "*/1 * * * *".into(),
+        triggered_at: Timestamp { seconds: 0, nanos: 0 },
         payload: HashMap::new(),
+        target_stream: "test-stream".into(),
     };
 
     let outcome = chain.process_cron_event(event).await.unwrap();
@@ -201,9 +210,11 @@ async fn test_ac1_skill_invocation_has_correct_fields() {
         job_name: "echo-cron".into(),
         action: "event".into(),
         schedule: "*/1 * * * *".into(),
+        triggered_at: Timestamp { seconds: 0, nanos: 0 },
         payload: [("input".into(), "test-data".into())]
             .into_iter()
             .collect(),
+        target_stream: "test-stream".into(),
     };
 
     let outcome = chain.process_cron_event(event).await.unwrap();
@@ -239,7 +250,9 @@ async fn test_ac3_chain_without_notification_sender_graceful_degradation() {
         job_name: "failing-cron".into(),
         action: "event".into(),
         schedule: "*/1 * * * *".into(),
+        triggered_at: Timestamp { seconds: 0, nanos: 0 },
         payload: HashMap::new(),
+        target_stream: "test-stream".into(),
     };
 
     let outcome = chain.process_cron_event(event).await.unwrap();

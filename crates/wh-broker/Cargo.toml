@@ -31,9 +31,9 @@ chrono = { workspace = true }
 dirs = { workspace = true }
 cron = "0.13"
 prost-types = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 portpicker = "0.1"
-uuid = { version = "1", features = ["v4"] }
 chrono = { workspace = true }

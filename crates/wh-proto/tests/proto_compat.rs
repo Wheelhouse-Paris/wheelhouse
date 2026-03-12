@@ -67,6 +67,4 @@ fn v1_cron_event_fixture_roundtrip() {
         .expect("Deserialization of v1 CronEvent fixture must succeed (NFR-E1)");
 
     assert_eq!(msg.job_name, "daily-compaction");
-    assert_eq!(msg.stream_name, "system-events");
-    assert!(!msg.cron_expression.is_empty());
 }

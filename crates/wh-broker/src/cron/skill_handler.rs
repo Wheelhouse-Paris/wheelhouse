@@ -72,7 +72,9 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
+            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
             payload: HashMap::new(),
+            target_stream: "test-stream".into(),
         };
 
         let result = handler.handle(event).await;
@@ -106,9 +108,11 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
+            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
             payload: [("input".into(), "hello world".into())]
                 .into_iter()
                 .collect(),
+            target_stream: "test-stream".into(),
         };
 
         // The handler internally calls build_skill_invocation_from_cron which maps payload.
