@@ -35,6 +35,10 @@ pub enum DeployCommand {
         /// Allow plans that would destroy all agents (self-destruct safety override, CM-05)
         #[arg(long)]
         force_destroy_all: bool,
+        /// Agent name for self-destruct detection (CM-05). When provided,
+        /// the plan will be rejected if it would remove this agent.
+        #[arg(long)]
+        calling_agent: Option<String>,
     },
     /// Apply a topology, optionally without prompting
     Apply {
@@ -57,7 +61,9 @@ impl DeployCommand {
     pub fn execute(self) -> i32 {
         match self {
             DeployCommand::Lint { file, format } => execute_lint(&file, format),
-            DeployCommand::Plan { file, format, force_destroy_all } => execute_plan(&file, format, force_destroy_all),
+            DeployCommand::Plan { file, format, force_destroy_all, calling_agent } => {
+                execute_plan(&file, format, force_destroy_all, calling_agent.as_deref())
+            }
             DeployCommand::Apply { file, yes, format, agent_name } => {
                 execute_apply(&file, yes, format, agent_name.as_deref())
             }
@@ -128,7 +134,7 @@ fn execute_lint(file: &std::path::Path, format: OutputFormat) -> i32 {
     if result.has_errors() { error::EXIT_ERROR } else { error::EXIT_SUCCESS }
 }
 
-fn execute_plan(file: &PathBuf, format: OutputFormat, force_destroy_all: bool) -> i32 {
+fn execute_plan(file: &PathBuf, format: OutputFormat, force_destroy_all: bool, calling_agent: Option<&str>) -> i32 {
     let linted = match lint::lint(file) {
         Ok(l) => l,
         Err(e) => {
@@ -138,7 +144,11 @@ fn execute_plan(file: &PathBuf, format: OutputFormat, force_destroy_all: bool) -
         }
     };
 
-    let plan_output = match plan::plan_with_options(linted, force_destroy_all) {
+    let plan_output = match if calling_agent.is_some() {
+        plan::plan_with_self_check(linted, calling_agent)
+    } else {
+        plan::plan_with_options(linted, force_destroy_all)
+    } {
         Ok(p) => p,
         Err(e) => {
             let msg = output::format_error(e.code(), &e.to_string(), format);

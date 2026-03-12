@@ -7,6 +7,7 @@
 //! See ADR-003 for design rationale.
 
 pub mod apply;
+pub mod autonomous;
 pub mod lint;
 pub mod plan;
 
@@ -107,6 +108,9 @@ pub enum DeployError {
 
     #[error("policy violation: {0}")]
     PolicyViolation(String),
+
+    #[error("self-destruct detected: {0}")]
+    SelfDestructDetected(String),
 }
 
 impl DeployError {
@@ -121,6 +125,7 @@ impl DeployError {
             DeployError::GitFailed(_) => "GIT_FAILED",
             DeployError::GitTimeout(_) => "GIT_TIMEOUT",
             DeployError::PolicyViolation(_) => "POLICY_VIOLATION",
+            DeployError::SelfDestructDetected(_) => "SELF_DESTRUCT_DETECTED",
         }
     }
 }
