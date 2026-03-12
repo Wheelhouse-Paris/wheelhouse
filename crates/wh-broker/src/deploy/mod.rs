@@ -182,8 +182,7 @@ impl DeployError {
 
 /// Parse a `.wh` YAML file into a `Topology`.
 pub fn parse_topology(content: &str) -> Result<Topology, DeployError> {
-    let topology: Topology =
-        serde_yaml::from_str(content).map_err(DeployError::YamlParse)?;
+    let topology: Topology = serde_yaml::from_str(content).map_err(DeployError::YamlParse)?;
 
     // Validate api_version
     if topology.api_version != "wheelhouse.dev/v1" {

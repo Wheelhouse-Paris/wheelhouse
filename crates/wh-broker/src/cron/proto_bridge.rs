@@ -81,8 +81,8 @@ pub fn build_chain_summary(outcome: &ChainOutcome) -> String {
 mod tests {
     use super::*;
     use crate::cron::chain::ChainEvent;
-    use std::collections::HashMap;
     use prost_types::Timestamp;
+    use std::collections::HashMap;
 
     #[test]
     fn build_skill_invocation_has_correct_fields() {
@@ -90,7 +90,10 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: [("input".into(), "hello".into())].into_iter().collect(),
             target_stream: "test-stream".into(),
         };
@@ -109,7 +112,10 @@ mod tests {
             job_name: "test".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: HashMap::new(),
             target_stream: "test-stream".into(),
         };

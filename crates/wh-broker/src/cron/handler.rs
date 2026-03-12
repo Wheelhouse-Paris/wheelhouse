@@ -105,8 +105,7 @@ mod tests {
 
     #[test]
     fn error_display_execution_failed() {
-        let source: Box<dyn std::error::Error + Send + Sync> =
-            "disk full".to_string().into();
+        let source: Box<dyn std::error::Error + Send + Sync> = "disk full".to_string().into();
         let err = CronHandlerError::ExecutionFailed {
             job_name: "nightly-backup".to_string(),
             source,
@@ -147,8 +146,7 @@ mod tests {
             let code = err.code();
             // Verify SCREAMING_SNAKE_CASE: all uppercase, underscores allowed, no lowercase
             assert!(
-                code.chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '_'),
+                code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
                 "error code '{}' is not SCREAMING_SNAKE_CASE",
                 code
             );

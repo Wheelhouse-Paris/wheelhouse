@@ -80,8 +80,7 @@ fn ac2_ps_json_format_is_valid_json() {
 #[test]
 fn ac2_ps_json_includes_schema_version() {
     let (stdout, _stderr, _code) = run_wh_ps(&["--format", "json"]);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).expect("must be valid JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("must be valid JSON");
     assert_eq!(
         parsed.get("v"),
         Some(&serde_json::Value::Number(1.into())),
@@ -92,8 +91,7 @@ fn ac2_ps_json_includes_schema_version() {
 #[test]
 fn ac2_ps_json_components_have_status_enum() {
     let (stdout, _stderr, _code) = run_wh_ps(&["--format", "json"]);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).expect("must be valid JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("must be valid JSON");
     let data = parsed.get("data").expect("JSON must have 'data' field");
     let components = data
         .get("components")
@@ -118,8 +116,7 @@ fn ac2_ps_json_components_have_status_enum() {
 #[test]
 fn ac2_ps_json_fields_are_snake_case() {
     let (stdout, _stderr, _code) = run_wh_ps(&["--format", "json"]);
-    let parsed: serde_json::Value =
-        serde_json::from_str(&stdout).expect("must be valid JSON");
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("must be valid JSON");
 
     // Recursively check all keys are snake_case
     fn check_snake_case(value: &serde_json::Value, path: &str) {
@@ -177,10 +174,12 @@ fn ac4_no_broker_shows_friendly_error() {
     // When broker is not running, should show "Wheelhouse not running"
     let (stdout, stderr, code) = run_wh_ps(&[]);
     let combined = format!("{}{}", stdout, stderr);
-    assert_eq!(code, 1, "Exit code must be 1 when Wheelhouse is not running");
+    assert_eq!(
+        code, 1,
+        "Exit code must be 1 when Wheelhouse is not running"
+    );
     assert!(
-        combined.contains("Wheelhouse not running")
-            || combined.contains("not running"),
+        combined.contains("Wheelhouse not running") || combined.contains("not running"),
         "Error message must say 'Wheelhouse not running', got: {}",
         combined
     );

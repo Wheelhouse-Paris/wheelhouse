@@ -220,7 +220,9 @@ fn plan_blocks_self_destruct_without_force_flag() {
         "exit code should be 1 when self-destruct is blocked"
     );
     assert!(
-        stderr.contains("destroy") || stderr.contains("self-destruct") || stderr.contains("--force-destroy-all"),
+        stderr.contains("destroy")
+            || stderr.contains("self-destruct")
+            || stderr.contains("--force-destroy-all"),
         "error should mention self-destruct or --force-destroy-all, got:\n{stderr}"
     );
 }

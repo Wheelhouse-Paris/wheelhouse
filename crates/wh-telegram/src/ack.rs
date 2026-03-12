@@ -33,11 +33,7 @@ impl AckTracker {
     ///
     /// If a response arrives before the timeout, call `cancel()` to prevent the ack.
     #[instrument(skip(self))]
-    pub async fn track(
-        &self,
-        user_id: &str,
-        message_id: &str,
-    ) -> mpsc::UnboundedReceiver<()> {
+    pub async fn track(&self, user_id: &str, message_id: &str) -> mpsc::UnboundedReceiver<()> {
         let (tx, rx) = mpsc::unbounded_channel();
         let timeout = self.timeout;
         let key = (user_id.to_string(), message_id.to_string());
@@ -103,7 +99,10 @@ mod tests {
         // Cancel before timeout
         tracker.cancel("usr_abc", "msg_001").await;
         tokio::time::sleep(Duration::from_millis(150)).await;
-        assert!(rx.try_recv().is_err(), "ack should not have fired after cancel");
+        assert!(
+            rx.try_recv().is_err(),
+            "ack should not have fired after cancel"
+        );
     }
 
     #[tokio::test]
@@ -116,8 +115,14 @@ mod tests {
         tracker.cancel_all_for_user("usr_abc").await;
         tokio::time::sleep(Duration::from_millis(150)).await;
 
-        assert!(rx1.try_recv().is_err(), "user_abc msg_001 should be cancelled");
-        assert!(rx2.try_recv().is_err(), "user_abc msg_002 should be cancelled");
+        assert!(
+            rx1.try_recv().is_err(),
+            "user_abc msg_001 should be cancelled"
+        );
+        assert!(
+            rx2.try_recv().is_err(),
+            "user_abc msg_002 should be cancelled"
+        );
         assert!(rx3.try_recv().is_ok(), "other user should still fire");
     }
 }

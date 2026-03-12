@@ -28,7 +28,9 @@ fn test_register_deduplication_returns_existing() {
     let store = UserStore::new(tmp.path());
 
     let first = store.register("cli", "alice", "Alice").unwrap();
-    let second = store.register("cli", "alice", "Alice Different Name").unwrap();
+    let second = store
+        .register("cli", "alice", "Alice Different Name")
+        .unwrap();
 
     // Should return the original profile, not create a new one
     assert_eq!(first.user_id, second.user_id);
@@ -103,7 +105,7 @@ fn test_user_id_format() {
     let id = generate_user_id("cli", "alice");
     assert!(id.starts_with("usr_"));
     assert_eq!(id.len(), 20); // "usr_" (4) + 16 hex chars
-    // Verify hex chars only after prefix
+                              // Verify hex chars only after prefix
     assert!(id[4..].chars().all(|c| c.is_ascii_hexdigit()));
 }
 

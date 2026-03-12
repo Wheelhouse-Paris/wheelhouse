@@ -16,15 +16,23 @@ use zeromq::{PubSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
 
 /// Helper: start a broker (routing loop + control loop) in the background and return
 /// the config, state, and a cancellation token.
-async fn start_test_broker() -> (BrokerConfig, Arc<BrokerState>, tokio_util::sync::CancellationToken, tempfile::TempDir)
-{
+async fn start_test_broker() -> (
+    BrokerConfig,
+    Arc<BrokerState>,
+    tokio_util::sync::CancellationToken,
+    tempfile::TempDir,
+) {
     let dir = tempfile::tempdir().unwrap();
     let pub_port = portpicker::pick_unused_port().unwrap();
     let sub_port = portpicker::pick_unused_port().unwrap();
     let control_port = portpicker::pick_unused_port().unwrap();
 
-    let config =
-        BrokerConfig::with_ports_and_data_dir(pub_port, sub_port, control_port, dir.path().to_path_buf());
+    let config = BrokerConfig::with_ports_and_data_dir(
+        pub_port,
+        sub_port,
+        control_port,
+        dir.path().to_path_buf(),
+    );
     let state = BrokerState::with_data_dir(config.data_dir().to_path_buf());
     let cancel = tokio_util::sync::CancellationToken::new();
 
@@ -109,10 +117,7 @@ async fn publish_to_stream(pub_socket: &mut PubSocket, stream_name: &str, envelo
 }
 
 /// Helper: receive a message and decode it as StreamEnvelope.
-async fn receive_envelope(
-    sub_socket: &mut SubSocket,
-    timeout: Duration,
-) -> Option<StreamEnvelope> {
+async fn receive_envelope(sub_socket: &mut SubSocket, timeout: Duration) -> Option<StreamEnvelope> {
     match tokio::time::timeout(timeout, sub_socket.recv()).await {
         Ok(Ok(msg)) => {
             let raw: Vec<u8> = msg.try_into().unwrap_or_default();
@@ -229,7 +234,10 @@ async fn test_typed_protobuf_deserialization_agent_to_agent() {
     publish_to_stream(&mut publisher, "main", &envelope_bytes).await;
 
     let received = receive_envelope(&mut subscriber, Duration::from_secs(5)).await;
-    assert!(received.is_some(), "Agent subscriber should receive message");
+    assert!(
+        received.is_some(),
+        "Agent subscriber should receive message"
+    );
 
     let envelope = received.unwrap();
     assert_eq!(envelope.type_url, "wheelhouse.v1.TextMessage");

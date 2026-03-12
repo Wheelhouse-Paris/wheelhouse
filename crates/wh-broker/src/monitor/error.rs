@@ -84,8 +84,7 @@ mod tests {
         ];
         for code in &codes {
             assert!(
-                code.chars()
-                    .all(|c| c.is_ascii_uppercase() || c == '_'),
+                code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
                 "code '{}' is not SCREAMING_SNAKE_CASE",
                 code
             );

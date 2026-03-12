@@ -6,7 +6,7 @@ use console::style;
 use serde::Serialize;
 
 use crate::output::error::WhError;
-use crate::output::{OutputFormat, OutputEnvelope};
+use crate::output::{OutputEnvelope, OutputFormat};
 
 /// Credential spec for a single secret that the wizard manages.
 #[derive(Debug, Clone)]
@@ -41,7 +41,9 @@ pub const CREDENTIALS: &[CredentialSpec] = &[
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum DetectionResult {
-    Detected { version: String },
+    Detected {
+        version: String,
+    },
     NotFound {
         reason: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,7 +145,9 @@ fn run_init(format: OutputFormat, update: bool) -> Result<(), WhError> {
                 println!("{} Podman {} detected", style("✓").green().bold(), version);
             }
             DetectionResult::NotFound { install_hint, .. } => {
-                let hint = install_hint.as_deref().unwrap_or("see https://podman.io/docs/installation");
+                let hint = install_hint
+                    .as_deref()
+                    .unwrap_or("see https://podman.io/docs/installation");
                 println!(
                     "{} Podman not found — install via: {}",
                     style("!").yellow().bold(),
@@ -244,14 +248,16 @@ fn run_init(format: OutputFormat, update: bool) -> Result<(), WhError> {
         println!(); // blank line before summary
         let configured = results
             .iter()
-            .filter(|r| matches!(
-                r.status,
-                CredentialStatus::Configured
-                    | CredentialStatus::DetectedFromEnv
-                    | CredentialStatus::AlreadyConfigured
-                    | CredentialStatus::Updated
-                    | CredentialStatus::Kept
-            ))
+            .filter(|r| {
+                matches!(
+                    r.status,
+                    CredentialStatus::Configured
+                        | CredentialStatus::DetectedFromEnv
+                        | CredentialStatus::AlreadyConfigured
+                        | CredentialStatus::Updated
+                        | CredentialStatus::Kept
+                )
+            })
             .count();
         let skipped = results
             .iter()
@@ -302,7 +308,12 @@ fn run_init(format: OutputFormat, update: bool) -> Result<(), WhError> {
 // ---------------------------------------------------------------------------
 
 fn detect_podman() -> DetectionResult {
-    match Command::new("podman").arg("version").arg("--format").arg("{{.Client.Version}}").output() {
+    match Command::new("podman")
+        .arg("version")
+        .arg("--format")
+        .arg("{{.Client.Version}}")
+        .output()
+    {
         Ok(output) if output.status.success() => {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             DetectionResult::Detected { version }
@@ -332,7 +343,8 @@ fn platform_podman_install_hint() -> String {
         "brew install podman".to_string()
     } else {
         // On Linux, give a generic hint that covers the main distros.
-        "sudo apt install podman (Debian/Ubuntu) or sudo dnf install podman (Fedora/RHEL)".to_string()
+        "sudo apt install podman (Debian/Ubuntu) or sudo dnf install podman (Fedora/RHEL)"
+            .to_string()
     }
 }
 
@@ -441,14 +453,14 @@ pub fn read_secret(credential_name: &str) -> Result<String, WhError> {
 }
 
 /// Prompt the user for a credential value and store it.
-fn prompt_credential(spec: &CredentialSpec, format: OutputFormat) -> Result<CredentialStatus, WhError> {
+fn prompt_credential(
+    spec: &CredentialSpec,
+    format: OutputFormat,
+) -> Result<CredentialStatus, WhError> {
     if format == OutputFormat::Human {
         // Print prompt header.
         if spec.required {
-            println!(
-                "  {} (required):",
-                style(spec.display_name).bold(),
-            );
+            println!("  {} (required):", style(spec.display_name).bold(),);
         } else {
             println!(
                 "  {} (optional — press Enter to skip):",
@@ -484,7 +496,10 @@ fn prompt_credential(spec: &CredentialSpec, format: OutputFormat) -> Result<Cred
 }
 
 /// Prompt the user to update an already-configured credential.
-fn prompt_update_credential(spec: &CredentialSpec, format: OutputFormat) -> Result<CredentialStatus, WhError> {
+fn prompt_update_credential(
+    spec: &CredentialSpec,
+    format: OutputFormat,
+) -> Result<CredentialStatus, WhError> {
     if format == OutputFormat::Human {
         println!(
             "  {} {} — enter new value or press Enter to keep current:",
@@ -557,11 +572,7 @@ fn print_credential_status(spec: &CredentialSpec, status: &CredentialStatus) {
             );
         }
         CredentialStatus::Skipped => {
-            println!(
-                "  {} {} skipped",
-                style("⊘").dim(),
-                spec.display_name,
-            );
+            println!("  {} {} skipped", style("⊘").dim(), spec.display_name,);
         }
     }
 }
@@ -689,16 +700,18 @@ mod tests {
     #[test]
     fn secrets_init_data_all_configured_true() {
         let data = SecretsInitData {
-            podman: DetectionResult::Detected { version: "4.8.0".to_string() },
-            git: DetectionResult::Detected { version: "2.43.0".to_string() },
-            credentials: vec![
-                CredentialResult {
-                    name: "anthropic_api_key".to_string(),
-                    display_name: "Claude API key".to_string(),
-                    required: true,
-                    status: CredentialStatus::DetectedFromEnv,
-                },
-            ],
+            podman: DetectionResult::Detected {
+                version: "4.8.0".to_string(),
+            },
+            git: DetectionResult::Detected {
+                version: "2.43.0".to_string(),
+            },
+            credentials: vec![CredentialResult {
+                name: "anthropic_api_key".to_string(),
+                display_name: "Claude API key".to_string(),
+                required: true,
+                status: CredentialStatus::DetectedFromEnv,
+            }],
             all_configured: true,
             next_command: "wh deploy apply topology.wh".to_string(),
         };
@@ -755,8 +768,14 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("not configured"), "Expected 'not configured' in: {msg}");
-        assert!(msg.contains("wh secrets init"), "Expected 'wh secrets init' in: {msg}");
+        assert!(
+            msg.contains("not configured"),
+            "Expected 'not configured' in: {msg}"
+        );
+        assert!(
+            msg.contains("wh secrets init"),
+            "Expected 'wh secrets init' in: {msg}"
+        );
     }
 
     #[test]

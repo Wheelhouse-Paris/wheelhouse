@@ -9,9 +9,7 @@
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time;
-use wh_broker::monitor::{
-    AgentMonitorConfig, MonitorRegistry, SilenceAlert, SilenceMonitor,
-};
+use wh_broker::monitor::{AgentMonitorConfig, MonitorRegistry, SilenceAlert, SilenceMonitor};
 
 /// AC1: Agent configured with timeout triggers alert after silence period.
 /// Given an agent with loop_detection_timeout configured,
@@ -60,7 +58,7 @@ async fn test_ac1_alert_message_format() {
         agent_name: "researcher-2".to_string(),
         stream_name: "research-output".to_string(),
         silent_duration: Duration::from_secs(900), // 15 minutes
-        message: String::new(), // will be overwritten by format_notification
+        message: String::new(),                    // will be overwritten by format_notification
     };
 
     let notification = alert.format_notification();
@@ -121,7 +119,10 @@ async fn test_ac3_timer_resets_on_activity() {
 
     // No alert should have been sent (timeout is 200ms, only 150ms since reset)
     let result = tokio::time::timeout(Duration::from_millis(50), rx.recv()).await;
-    assert!(result.is_err(), "should not receive alert after activity reset");
+    assert!(
+        result.is_err(),
+        "should not receive alert after activity reset"
+    );
 
     cancel.cancel();
     let _ = handle.await;

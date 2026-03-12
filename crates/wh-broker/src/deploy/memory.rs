@@ -74,10 +74,7 @@ fn validate_agent_name(agent_name: &str) -> Result<(), MemoryError> {
         ));
     }
 
-    if !agent_name
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-')
-    {
+    if !agent_name.chars().all(|c| c.is_alphanumeric() || c == '-') {
         return Err(MemoryError::InvalidPath(format!(
             "agent name '{}' contains invalid characters — only alphanumeric and hyphens allowed",
             agent_name
@@ -164,10 +161,7 @@ pub fn write_memory(
 /// Returns `Ok(None)` if the file does not exist (FR61: missing MEMORY.md
 /// is treated as empty rather than an error).
 #[tracing::instrument(skip_all, fields(agent_name = %agent_name))]
-pub fn read_memory(
-    workspace_root: &Path,
-    agent_name: &str,
-) -> Result<Option<String>, MemoryError> {
+pub fn read_memory(workspace_root: &Path, agent_name: &str) -> Result<Option<String>, MemoryError> {
     validate_agent_name(agent_name)?;
 
     let file_path = memory_path(workspace_root, agent_name);

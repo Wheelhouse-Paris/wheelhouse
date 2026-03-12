@@ -200,10 +200,7 @@ async fn execute_publish(
                 user_id: String::new(),
                 reply_to_user_id: String::new(),
             };
-            (
-                "wheelhouse.v1.TextMessage".to_string(),
-                msg.encode_to_vec(),
-            )
+            ("wheelhouse.v1.TextMessage".to_string(), msg.encode_to_vec())
         }
         other => {
             // For unknown types, encode message content as raw bytes
@@ -264,10 +261,7 @@ async fn execute_publish(
 /// and loops receiving and decoding StreamEnvelope messages.
 /// On connection loss, automatically reconnects with exponential backoff (ADR-011, CM-02).
 /// Ctrl+C terminates cleanly during both receive and reconnect phases.
-async fn execute_subscribe(
-    stream_name: &str,
-    format: &OutputFormat,
-) -> Result<(), WhError> {
+async fn execute_subscribe(stream_name: &str, format: &OutputFormat) -> Result<(), WhError> {
     use crate::reconnect::{self, ConnectionEvent};
     use tokio_util::sync::CancellationToken;
 
@@ -298,25 +292,24 @@ async fn execute_subscribe(
 
     // Connection event callback — prints status to stderr (RT-B1: no "broker")
     let stream_name_owned = stream_name.to_string();
-    let on_event: reconnect::ConnectionEventCallback = Box::new(move |event| {
-        match &event {
-            ConnectionEvent::Disconnected { reason } => {
-                eprintln!("\nConnection lost: {reason}");
-            }
-            ConnectionEvent::Reconnecting { attempt } => {
-                eprintln!("Reconnecting to Wheelhouse (attempt {attempt})...");
-            }
-            ConnectionEvent::Reconnected => {
-                eprintln!(
-                    "Reconnected — subscribed to stream '{}', waiting for messages...",
-                    stream_name_owned
-                );
-            }
-            ConnectionEvent::ReconnectFailed { attempts, last_error } => {
-                eprintln!(
-                    "Reconnect attempt {attempts} failed: {last_error}"
-                );
-            }
+    let on_event: reconnect::ConnectionEventCallback = Box::new(move |event| match &event {
+        ConnectionEvent::Disconnected { reason } => {
+            eprintln!("\nConnection lost: {reason}");
+        }
+        ConnectionEvent::Reconnecting { attempt } => {
+            eprintln!("Reconnecting to Wheelhouse (attempt {attempt})...");
+        }
+        ConnectionEvent::Reconnected => {
+            eprintln!(
+                "Reconnected — subscribed to stream '{}', waiting for messages...",
+                stream_name_owned
+            );
+        }
+        ConnectionEvent::ReconnectFailed {
+            attempts,
+            last_error,
+        } => {
+            eprintln!("Reconnect attempt {attempts} failed: {last_error}");
         }
     });
 
@@ -377,32 +370,27 @@ async fn execute_subscribe(
 /// Decode and display a StreamEnvelope payload.
 fn display_envelope(payload: &[u8], format: &OutputFormat) {
     match StreamEnvelope::decode(payload) {
-        Ok(envelope) => {
-            match format {
-                OutputFormat::Json => {
-                    let json_val = envelope_to_json(&envelope);
-                    println!(
-                        "{}",
-                        serde_json::to_string(&json_val).unwrap_or_default()
-                    );
-                }
-                OutputFormat::Human => {
-                    let timestamp = chrono::DateTime::from_timestamp_millis(envelope.published_at_ms)
-                        .map(|dt| dt.to_rfc3339())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let type_short = envelope
-                        .type_url
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or(&envelope.type_url);
-                    let content = decode_inner_content(&envelope);
-                    println!(
-                        "[{}] [{}] [{}] {}",
-                        timestamp, type_short, envelope.publisher_id, content
-                    );
-                }
+        Ok(envelope) => match format {
+            OutputFormat::Json => {
+                let json_val = envelope_to_json(&envelope);
+                println!("{}", serde_json::to_string(&json_val).unwrap_or_default());
             }
-        }
+            OutputFormat::Human => {
+                let timestamp = chrono::DateTime::from_timestamp_millis(envelope.published_at_ms)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let type_short = envelope
+                    .type_url
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&envelope.type_url);
+                let content = decode_inner_content(&envelope);
+                println!(
+                    "[{}] [{}] [{}] {}",
+                    timestamp, type_short, envelope.publisher_id, content
+                );
+            }
+        },
         Err(_) => {
             // Raw message — not a StreamEnvelope
             let hex = payload
@@ -419,12 +407,10 @@ fn display_envelope(payload: &[u8], format: &OutputFormat) {
 /// Decode the inner payload of a StreamEnvelope based on type_url.
 fn decode_inner_content(envelope: &StreamEnvelope) -> String {
     match envelope.type_url.as_str() {
-        "wheelhouse.v1.TextMessage" => {
-            match TextMessage::decode(envelope.payload.as_slice()) {
-                Ok(text) => text.content,
-                Err(_) => format!("<decode error: {} bytes>", envelope.payload.len()),
-            }
-        }
+        "wheelhouse.v1.TextMessage" => match TextMessage::decode(envelope.payload.as_slice()) {
+            Ok(text) => text.content,
+            Err(_) => format!("<decode error: {} bytes>", envelope.payload.len()),
+        },
         _ => {
             // Unknown type — show hex summary
             let hex = envelope
@@ -479,18 +465,15 @@ fn print_stream_list(response: &serde_json::Value, format: OutputFormat) {
                     println!("No streams");
                 }
                 Some(streams) => {
-                    println!("{:<20} {:<12} {:<15} CREATED", "NAME", "RETENTION", "MESSAGES");
+                    println!(
+                        "{:<20} {:<12} {:<15} CREATED",
+                        "NAME", "RETENTION", "MESSAGES"
+                    );
                     for stream in streams {
                         let name = stream.get("name").and_then(|v| v.as_str()).unwrap_or("-");
                         let retention = stream
                             .get("retention")
-                            .and_then(|v| {
-                                if v.is_null() {
-                                    None
-                                } else {
-                                    v.as_str()
-                                }
-                            })
+                            .and_then(|v| if v.is_null() { None } else { v.as_str() })
                             .unwrap_or("none");
                         let message_count = stream
                             .get("message_count")
@@ -500,7 +483,10 @@ fn print_stream_list(response: &serde_json::Value, format: OutputFormat) {
                             .get("created_at")
                             .and_then(|v| v.as_str())
                             .unwrap_or("-");
-                        println!("{:<20} {:<12} {:<15} {}", name, retention, message_count, created);
+                        println!(
+                            "{:<20} {:<12} {:<15} {}",
+                            name, retention, message_count, created
+                        );
                     }
                 }
                 None => {
@@ -551,9 +537,11 @@ pub enum Filter {
 impl Filter {
     /// Parse a `key=value` filter string into a typed Filter.
     pub fn parse(s: &str) -> Result<Self, WhError> {
-        let (key, value) = s
-            .split_once('=')
-            .ok_or_else(|| WhError::Other(format!("Invalid filter syntax '{s}'. Expected key=value format (e.g., type=TextMessage)")))?;
+        let (key, value) = s.split_once('=').ok_or_else(|| {
+            WhError::Other(format!(
+                "Invalid filter syntax '{s}'. Expected key=value format (e.g., type=TextMessage)"
+            ))
+        })?;
 
         if key.is_empty() || value.is_empty() {
             return Err(WhError::Other(format!(
@@ -593,7 +581,12 @@ impl StreamRecord {
         publisher: String,
         payload: serde_json::Value,
     ) -> Self {
-        Self { timestamp, type_name, publisher, payload }
+        Self {
+            timestamp,
+            type_name,
+            publisher,
+            payload,
+        }
     }
 }
 
@@ -892,7 +885,10 @@ mod tests {
             long_payload,
         );
         let rendered = render_human(&record, true);
-        assert!(!rendered.ends_with("..."), "Verbose mode should not truncate");
+        assert!(
+            !rendered.ends_with("..."),
+            "Verbose mode should not truncate"
+        );
     }
 
     #[test]
@@ -905,7 +901,10 @@ mod tests {
             long_payload,
         );
         let rendered = render_human(&record, false);
-        assert!(rendered.contains("..."), "Non-verbose mode should truncate long content");
+        assert!(
+            rendered.contains("..."),
+            "Non-verbose mode should truncate long content"
+        );
     }
 
     #[test]

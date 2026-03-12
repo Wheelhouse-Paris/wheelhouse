@@ -175,11 +175,7 @@ fn execute_write(
     }
 }
 
-fn execute_read(
-    wh_dir: &std::path::Path,
-    agent_name: &str,
-    format: OutputFormat,
-) -> i32 {
+fn execute_read(wh_dir: &std::path::Path, agent_name: &str, format: OutputFormat) -> i32 {
     match memory::read_memory(wh_dir, agent_name) {
         Ok(content) => {
             let text = content.unwrap_or_default();

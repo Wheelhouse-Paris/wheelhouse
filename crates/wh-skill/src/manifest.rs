@@ -61,7 +61,9 @@ fn is_valid_semver(version: &str) -> bool {
     if parts.len() != 3 {
         return false;
     }
-    parts.iter().all(|p| !p.is_empty() && p.parse::<u64>().is_ok())
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.parse::<u64>().is_ok())
 }
 
 impl SkillManifest {
@@ -81,9 +83,11 @@ impl SkillManifest {
 
         // Find the closing ---
         let after_first = &trimmed[3..];
-        let closing_pos = after_first.find("\n---").ok_or_else(|| SkillError::InvalidManifest {
-            reason: "missing closing --- delimiter for YAML front-matter".into(),
-        })?;
+        let closing_pos = after_first
+            .find("\n---")
+            .ok_or_else(|| SkillError::InvalidManifest {
+                reason: "missing closing --- delimiter for YAML front-matter".into(),
+            })?;
 
         let yaml_str = &after_first[..closing_pos];
         let body_start = closing_pos + 4; // skip "\n---"
@@ -176,7 +180,10 @@ This skill takes text input and produces a concise summary.
         let manifest = SkillManifest::parse(content).unwrap();
         assert_eq!(manifest.name(), "summarize");
         assert_eq!(manifest.version(), "1.0.0");
-        assert_eq!(manifest.front_matter.description.as_deref(), Some("Summarize text content"));
+        assert_eq!(
+            manifest.front_matter.description.as_deref(),
+            Some("Summarize text content")
+        );
         assert_eq!(manifest.front_matter.inputs.len(), 1);
         assert_eq!(manifest.front_matter.inputs[0].name, "text");
         assert!(manifest.front_matter.inputs[0].required);
@@ -215,7 +222,8 @@ This skill takes text input and produces a concise summary.
 
     #[test]
     fn test_reject_invalid_semver() {
-        let content = "---\nname: test\nversion: \"not-a-version\"\nsteps:\n  - steps/01-do.md\n---\n";
+        let content =
+            "---\nname: test\nversion: \"not-a-version\"\nsteps:\n  - steps/01-do.md\n---\n";
         let err = SkillManifest::parse(content).unwrap_err();
         match &err {
             SkillError::InvalidManifest { reason } => assert!(reason.contains("semver")),
@@ -235,7 +243,8 @@ This skill takes text input and produces a concise summary.
 
     #[test]
     fn test_accept_prerelease_semver() {
-        let content = "---\nname: test\nversion: \"1.0.0-beta.1\"\nsteps:\n  - steps/01-do.md\n---\n";
+        let content =
+            "---\nname: test\nversion: \"1.0.0-beta.1\"\nsteps:\n  - steps/01-do.md\n---\n";
         let manifest = SkillManifest::parse(content).unwrap();
         assert_eq!(manifest.version(), "1.0.0-beta.1");
     }

@@ -121,8 +121,14 @@ mod tests {
     fn parse_approval_yes_variants() {
         assert_eq!(parse_approval_response("yes"), ApprovalResponse::Approved);
         assert_eq!(parse_approval_response("YES"), ApprovalResponse::Approved);
-        assert_eq!(parse_approval_response("approve"), ApprovalResponse::Approved);
-        assert_eq!(parse_approval_response("Approved"), ApprovalResponse::Approved);
+        assert_eq!(
+            parse_approval_response("approve"),
+            ApprovalResponse::Approved
+        );
+        assert_eq!(
+            parse_approval_response("Approved"),
+            ApprovalResponse::Approved
+        );
         assert_eq!(parse_approval_response("ok"), ApprovalResponse::Approved);
         assert_eq!(parse_approval_response("OK"), ApprovalResponse::Approved);
     }
@@ -131,10 +137,19 @@ mod tests {
     fn parse_approval_no_variants() {
         assert_eq!(parse_approval_response("no"), ApprovalResponse::Rejected);
         assert_eq!(parse_approval_response("NO"), ApprovalResponse::Rejected);
-        assert_eq!(parse_approval_response("reject"), ApprovalResponse::Rejected);
-        assert_eq!(parse_approval_response("rejected"), ApprovalResponse::Rejected);
+        assert_eq!(
+            parse_approval_response("reject"),
+            ApprovalResponse::Rejected
+        );
+        assert_eq!(
+            parse_approval_response("rejected"),
+            ApprovalResponse::Rejected
+        );
         assert_eq!(parse_approval_response("deny"), ApprovalResponse::Rejected);
-        assert_eq!(parse_approval_response("denied"), ApprovalResponse::Rejected);
+        assert_eq!(
+            parse_approval_response("denied"),
+            ApprovalResponse::Rejected
+        );
     }
 
     #[test]
@@ -151,8 +166,14 @@ mod tests {
 
     #[test]
     fn parse_approval_trims_whitespace() {
-        assert_eq!(parse_approval_response("  yes  "), ApprovalResponse::Approved);
-        assert_eq!(parse_approval_response("  no  "), ApprovalResponse::Rejected);
+        assert_eq!(
+            parse_approval_response("  yes  "),
+            ApprovalResponse::Approved
+        );
+        assert_eq!(
+            parse_approval_response("  no  "),
+            ApprovalResponse::Rejected
+        );
     }
 
     #[test]
@@ -181,8 +202,14 @@ mod tests {
 
     #[test]
     fn error_codes_are_screaming_snake_case() {
-        assert_eq!(ApprovalError::Timeout("t".into()).code(), "APPROVAL_TIMEOUT");
-        assert_eq!(ApprovalError::Rejected("r".into()).code(), "APPROVAL_REJECTED");
+        assert_eq!(
+            ApprovalError::Timeout("t".into()).code(),
+            "APPROVAL_TIMEOUT"
+        );
+        assert_eq!(
+            ApprovalError::Rejected("r".into()).code(),
+            "APPROVAL_REJECTED"
+        );
         assert_eq!(
             ApprovalError::InvalidResponse("i".into()).code(),
             "INVALID_APPROVAL_RESPONSE"

@@ -44,9 +44,18 @@ fn agent_reads_own_wh_and_returns_summary() {
 
     // The event must contain the correct topology metadata
     assert_eq!(event.agent_name, "donna");
-    assert!(event.summary.contains("dev"), "summary should contain topology name");
-    assert!(event.summary.contains("2 agents"), "summary should contain agent count");
-    assert!(event.summary.contains("1 stream"), "summary should contain stream count");
+    assert!(
+        event.summary.contains("dev"),
+        "summary should contain topology name"
+    );
+    assert!(
+        event.summary.contains("2 agents"),
+        "summary should contain agent count"
+    );
+    assert!(
+        event.summary.contains("1 stream"),
+        "summary should contain stream count"
+    );
     assert!(!event.content.is_empty(), "content should contain raw YAML");
 }
 
@@ -98,7 +107,7 @@ fn topology_summary_format_is_human_readable() {
 
 #[test]
 fn publish_event_attributes_agent_identity() {
-    use wh_broker::deploy::autonomous::{read_own_topology, publish_topology_summary};
+    use wh_broker::deploy::autonomous::{publish_topology_summary, read_own_topology};
 
     let (_dir, wh_path) = setup_wh_workspace(VALID_WH);
     let summary = read_own_topology(&wh_path).unwrap();
@@ -106,7 +115,10 @@ fn publish_event_attributes_agent_identity() {
     let event = publish_topology_summary(&summary, "donna");
     assert_eq!(event.agent_name, "donna");
     assert!(!event.timestamp.is_empty(), "timestamp must be set");
-    assert!(event.content.contains("wheelhouse.dev/v1"), "content should contain raw YAML");
+    assert!(
+        event.content.contains("wheelhouse.dev/v1"),
+        "content should contain raw YAML"
+    );
 }
 
 // =============================================================================

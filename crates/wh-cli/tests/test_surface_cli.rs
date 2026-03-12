@@ -16,9 +16,18 @@ fn test_surface_cli_accepts_stream_flag() {
         .expect("failed to execute wh binary");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "wh surface cli --help should succeed");
-    assert!(stdout.contains("--stream"), "help should mention --stream flag");
-    assert!(stdout.contains("--format"), "help should mention --format flag");
+    assert!(
+        output.status.success(),
+        "wh surface cli --help should succeed"
+    );
+    assert!(
+        stdout.contains("--stream"),
+        "help should mention --stream flag"
+    );
+    assert!(
+        stdout.contains("--format"),
+        "help should mention --format flag"
+    );
 }
 
 #[test]

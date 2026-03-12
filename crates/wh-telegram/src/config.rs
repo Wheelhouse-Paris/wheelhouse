@@ -27,10 +27,9 @@ impl TelegramConfig {
     /// - `WH_TELEGRAM_STREAM` (optional, default "main"): Stream to publish/subscribe.
     #[instrument]
     pub fn from_env() -> Result<Self, TelegramError> {
-        let bot_token = std::env::var("WH_TELEGRAM_BOT_TOKEN")
-            .map_err(|_| TelegramError::ConfigError(
-                "WH_TELEGRAM_BOT_TOKEN environment variable not set".into(),
-            ))?;
+        let bot_token = std::env::var("WH_TELEGRAM_BOT_TOKEN").map_err(|_| {
+            TelegramError::ConfigError("WH_TELEGRAM_BOT_TOKEN environment variable not set".into())
+        })?;
 
         if bot_token.is_empty() {
             return Err(TelegramError::ConfigError(
@@ -38,8 +37,8 @@ impl TelegramConfig {
             ));
         }
 
-        let stream_name = std::env::var("WH_TELEGRAM_STREAM")
-            .unwrap_or_else(|_| DEFAULT_STREAM.to_string());
+        let stream_name =
+            std::env::var("WH_TELEGRAM_STREAM").unwrap_or_else(|_| DEFAULT_STREAM.to_string());
 
         validate_stream_name(&stream_name)?;
 

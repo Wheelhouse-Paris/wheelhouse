@@ -216,7 +216,10 @@ streams:
         .expect("run wh");
 
     // Warnings do not cause exit 1 — only errors do
-    assert!(output.status.success(), "expected exit code 0 (warnings only)");
+    assert!(
+        output.status.success(),
+        "expected exit code 0 (warnings only)"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("compaction") && stderr.contains("main"),
@@ -253,7 +256,10 @@ streams:
         .output()
         .expect("run wh");
 
-    assert!(output.status.success(), "provider: local should be valid, exit 0");
+    assert!(
+        output.status.success(),
+        "provider: local should be valid, exit 0"
+    );
 }
 
 #[test]

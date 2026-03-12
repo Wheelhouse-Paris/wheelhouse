@@ -33,10 +33,7 @@ impl GitBackend {
         }
 
         // git add the profile file
-        run_git_command(
-            workspace_path,
-            &["add", &profile_path.to_string_lossy()],
-        )?;
+        run_git_command(workspace_path, &["add", &profile_path.to_string_lossy()])?;
 
         // git commit with conventional commit message
         let message = format!(

@@ -186,29 +186,61 @@ mod tests {
     #[test]
     fn test_backoff_attempt_0() {
         let d = calculate_backoff(0);
-        assert!(d.as_millis() >= 100, "backoff(0) should be >= 100ms, got {}ms", d.as_millis());
-        assert!(d.as_millis() <= 200, "backoff(0) should be <= 200ms, got {}ms", d.as_millis());
+        assert!(
+            d.as_millis() >= 100,
+            "backoff(0) should be >= 100ms, got {}ms",
+            d.as_millis()
+        );
+        assert!(
+            d.as_millis() <= 200,
+            "backoff(0) should be <= 200ms, got {}ms",
+            d.as_millis()
+        );
     }
 
     #[test]
     fn test_backoff_attempt_1() {
         let d = calculate_backoff(1);
-        assert!(d.as_millis() >= 200, "backoff(1) should be >= 200ms, got {}ms", d.as_millis());
-        assert!(d.as_millis() <= 300, "backoff(1) should be <= 300ms, got {}ms", d.as_millis());
+        assert!(
+            d.as_millis() >= 200,
+            "backoff(1) should be >= 200ms, got {}ms",
+            d.as_millis()
+        );
+        assert!(
+            d.as_millis() <= 300,
+            "backoff(1) should be <= 300ms, got {}ms",
+            d.as_millis()
+        );
     }
 
     #[test]
     fn test_backoff_attempt_2() {
         let d = calculate_backoff(2);
-        assert!(d.as_millis() >= 400, "backoff(2) should be >= 400ms, got {}ms", d.as_millis());
-        assert!(d.as_millis() <= 500, "backoff(2) should be <= 500ms, got {}ms", d.as_millis());
+        assert!(
+            d.as_millis() >= 400,
+            "backoff(2) should be >= 400ms, got {}ms",
+            d.as_millis()
+        );
+        assert!(
+            d.as_millis() <= 500,
+            "backoff(2) should be <= 500ms, got {}ms",
+            d.as_millis()
+        );
     }
 
     #[test]
     fn test_backoff_capped_at_5s() {
         let d = calculate_backoff(10);
-        assert!(d.as_millis() >= 5000, "backoff(10) should be >= 5000ms, got {}ms", d.as_millis());
-        assert!(d.as_millis() <= 5100, "backoff(10) should be <= 5100ms, got {}ms", d.as_millis());
+        assert!(
+            d.as_millis() >= 5000,
+            "backoff(10) should be >= 5000ms, got {}ms",
+            d.as_millis()
+        );
+        assert!(
+            d.as_millis() <= 5100,
+            "backoff(10) should be <= 5100ms, got {}ms",
+            d.as_millis()
+        );
     }
 
     #[test]
@@ -230,7 +262,9 @@ mod tests {
 
     #[test]
     fn test_connection_event_variants() {
-        let _d = ConnectionEvent::Disconnected { reason: "test".into() };
+        let _d = ConnectionEvent::Disconnected {
+            reason: "test".into(),
+        };
         let _r = ConnectionEvent::Reconnecting { attempt: 1 };
         let _c = ConnectionEvent::Reconnected;
         let _f = ConnectionEvent::ReconnectFailed {
@@ -252,13 +286,7 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
 
-        let result = reconnect_subscribe(
-            "tcp://127.0.0.1:59999",
-            "test\0",
-            &cancel,
-            None,
-        )
-        .await;
+        let result = reconnect_subscribe("tcp://127.0.0.1:59999", "test\0", &cancel, None).await;
 
         match result {
             Err(ReconnectError::Cancelled) => {} // expected
@@ -293,13 +321,8 @@ mod tests {
             cancel_clone.cancel();
         });
 
-        let _ = reconnect_subscribe(
-            "tcp://127.0.0.1:59998",
-            "test\0",
-            &cancel,
-            Some(&callback),
-        )
-        .await;
+        let _ =
+            reconnect_subscribe("tcp://127.0.0.1:59998", "test\0", &cancel, Some(&callback)).await;
 
         let captured = events.lock().unwrap();
         // Should have at least one "reconnecting" event (fired before backoff sleep)

@@ -54,12 +54,19 @@ fn load_persona_with_all_files_present_returns_content() {
     std::fs::create_dir_all(&persona_dir).unwrap();
     std::fs::write(persona_dir.join("SOUL.md"), "I am Donna.").unwrap();
     std::fs::write(persona_dir.join("IDENTITY.md"), "Chief of staff.").unwrap();
-    std::fs::write(persona_dir.join("MEMORY.md"), "Last action: scaled researcher.").unwrap();
+    std::fs::write(
+        persona_dir.join("MEMORY.md"),
+        "Last action: scaled researcher.",
+    )
+    .unwrap();
 
     let persona = load_persona(dir.path(), "agents/donna/").unwrap();
     assert_eq!(persona.soul, Some("I am Donna.".to_string()));
     assert_eq!(persona.identity, Some("Chief of staff.".to_string()));
-    assert_eq!(persona.memory, Some("Last action: scaled researcher.".to_string()));
+    assert_eq!(
+        persona.memory,
+        Some("Last action: scaled researcher.".to_string())
+    );
 }
 
 // ─── AC #2: Missing MEMORY.md initialized as empty ─────────────────────────
@@ -120,12 +127,22 @@ fn build_run_args_includes_persona_volume_when_set() {
         Some("/workspace/agents/donna/"),
     );
     // Should include -v for persona mount
-    let has_volume = args.windows(2).any(|w| w[0] == "-v" && w[1].contains("/persona"));
-    assert!(has_volume, "Expected persona volume mount in args: {:?}", args);
+    let has_volume = args
+        .windows(2)
+        .any(|w| w[0] == "-v" && w[1].contains("/persona"));
+    assert!(
+        has_volume,
+        "Expected persona volume mount in args: {:?}",
+        args
+    );
 
     // Should include WH_PERSONA_PATH env var
     let has_env = args.iter().any(|a| a == "WH_PERSONA_PATH=/persona");
-    assert!(has_env, "Expected WH_PERSONA_PATH env var in args: {:?}", args);
+    assert!(
+        has_env,
+        "Expected WH_PERSONA_PATH env var in args: {:?}",
+        args
+    );
 }
 
 #[test]
@@ -139,8 +156,14 @@ fn build_run_args_excludes_persona_when_not_set() {
         None,
     );
     // Should NOT include persona-related args
-    let has_persona = args.iter().any(|a| a.contains("persona") || a.contains("PERSONA"));
-    assert!(!has_persona, "Should not include persona args when not set: {:?}", args);
+    let has_persona = args
+        .iter()
+        .any(|a| a.contains("persona") || a.contains("PERSONA"));
+    assert!(
+        !has_persona,
+        "Should not include persona args when not set: {:?}",
+        args
+    );
 }
 
 // ─── AC #2: Path traversal validation ───────────────────────────────────────
@@ -164,6 +187,12 @@ fn agent_struct_persona_field_included_in_serialization() {
         persona: Some("agents/donna/".to_string()),
     };
     let yaml = serde_yaml::to_string(&agent).unwrap();
-    assert!(yaml.contains("persona"), "persona field should be serialized");
-    assert!(yaml.contains("agents/donna/"), "persona value should be in serialized output");
+    assert!(
+        yaml.contains("persona"),
+        "persona field should be serialized"
+    );
+    assert!(
+        yaml.contains("agents/donna/"),
+        "persona value should be in serialized output"
+    );
 }

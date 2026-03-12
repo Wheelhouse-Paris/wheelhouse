@@ -58,11 +58,7 @@ fn create_repo_with_skill(skill_name: &str, version: &str) -> (TempDir, git2::Oi
 }
 
 /// Helper: create a temp git repo with two skills.
-fn create_repo_with_two_skills(
-    skill1: &str,
-    skill2: &str,
-    version: &str,
-) -> (TempDir, git2::Oid) {
+fn create_repo_with_two_skills(skill1: &str, skill2: &str, version: &str) -> (TempDir, git2::Oid) {
     let tmp = TempDir::new().unwrap();
     let repo = Repository::init(tmp.path()).unwrap();
     let sig = Signature::now("test", "test@test.com").unwrap();
@@ -316,7 +312,10 @@ async fn two_skills_cached_independently() {
     match c1 {
         SkillExecutorEvent::Completed { outcome, .. } => match outcome {
             SkillInvocationOutcome::Success { output } => {
-                assert!(output.contains("summarize"), "output should contain summarize content");
+                assert!(
+                    output.contains("summarize"),
+                    "output should contain summarize content"
+                );
             }
             _ => panic!("expected Success"),
         },
@@ -368,7 +367,11 @@ async fn same_skill_different_versions_cached_independently() {
         "---\nname: summarize\nversion: \"1.0.0\"\nsteps:\n  - steps/01-do.md\n---\n\n# Summarize V1\n",
     )
     .unwrap();
-    fs::write(steps_dir.join("01-do.md"), "# Step V1\nVersion 1 content.\n").unwrap();
+    fs::write(
+        steps_dir.join("01-do.md"),
+        "# Step V1\nVersion 1 content.\n",
+    )
+    .unwrap();
 
     let mut index = git_repo.index().unwrap();
     index
@@ -391,7 +394,11 @@ async fn same_skill_different_versions_cached_independently() {
         "---\nname: summarize\nversion: \"2.0.0\"\nsteps:\n  - steps/01-do.md\n---\n\n# Summarize V2\n",
     )
     .unwrap();
-    fs::write(steps_dir.join("01-do.md"), "# Step V2\nVersion 2 content.\n").unwrap();
+    fs::write(
+        steps_dir.join("01-do.md"),
+        "# Step V2\nVersion 2 content.\n",
+    )
+    .unwrap();
 
     let mut index = git_repo.index().unwrap();
     index
@@ -611,9 +618,8 @@ async fn all_error_paths_produce_completed_event() {
             }],
         };
         let skill_repo = wh_skill::SkillRepository::open(tmp.path()).unwrap();
-        let mut pipeline =
-            InvocationPipeline::new(allowlist, Some(alpha_config), Some(skill_repo))
-                .with_executor(Box::new(PanicTestExecutor));
+        let mut pipeline = InvocationPipeline::new(allowlist, Some(alpha_config), Some(skill_repo))
+            .with_executor(Box::new(PanicTestExecutor));
         let (tx, mut rx) = mpsc::channel(10);
         let request = SkillInvocationRequest {
             skill_name: "alpha".to_string(),
@@ -674,9 +680,6 @@ async fn all_error_paths_produce_completed_event() {
                 has_completed = true;
             }
         }
-        assert!(
-            has_completed,
-            "SKILL_TIMEOUT must produce Completed"
-        );
+        assert!(has_completed, "SKILL_TIMEOUT must produce Completed");
     }
 }

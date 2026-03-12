@@ -33,7 +33,10 @@ fn doctor_detects_missing_gitignore() {
     };
     // Should pass (no fail checks) but with warnings
     let exit_code = args.execute();
-    assert_eq!(exit_code, 0, "doctor should pass (with warnings) when .wh/.gitignore is missing");
+    assert_eq!(
+        exit_code, 0,
+        "doctor should pass (with warnings) when .wh/.gitignore is missing"
+    );
 }
 
 /// AC #3: doctor warns when gitignore is incomplete.
@@ -53,7 +56,10 @@ fn doctor_warns_on_incomplete_gitignore() {
         path: temp_path.to_path_buf(),
     };
     let exit_code = args.execute();
-    assert_eq!(exit_code, 0, "incomplete gitignore is a warning, not a failure");
+    assert_eq!(
+        exit_code, 0,
+        "incomplete gitignore is a warning, not a failure"
+    );
 }
 
 /// AC #3: doctor passes when everything is healthy.

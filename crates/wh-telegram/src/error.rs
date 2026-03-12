@@ -78,8 +78,18 @@ mod tests {
         let sanitized = sanitize_for_user(&err);
         // Note: check for exact technical terms, not substrings like "port" (which appears in "support")
         let forbidden = [
-            "broker", "stream", " port ", "socket", "zmq", "error code", "stack trace", "internal error",
-            "xpub", "xsub", ":5555", "localhost",
+            "broker",
+            "stream",
+            " port ",
+            "socket",
+            "zmq",
+            "error code",
+            "stack trace",
+            "internal error",
+            "xpub",
+            "xsub",
+            ":5555",
+            "localhost",
         ];
         for term in &forbidden {
             assert!(

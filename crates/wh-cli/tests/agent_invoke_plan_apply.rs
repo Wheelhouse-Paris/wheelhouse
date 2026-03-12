@@ -4,9 +4,9 @@
 //! `wh deploy apply` as subprocesses, receiving structured JSON output
 //! and proper exit codes. Guardrail validation is also tested.
 
+use wh_broker::deploy::apply;
 use wh_broker::deploy::lint;
 use wh_broker::deploy::plan::{self, PlanData};
-use wh_broker::deploy::apply;
 use wh_broker::deploy::Topology;
 
 // ---------------------------------------------------------------------------

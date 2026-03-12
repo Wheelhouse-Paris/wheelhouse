@@ -41,7 +41,11 @@ impl CommittedPlan {
 /// Find the git binary, checking common paths.
 pub(crate) fn find_git() -> &'static str {
     // Try common paths for git
-    for path in &["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"] {
+    for path in &[
+        "/usr/bin/git",
+        "/usr/local/bin/git",
+        "/opt/homebrew/bin/git",
+    ] {
         if std::path::Path::new(path).exists() {
             // Leak to get 'static — only called a few times
             return path;
@@ -73,9 +77,9 @@ pub(crate) fn run_git(
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                return child.wait_with_output().map_err(|e| {
-                    DeployError::GitFailed(format!("git process error: {e}"))
-                });
+                return child
+                    .wait_with_output()
+                    .map_err(|e| DeployError::GitFailed(format!("git process error: {e}")));
             }
             Ok(None) => {
                 if start.elapsed() > GIT_TIMEOUT {
@@ -307,9 +311,7 @@ pub fn destroy(
     agent_name: Option<&str>,
 ) -> Result<DestroyResult, DeployError> {
     let wh_path = wh_file_path.as_ref();
-    let workspace_root = wh_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let workspace_root = wh_path.parent().unwrap_or_else(|| Path::new("."));
 
     let current_state = load_state(workspace_root)?;
 
@@ -435,15 +437,13 @@ mod tests {
     fn change_summary_formats_correctly() {
         let plan = PlanOutput {
             has_changes: true,
-            changes: vec![
-                crate::deploy::Change {
-                    op: "~".to_string(),
-                    component: "agent researcher".to_string(),
-                    field: Some("replicas".to_string()),
-                    from: Some(serde_json::json!(1)),
-                    to: Some(serde_json::json!(2)),
-                },
-            ],
+            changes: vec![crate::deploy::Change {
+                op: "~".to_string(),
+                component: "agent researcher".to_string(),
+                field: Some("replicas".to_string()),
+                from: Some(serde_json::json!(1)),
+                to: Some(serde_json::json!(2)),
+            }],
             plan_hash: "sha256:abc".to_string(),
             topology_name: "dev".to_string(),
             policy_snapshot_hash: String::new(),
@@ -466,15 +466,13 @@ mod tests {
     fn change_summary_handles_additions() {
         let plan = PlanOutput {
             has_changes: true,
-            changes: vec![
-                crate::deploy::Change {
-                    op: "+".to_string(),
-                    component: "agent donna".to_string(),
-                    field: None,
-                    from: None,
-                    to: None,
-                },
-            ],
+            changes: vec![crate::deploy::Change {
+                op: "+".to_string(),
+                component: "agent donna".to_string(),
+                field: None,
+                from: None,
+                to: None,
+            }],
             plan_hash: "sha256:abc".to_string(),
             topology_name: "dev".to_string(),
             policy_snapshot_hash: String::new(),

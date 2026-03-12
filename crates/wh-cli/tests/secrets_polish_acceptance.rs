@@ -202,8 +202,14 @@ fn secrets_status_json_never_contains_secret_values() {
         status: CredentialStatus::DetectedFromEnv,
     };
     let json = serde_json::to_string(&result).unwrap();
-    assert!(!json.contains("test-key"), "JSON must not contain secret values");
-    assert!(!json.contains("sk-"), "JSON must not contain API key prefixes");
+    assert!(
+        !json.contains("test-key"),
+        "JSON must not contain secret values"
+    );
+    assert!(
+        !json.contains("sk-"),
+        "JSON must not contain API key prefixes"
+    );
 }
 
 #[test]

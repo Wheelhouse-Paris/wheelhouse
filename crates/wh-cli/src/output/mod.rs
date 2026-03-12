@@ -17,8 +17,10 @@ pub fn render_error(error: &error::WhError, format: OutputFormat) -> String {
         OutputFormat::Human => format!("{error}"),
         OutputFormat::Json => {
             let envelope = OutputEnvelope::<()>::error(error.error_code(), error.to_string());
-            serde_json::to_string(&envelope)
-                .unwrap_or_else(|_| r#"{"v":1,"status":"error","code":"SERIALIZATION_ERROR","message":"failed"}"#.to_string())
+            serde_json::to_string(&envelope).unwrap_or_else(|_| {
+                r#"{"v":1,"status":"error","code":"SERIALIZATION_ERROR","message":"failed"}"#
+                    .to_string()
+            })
         }
     }
 }
@@ -83,7 +85,9 @@ impl OutputFormat {
         match s {
             "human" => Ok(OutputFormat::Human),
             "json" => Ok(OutputFormat::Json),
-            other => Err(format!("invalid format '{other}': expected 'human' or 'json'")),
+            other => Err(format!(
+                "invalid format '{other}': expected 'human' or 'json'"
+            )),
         }
     }
 }
@@ -109,7 +113,13 @@ pub struct OutputEnvelope<T: Serialize> {
 
 impl<T: Serialize> OutputEnvelope<T> {
     pub fn ok(data: T) -> Self {
-        Self { v: 1, status: "ok".to_string(), data: Some(data), code: None, message: None }
+        Self {
+            v: 1,
+            status: "ok".to_string(),
+            data: Some(data),
+            code: None,
+            message: None,
+        }
     }
 }
 
@@ -184,10 +194,7 @@ impl ErrorEnvelope {
 }
 
 /// Format a successful response for the given output format.
-pub fn format_response<T: Serialize + std::fmt::Display>(
-    data: &T,
-    format: OutputFormat,
-) -> String {
+pub fn format_response<T: Serialize + std::fmt::Display>(data: &T, format: OutputFormat) -> String {
     match format {
         OutputFormat::Json => {
             let response = ApiResponse::ok(data);
@@ -222,7 +229,10 @@ pub fn format_error(code: &str, message: &str, format: OutputFormat) -> String {
 pub fn print_status(response: &serde_json::Value, format: OutputFormat) {
     match format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(response).unwrap_or_default()
+            );
         }
         OutputFormat::Human => {
             let data = match response.get("data") {
@@ -232,13 +242,26 @@ pub fn print_status(response: &serde_json::Value, format: OutputFormat) {
                     return;
                 }
             };
-            let uptime = data.get("uptime_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+            let uptime = data
+                .get("uptime_secs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let hours = uptime / 3600;
             let minutes = (uptime % 3600) / 60;
             let seconds = uptime % 60;
-            let subscribers = data.get("subscriber_count").and_then(|v| v.as_u64()).unwrap_or(0);
-            let streams = data.get("streams").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-            let panics = data.get("panic_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let subscribers = data
+                .get("subscriber_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let streams = data
+                .get("streams")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            let panics = data
+                .get("panic_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             println!("Wheelhouse is running");
             println!("  Uptime:      {hours}h {minutes}m {seconds}s");
             println!("  Subscribers: {subscribers}");
@@ -254,10 +277,16 @@ pub fn print_status(response: &serde_json::Value, format: OutputFormat) {
 pub fn print_error(response: &serde_json::Value, format: OutputFormat) {
     match format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(response).unwrap_or_default()
+            );
         }
         OutputFormat::Human => {
-            let msg = response.get("message").and_then(|v| v.as_str()).unwrap_or("unknown error");
+            let msg = response
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
             eprintln!("Error: {msg}");
         }
     }

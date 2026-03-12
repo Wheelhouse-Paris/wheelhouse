@@ -206,7 +206,9 @@ pub async fn compact_stream(
     let tp2 = temp_file.temp_path().to_path_buf();
     let temp_content = tokio::task::spawn_blocking(move || std::fs::read_to_string(&tp2))
         .await
-        .map_err(|e| CompactionError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+        .map_err(|e| {
+            CompactionError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e))
+        })??;
     if temp_content.is_empty() {
         return Err(CompactionError::SummaryFailed(
             "temp summary file is empty".to_string(),
@@ -218,9 +220,7 @@ pub async fn compact_stream(
 
     // Git add + commit (CM-04 30s timeout via run_git_checked)
     // Wrapped in spawn_blocking to avoid blocking the async runtime (PP-03)
-    let relative_path = format!(
-        ".wh/compaction/{stream_name}/{date}.md"
-    );
+    let relative_path = format!(".wh/compaction/{stream_name}/{date}.md");
 
     let earliest_str = if earliest_timestamp_ms > 0 {
         chrono::DateTime::from_timestamp_millis(earliest_timestamp_ms)
@@ -387,7 +387,14 @@ mod tests {
 
     #[test]
     fn generate_summary_produces_valid_markdown() {
-        let content = generate_summary("main", "2026-03-12", 847, 1710115200000, 1710201599000, 1234567);
+        let content = generate_summary(
+            "main",
+            "2026-03-12",
+            847,
+            1710115200000,
+            1710201599000,
+            1234567,
+        );
         assert!(content.contains("stream: main"));
         assert!(content.contains("record_count: 847"));
         assert!(content.contains("total_payload_bytes: 1234567"));

@@ -50,9 +50,7 @@ fn setup_workspace(wh_content: &str) -> (tempfile::TempDir, std::path::PathBuf) 
 
 #[test]
 fn high_impact_change_with_low_threshold_requires_approval() {
-    use wh_broker::deploy::autonomous::{
-        evaluate_signal, evaluate_threshold, ThresholdDecision,
-    };
+    use wh_broker::deploy::autonomous::{evaluate_signal, evaluate_threshold, ThresholdDecision};
     use wh_broker::deploy::{Agent, Guardrails, ThresholdLevel, Topology};
 
     let topology = Topology {
@@ -173,7 +171,10 @@ guardrails:
   autonomous_apply_threshold: extreme
 "#;
     let result = parse_topology(yaml);
-    assert!(result.is_err(), "Invalid threshold value should fail to parse");
+    assert!(
+        result.is_err(),
+        "Invalid threshold value should fail to parse"
+    );
 }
 
 // =============================================================================
@@ -373,7 +374,12 @@ fn apply_with_approval_creates_attributed_commit() {
     let topology = load_topology(&wh_path).unwrap();
     let evaluation = evaluate_signal("4 daily timeouts on researcher", &topology).unwrap();
 
-    let result = apply_with_approval(evaluation, &wh_path, "donna", "operator approved via Telegram");
+    let result = apply_with_approval(
+        evaluation,
+        &wh_path,
+        "donna",
+        "operator approved via Telegram",
+    );
     assert!(result.is_ok());
 
     let result = result.unwrap();

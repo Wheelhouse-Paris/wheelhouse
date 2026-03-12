@@ -202,12 +202,7 @@ fn format_status_human(status: ComponentStatus, use_color: bool) -> String {
     match status {
         ComponentStatus::Running => {
             if use_color {
-                format!(
-                    "{}{}{}",
-                    table::ansi::GREEN,
-                    "running",
-                    table::ansi::RESET
-                )
+                format!("{}{}{}", table::ansi::GREEN, "running", table::ansi::RESET)
             } else {
                 "running".to_string()
             }
@@ -226,11 +221,7 @@ fn format_status_human(status: ComponentStatus, use_color: bool) -> String {
         }
         ComponentStatus::Degraded => {
             if use_color {
-                format!(
-                    "{}degraded{}",
-                    table::ansi::DIM,
-                    table::ansi::RESET
-                )
+                format!("{}degraded{}", table::ansi::DIM, table::ansi::RESET)
             } else {
                 "degraded".to_string()
             }

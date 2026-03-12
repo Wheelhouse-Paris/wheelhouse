@@ -55,10 +55,7 @@ impl RecordingHandler {
 
 #[async_trait::async_trait]
 impl CronEventHandler for RecordingHandler {
-    async fn handle(
-        &self,
-        event: CronEventMessage,
-    ) -> Result<HandlerOutcome, CronHandlerError> {
+    async fn handle(&self, event: CronEventMessage) -> Result<HandlerOutcome, CronHandlerError> {
         if let Some(delay) = self.delay {
             tokio::time::sleep(delay).await;
         }
@@ -104,7 +101,9 @@ async fn ac1_handler_receives_correct_event_fields() {
 
     // When: a CronEvent with specific fields arrives
     let mut event = make_event("daily-compaction", "compact");
-    event.payload.insert("stream".to_string(), "main".to_string());
+    event
+        .payload
+        .insert("stream".to_string(), "main".to_string());
 
     let handle = dispatcher.dispatch(event).unwrap();
     handle.await.unwrap();
@@ -152,7 +151,9 @@ async fn ac2_long_running_handler_publishes_progress_after_30s() {
     dispatcher.set_progress_sender(progress_tx);
 
     // When: the CronEvent is dispatched
-    let _handle = dispatcher.dispatch(make_event("slow-job", "event")).unwrap();
+    let _handle = dispatcher
+        .dispatch(make_event("slow-job", "event"))
+        .unwrap();
 
     // Yield to let the spawned task start
     tokio::task::yield_now().await;
@@ -222,12 +223,8 @@ async fn ac3_two_simultaneous_events_processed_concurrently() {
     dispatcher.register_handler("job-b", handler_b);
 
     // When: two CronEvents arrive simultaneously
-    let handle_a = dispatcher
-        .dispatch(make_event("job-a", "event"))
-        .unwrap();
-    let handle_b = dispatcher
-        .dispatch(make_event("job-b", "event"))
-        .unwrap();
+    let handle_a = dispatcher.dispatch(make_event("job-a", "event")).unwrap();
+    let handle_b = dispatcher.dispatch(make_event("job-b", "event")).unwrap();
 
     // Then: both complete independently
     handle_a.await.unwrap();
@@ -251,12 +248,8 @@ async fn ac3_fast_handler_completes_independently_of_slow() {
     dispatcher.register_handler("fast-b", handler_b);
 
     // When: both events dispatched
-    let _handle_a = dispatcher
-        .dispatch(make_event("slow-a", "event"))
-        .unwrap();
-    let handle_b = dispatcher
-        .dispatch(make_event("fast-b", "event"))
-        .unwrap();
+    let _handle_a = dispatcher.dispatch(make_event("slow-a", "event")).unwrap();
+    let handle_b = dispatcher.dispatch(make_event("fast-b", "event")).unwrap();
 
     // Advance 200ms — handler B should complete, handler A still running
     tokio::task::yield_now().await;

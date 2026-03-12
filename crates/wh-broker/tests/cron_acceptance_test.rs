@@ -23,8 +23,8 @@ cron:
 
     // Act: parse .wh file and persist cron config
     // This will fail until wh_broker::cron module exists
-    let configs = wh_broker::cron::parse_wh_cron_section(wh_content)
-        .expect("should parse cron section");
+    let configs =
+        wh_broker::cron::parse_wh_cron_section(wh_content).expect("should parse cron section");
 
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].name, "daily-compaction");
@@ -34,16 +34,15 @@ cron:
 
     // Persist to git
     let tmp_dir = tempfile::tempdir().expect("tmpdir");
-    wh_broker::cron::save_cron_config(&configs, tmp_dir.path())
-        .expect("should save cron config");
+    wh_broker::cron::save_cron_config(&configs, tmp_dir.path()).expect("should save cron config");
 
     // Verify cron/jobs.yaml exists
     let jobs_path = tmp_dir.path().join("cron").join("jobs.yaml");
     assert!(jobs_path.exists(), "cron/jobs.yaml should exist after save");
 
     // Load back and verify round-trip
-    let loaded = wh_broker::cron::load_cron_config(tmp_dir.path())
-        .expect("should load cron config");
+    let loaded =
+        wh_broker::cron::load_cron_config(tmp_dir.path()).expect("should load cron config");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].name, "daily-compaction");
 }
@@ -67,7 +66,10 @@ cron:
 "#;
 
     let result = wh_broker::cron::parse_wh_cron_section(wh_content);
-    assert!(result.is_err(), "invalid cron expression should produce error");
+    assert!(
+        result.is_err(),
+        "invalid cron expression should produce error"
+    );
 }
 
 /// AC1 validation: cron targeting nonexistent stream rejected
@@ -89,7 +91,10 @@ cron:
 "#;
 
     let result = wh_broker::cron::parse_wh_cron_section(wh_content);
-    assert!(result.is_err(), "cron targeting nonexistent stream should produce error");
+    assert!(
+        result.is_err(),
+        "cron targeting nonexistent stream should produce error"
+    );
 }
 
 /// AC2: Given the cron schedule fires, When the trigger time is reached,
@@ -189,7 +194,10 @@ async fn ac3_publish_failure_logged_and_scheduler_continues() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Scheduler should still be running (not panicked/crashed)
-    assert!(!handle.is_finished(), "scheduler should still be running despite publish failure");
+    assert!(
+        !handle.is_finished(),
+        "scheduler should still be running despite publish failure"
+    );
 
     cancel.cancel();
     let _ = handle.await;
@@ -243,7 +251,11 @@ async fn ac3_multiple_cron_jobs_run_independently() {
     }
 
     // Should have received events from both jobs
-    assert!(events.len() >= 2, "should receive events from both jobs, got {}", events.len());
+    assert!(
+        events.len() >= 2,
+        "should receive events from both jobs, got {}",
+        events.len()
+    );
     let names: Vec<&str> = events.iter().map(|e| e.job_name.as_str()).collect();
     assert!(names.contains(&"job-a"), "should have event from job-a");
     assert!(names.contains(&"job-b"), "should have event from job-b");
@@ -282,5 +294,8 @@ async fn scheduler_shuts_down_on_cancellation_token() {
 
     // Should complete within 2 seconds
     let result = tokio::time::timeout(Duration::from_secs(2), handle).await;
-    assert!(result.is_ok(), "scheduler should shut down within 2 seconds after cancellation");
+    assert!(
+        result.is_ok(),
+        "scheduler should shut down within 2 seconds after cancellation"
+    );
 }

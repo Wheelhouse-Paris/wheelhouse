@@ -29,8 +29,5 @@ pub enum UserError {
 
     /// A field exceeds the maximum allowed length.
     #[error("{field} exceeds maximum length of {max_len} characters")]
-    FieldTooLong {
-        field: String,
-        max_len: usize,
-    },
+    FieldTooLong { field: String, max_len: usize },
 }

@@ -49,8 +49,8 @@ fn setup_workspace(wh_content: &str) -> (tempfile::TempDir, std::path::PathBuf) 
 
 #[test]
 fn self_destruct_detection_blocks_agent_removing_itself() {
-    use wh_broker::deploy::plan::plan_with_self_check;
     use wh_broker::deploy::lint::lint;
+    use wh_broker::deploy::plan::plan_with_self_check;
     use wh_broker::deploy::DeployError;
 
     let (dir, wh_path) = setup_workspace(
@@ -80,8 +80,8 @@ fn self_destruct_detection_blocks_agent_removing_itself() {
 
 #[test]
 fn self_destruct_detection_allows_removing_other_agents() {
-    use wh_broker::deploy::plan::plan_with_self_check;
     use wh_broker::deploy::lint::lint;
+    use wh_broker::deploy::plan::plan_with_self_check;
 
     let (dir, wh_path) = setup_workspace(
         "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: donna\n    image: donna:latest\n",
@@ -101,12 +101,10 @@ fn self_destruct_detection_allows_removing_other_agents() {
 
 #[test]
 fn self_destruct_detection_skipped_in_operator_mode() {
-    use wh_broker::deploy::plan::plan_with_self_check;
     use wh_broker::deploy::lint::lint;
+    use wh_broker::deploy::plan::plan_with_self_check;
 
-    let (dir, wh_path) = setup_workspace(
-        "api_version: wheelhouse.dev/v1\nname: dev\nagents: []\n",
-    );
+    let (dir, wh_path) = setup_workspace("api_version: wheelhouse.dev/v1\nname: dev\nagents: []\n");
 
     let wh_dir = dir.path().join(".wh");
     std::fs::create_dir_all(&wh_dir).unwrap();
@@ -135,7 +133,7 @@ fn self_destruct_error_code_is_correct() {
 #[test]
 fn signal_evaluation_proposes_scale_up_on_timeout_pattern() {
     use wh_broker::deploy::autonomous::evaluate_signal;
-    use wh_broker::deploy::{Topology, Agent};
+    use wh_broker::deploy::{Agent, Topology};
 
     let topology = Topology {
         api_version: "wheelhouse.dev/v1".to_string(),
@@ -177,7 +175,7 @@ fn signal_evaluation_returns_none_for_unrecognized_pattern() {
 #[test]
 fn signal_evaluation_respects_guardrail_max_replicas() {
     use wh_broker::deploy::autonomous::evaluate_signal;
-    use wh_broker::deploy::{Topology, Agent, Guardrails};
+    use wh_broker::deploy::{Agent, Guardrails, Topology};
 
     let topology = Topology {
         api_version: "wheelhouse.dev/v1".to_string(),
@@ -190,7 +188,10 @@ fn signal_evaluation_respects_guardrail_max_replicas() {
             persona: None,
         }],
         streams: vec![],
-        guardrails: Some(Guardrails { max_replicas: Some(1), ..Default::default() }),
+        guardrails: Some(Guardrails {
+            max_replicas: Some(1),
+            ..Default::default()
+        }),
     };
 
     let eval = evaluate_signal("4 daily timeouts on researcher", &topology);
@@ -232,7 +233,10 @@ fn modify_topology_replicas_preserves_other_fields() {
 
     let topo: serde_yaml::Value = serde_yaml::from_str(&modified).unwrap();
     let agents = topo["agents"].as_sequence().unwrap();
-    let donna = agents.iter().find(|a| a["name"].as_str() == Some("donna")).unwrap();
+    let donna = agents
+        .iter()
+        .find(|a| a["name"].as_str() == Some("donna"))
+        .unwrap();
     assert_eq!(donna["replicas"].as_u64().unwrap(), 1);
     assert!(topo["streams"].as_sequence().unwrap().len() == 1);
 }
@@ -268,7 +272,11 @@ fn autonomous_apply_creates_attributed_git_commit() {
         .output()
         .unwrap();
     let log_text = String::from_utf8_lossy(&git_log.stdout);
-    assert!(log_text.contains("[donna]"), "Git log should contain agent name: {}", log_text);
+    assert!(
+        log_text.contains("[donna]"),
+        "Git log should contain agent name: {}",
+        log_text
+    );
 
     // Verify the commit message body contains plan hash (AC #2)
     let git_log_body = std::process::Command::new("git")
@@ -277,7 +285,11 @@ fn autonomous_apply_creates_attributed_git_commit() {
         .output()
         .unwrap();
     let body = String::from_utf8_lossy(&git_log_body.stdout);
-    assert!(body.contains("Plan: sha256:"), "Commit body should contain plan hash: {}", body);
+    assert!(
+        body.contains("Plan: sha256:"),
+        "Commit body should contain plan hash: {}",
+        body
+    );
 }
 
 // =============================================================================
@@ -287,8 +299,8 @@ fn autonomous_apply_creates_attributed_git_commit() {
 #[test]
 fn notification_contains_required_fields() {
     use wh_broker::deploy::autonomous::{
-        format_notification, AutonomousApplyResult, SignalEvaluation,
-        ProposedChange, ChangeConfidence,
+        format_notification, AutonomousApplyResult, ChangeConfidence, ProposedChange,
+        SignalEvaluation,
     };
 
     let result = AutonomousApplyResult {
@@ -309,9 +321,18 @@ fn notification_contains_required_fields() {
     };
 
     let notification = format_notification(&result, &evaluation);
-    assert!(!notification.what_changed.is_empty(), "what_changed should not be empty");
+    assert!(
+        !notification.what_changed.is_empty(),
+        "what_changed should not be empty"
+    );
     assert!(!notification.why.is_empty(), "why should not be empty");
-    assert!(!notification.commit_ref.is_empty(), "commit_ref should not be empty");
-    assert!(notification.what_changed.contains("researcher"), "what_changed should mention agent");
+    assert!(
+        !notification.commit_ref.is_empty(),
+        "commit_ref should not be empty"
+    );
+    assert!(
+        notification.what_changed.contains("researcher"),
+        "what_changed should mention agent"
+    );
     assert_eq!(notification.commit_ref, "sha256:abc123");
 }

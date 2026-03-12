@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 
 use clap::Subcommand;
+use wh_broker::deploy::apply;
 use wh_broker::deploy::lint;
 use wh_broker::deploy::plan::{self, PlanData};
-use wh_broker::deploy::apply;
 
 use crate::lint as lint_engine;
-use crate::output::{self, LintError, OutputFormat};
 use crate::output::error;
+use crate::output::{self, LintError, OutputFormat};
 
 /// Deploy subcommands for managing topology.
 #[derive(Debug, Subcommand)]
@@ -75,15 +75,24 @@ impl DeployCommand {
     pub fn execute(self) -> i32 {
         match self {
             DeployCommand::Lint { file, format } => execute_lint(&file, format),
-            DeployCommand::Plan { file, format, force_destroy_all, calling_agent } => {
-                execute_plan(&file, format, force_destroy_all, calling_agent.as_deref())
-            }
-            DeployCommand::Apply { file, yes, format, agent_name } => {
-                execute_apply(&file, yes, format, agent_name.as_deref())
-            }
-            DeployCommand::Destroy { file, yes, format, agent_name } => {
-                execute_destroy(&file, yes, format, agent_name.as_deref())
-            }
+            DeployCommand::Plan {
+                file,
+                format,
+                force_destroy_all,
+                calling_agent,
+            } => execute_plan(&file, format, force_destroy_all, calling_agent.as_deref()),
+            DeployCommand::Apply {
+                file,
+                yes,
+                format,
+                agent_name,
+            } => execute_apply(&file, yes, format, agent_name.as_deref()),
+            DeployCommand::Destroy {
+                file,
+                yes,
+                format,
+                agent_name,
+            } => execute_destroy(&file, yes, format, agent_name.as_deref()),
         }
     }
 }
@@ -157,10 +166,19 @@ fn execute_lint(file: &std::path::Path, format: OutputFormat) -> i32 {
         }
     }
 
-    if result.has_errors() { error::EXIT_ERROR } else { error::EXIT_SUCCESS }
+    if result.has_errors() {
+        error::EXIT_ERROR
+    } else {
+        error::EXIT_SUCCESS
+    }
 }
 
-fn execute_plan(file: &PathBuf, format: OutputFormat, force_destroy_all: bool, calling_agent: Option<&str>) -> i32 {
+fn execute_plan(
+    file: &PathBuf,
+    format: OutputFormat,
+    force_destroy_all: bool,
+    calling_agent: Option<&str>,
+) -> i32 {
     let linted = match lint::lint(file) {
         Ok(l) => l,
         Err(e) => {
@@ -343,7 +361,12 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
     error::EXIT_SUCCESS
 }
 
-fn execute_destroy(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Option<&str>) -> i32 {
+fn execute_destroy(
+    file: &PathBuf,
+    yes: bool,
+    format: OutputFormat,
+    agent_name: Option<&str>,
+) -> i32 {
     let tty = is_tty();
 
     // Require --yes in non-interactive mode (matches execute_apply pattern)
@@ -366,7 +389,10 @@ fn execute_destroy(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: 
 
     // Show what will be destroyed and prompt for confirmation
     if !yes {
-        eprintln!("This will destroy all deployed components from topology '{}'.", file.display());
+        eprintln!(
+            "This will destroy all deployed components from topology '{}'.",
+            file.display()
+        );
         eprintln!("All Podman containers will be stopped and removed.");
         eprintln!();
 

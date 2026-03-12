@@ -69,12 +69,13 @@ impl CronSkillChain {
         self.chain_log.push(cron_received);
 
         // Step 2: Dispatch to handler
-        let handle = self.dispatcher.dispatch(event).ok_or_else(|| {
-            ChainError::DispatchFailed {
+        let handle = self
+            .dispatcher
+            .dispatch(event)
+            .ok_or_else(|| ChainError::DispatchFailed {
                 job_name: job_name.clone(),
                 reason: "no handler registered".into(),
-            }
-        })?;
+            })?;
 
         // Step 3: Await handler completion and SkillInvocationPublished event
         // Wait for the spawned task to complete
@@ -226,10 +227,7 @@ mod tests {
     use std::sync::Arc;
 
     /// Helper: set up a chain with a CronSkillHandler for the given skill.
-    fn setup_chain(
-        job_name: &str,
-        skill_name: &str,
-    ) -> (CronSkillChain, mpsc::Sender<ChainEvent>) {
+    fn setup_chain(job_name: &str, skill_name: &str) -> (CronSkillChain, mpsc::Sender<ChainEvent>) {
         let (event_tx, event_rx) = mpsc::channel(10);
         let mut dispatcher = CronEventDispatcher::new();
         let handler = Arc::new(CronSkillHandler {
@@ -251,7 +249,10 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: HashMap::new(),
             target_stream: "test-stream".into(),
         };
@@ -276,7 +277,10 @@ mod tests {
             job_name: "fail-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: HashMap::new(),
             target_stream: "test-stream".into(),
         };
@@ -316,7 +320,10 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: HashMap::new(),
             target_stream: "test-stream".into(),
         };
@@ -343,7 +350,10 @@ mod tests {
             job_name: "fail-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: HashMap::new(),
             target_stream: "test-stream".into(),
         };
@@ -353,7 +363,10 @@ mod tests {
 
         // Verify notification was sent
         let notification = notif_rx.recv().await.unwrap();
-        assert_eq!(notification.notification_type, NotificationType::SkillFailure);
+        assert_eq!(
+            notification.notification_type,
+            NotificationType::SkillFailure
+        );
         assert_eq!(notification.metadata.get("job_name").unwrap(), "fail-cron");
         assert_eq!(
             notification.metadata.get("skill_name").unwrap(),
@@ -374,7 +387,10 @@ mod tests {
             job_name: "fail-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: HashMap::new(),
             target_stream: "test-stream".into(),
         };

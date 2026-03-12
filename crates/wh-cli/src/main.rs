@@ -30,7 +30,9 @@ async fn main() {
     match command {
         Commands::Ps(args) => {
             let fmt = args.format;
-            let result = ps::execute(&args).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+            let result = ps::execute(&args)
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             if let Err(e) = result {
                 match fmt {
                     OutputFormat::Json => {
@@ -54,7 +56,8 @@ async fn main() {
             if let Err(ref err) = result {
                 match fmt {
                     OutputFormat::Json => {
-                        let envelope = OutputEnvelope::<()>::error(err.error_code(), err.to_string());
+                        let envelope =
+                            OutputEnvelope::<()>::error(err.error_code(), err.to_string());
                         if let Ok(json) = serde_json::to_string_pretty(&envelope) {
                             eprintln!("{json}");
                         } else {
@@ -70,7 +73,9 @@ async fn main() {
         }
         Commands::Secrets { cmd } => {
             let fmt = cmd.format();
-            let result = cmd.run().map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+            let result = cmd
+                .run()
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             if let Err(e) = result {
                 match fmt {
                     OutputFormat::Json => {
@@ -92,16 +97,14 @@ async fn main() {
             let exit_code = command.execute();
             std::process::exit(exit_code);
         }
-        Commands::Surface { command } => {
-            match command {
-                SurfaceCommand::Cli { stream, format } => {
-                    if let Err(e) = surface::run_cli(&stream, &format).await {
-                        eprintln!("{e}");
-                        std::process::exit(1);
-                    }
+        Commands::Surface { command } => match command {
+            SurfaceCommand::Cli { stream, format } => {
+                if let Err(e) = surface::run_cli(&stream, &format).await {
+                    eprintln!("{e}");
+                    std::process::exit(1);
                 }
             }
-        }
+        },
         Commands::Memory { command } => {
             let exit_code = command.execute();
             std::process::exit(exit_code);

@@ -65,13 +65,14 @@ impl ChatMapping {
             return Ok(());
         }
 
-        let contents = fs::read_to_string(&path)
-            .map_err(|e| TelegramError::MappingError(e.to_string()))?;
+        let contents =
+            fs::read_to_string(&path).map_err(|e| TelegramError::MappingError(e.to_string()))?;
         let file: MappingFile = serde_yaml::from_str(&contents)
             .map_err(|e| TelegramError::MappingError(e.to_string()))?;
 
         for entry in file.mappings {
-            self.user_to_chat.insert(entry.user_id.clone(), entry.chat_id);
+            self.user_to_chat
+                .insert(entry.user_id.clone(), entry.chat_id);
             self.chat_to_user.insert(entry.chat_id, entry.user_id);
         }
 
@@ -93,8 +94,8 @@ impl ChatMapping {
             .collect();
 
         let file = MappingFile { mappings: entries };
-        let yaml = serde_yaml::to_string(&file)
-            .map_err(|e| TelegramError::MappingError(e.to_string()))?;
+        let yaml =
+            serde_yaml::to_string(&file).map_err(|e| TelegramError::MappingError(e.to_string()))?;
 
         fs::write(self.file_path(), yaml)
             .map_err(|e| TelegramError::MappingError(e.to_string()))?;

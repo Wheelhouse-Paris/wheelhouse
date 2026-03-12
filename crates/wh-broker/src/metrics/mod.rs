@@ -106,10 +106,7 @@ pub fn validate_stream_name(name: &str) -> Result<(), StreamError> {
         ));
     }
 
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-')
-    {
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err(StreamError::InvalidName(
             "Stream name must contain only alphanumeric characters and hyphens".to_string(),
         ));
@@ -132,13 +129,17 @@ pub fn parse_retention_duration(s: &str) -> Result<Duration, String> {
         let n: u64 = days.parse().map_err(|_| format!("Invalid duration: {s}"))?;
         Ok(Duration::from_secs(n * 86400))
     } else if let Some(hours) = s.strip_suffix('h') {
-        let n: u64 = hours.parse().map_err(|_| format!("Invalid duration: {s}"))?;
+        let n: u64 = hours
+            .parse()
+            .map_err(|_| format!("Invalid duration: {s}"))?;
         Ok(Duration::from_secs(n * 3600))
     } else if let Some(mins) = s.strip_suffix('m') {
         let n: u64 = mins.parse().map_err(|_| format!("Invalid duration: {s}"))?;
         Ok(Duration::from_secs(n * 60))
     } else {
-        Err(format!("Invalid retention format '{s}': use e.g. '7d', '24h', '30m'"))
+        Err(format!(
+            "Invalid retention format '{s}': use e.g. '7d', '24h', '30m'"
+        ))
     }
 }
 
@@ -153,7 +154,9 @@ pub fn parse_retention_size(s: &str) -> Result<u64, String> {
         let n: u64 = mb.parse().map_err(|_| format!("Invalid size: {s}"))?;
         Ok(n * 1024 * 1024)
     } else {
-        Err(format!("Invalid retention size format '{s}': use e.g. '500mb', '1gb'"))
+        Err(format!(
+            "Invalid retention size format '{s}': use e.g. '500mb', '1gb'"
+        ))
     }
 }
 
@@ -346,8 +349,8 @@ impl BrokerState {
             let wal_writer = WalWriter::open(&self.data_dir, &meta.name)?;
             let message_count = wal_writer.record_count().await.unwrap_or(0);
 
-            let created_at = SystemTime::UNIX_EPOCH
-                + Duration::from_millis(meta.created_at_epoch_ms as u64);
+            let created_at =
+                SystemTime::UNIX_EPOCH + Duration::from_millis(meta.created_at_epoch_ms as u64);
 
             let info = StreamInfo {
                 name: meta.name.clone(),
@@ -408,9 +411,18 @@ mod tests {
 
     #[test]
     fn test_parse_retention_duration() {
-        assert_eq!(parse_retention_duration("7d").unwrap(), Duration::from_secs(7 * 86400));
-        assert_eq!(parse_retention_duration("24h").unwrap(), Duration::from_secs(24 * 3600));
-        assert_eq!(parse_retention_duration("30m").unwrap(), Duration::from_secs(30 * 60));
+        assert_eq!(
+            parse_retention_duration("7d").unwrap(),
+            Duration::from_secs(7 * 86400)
+        );
+        assert_eq!(
+            parse_retention_duration("24h").unwrap(),
+            Duration::from_secs(24 * 3600)
+        );
+        assert_eq!(
+            parse_retention_duration("30m").unwrap(),
+            Duration::from_secs(30 * 60)
+        );
         assert!(parse_retention_duration("invalid").is_err());
         assert!(parse_retention_duration("7x").is_err());
     }
@@ -424,10 +436,22 @@ mod tests {
 
     #[test]
     fn test_format_retention_duration() {
-        assert_eq!(format_retention_duration(&Duration::from_secs(7 * 86400)), "7d");
-        assert_eq!(format_retention_duration(&Duration::from_secs(24 * 3600)), "1d"); // 24h = 1d
-        assert_eq!(format_retention_duration(&Duration::from_secs(12 * 3600)), "12h");
-        assert_eq!(format_retention_duration(&Duration::from_secs(30 * 60)), "30m");
+        assert_eq!(
+            format_retention_duration(&Duration::from_secs(7 * 86400)),
+            "7d"
+        );
+        assert_eq!(
+            format_retention_duration(&Duration::from_secs(24 * 3600)),
+            "1d"
+        ); // 24h = 1d
+        assert_eq!(
+            format_retention_duration(&Duration::from_secs(12 * 3600)),
+            "12h"
+        );
+        assert_eq!(
+            format_retention_duration(&Duration::from_secs(30 * 60)),
+            "30m"
+        );
     }
 
     #[tokio::test]
@@ -447,9 +471,7 @@ mod tests {
         assert_eq!(streams[0].name, "main");
 
         // Duplicate
-        let result = state
-            .create_stream("main", None, None)
-            .await;
+        let result = state.create_stream("main", None, None).await;
         assert!(matches!(result, Err(StreamError::AlreadyExists(_))));
 
         // Delete

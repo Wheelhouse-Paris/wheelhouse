@@ -41,8 +41,7 @@ impl SkillCache {
     ///
     /// If a skill with the same name and OID already exists, it is replaced.
     pub fn insert(&mut self, skill_name: &str, oid: Oid, skill: LoadedSkill) {
-        self.entries
-            .insert((skill_name.to_string(), oid), skill);
+        self.entries.insert((skill_name.to_string(), oid), skill);
     }
 
     /// Check whether a skill is already cached.
@@ -178,14 +177,8 @@ mod tests {
         cache.insert("web-search", oid, skill_b);
 
         assert_eq!(cache.len(), 2);
-        assert_eq!(
-            cache.get("summarize", oid).unwrap().dir_name,
-            "summarize"
-        );
-        assert_eq!(
-            cache.get("web-search", oid).unwrap().dir_name,
-            "web-search"
-        );
+        assert_eq!(cache.get("summarize", oid).unwrap().dir_name, "summarize");
+        assert_eq!(cache.get("web-search", oid).unwrap().dir_name, "web-search");
     }
 
     #[test]

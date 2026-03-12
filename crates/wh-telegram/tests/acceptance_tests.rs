@@ -46,7 +46,10 @@ mod ac1_surface_startup {
         // ConfigError type exists.
         let err = wh_telegram::TelegramError::ConfigError("token missing".into());
         let sanitized = wh_telegram::sanitize_for_user(&err);
-        assert_eq!(sanitized, "Something went wrong. Please try again or contact support.");
+        assert_eq!(
+            sanitized,
+            "Something went wrong. Please try again or contact support."
+        );
     }
 
     #[test]
@@ -111,7 +114,9 @@ mod ac3_outgoing_response {
         let dir = tempfile::tempdir().unwrap();
         let mut mapping = wh_telegram::ChatMapping::new(dir.path().join("telegram"))
             .expect("should create mapping");
-        mapping.register("usr_abc123", 12345i64).expect("should register");
+        mapping
+            .register("usr_abc123", 12345i64)
+            .expect("should register");
         let chat_id = mapping.lookup_chat_id("usr_abc123");
         assert_eq!(chat_id, Some(12345i64));
     }
@@ -178,7 +183,16 @@ mod ac4_error_sanitization {
         let err = wh_telegram::TelegramError::StreamError("broker:5555 zmq socket failed".into());
         let sanitized = wh_telegram::sanitize_for_user(&err);
         // Note: check for exact technical terms, not substrings like "port" (appears in "support")
-        let forbidden = ["broker", "stream", " port ", "socket", "zmq", "error code", "stack trace", "internal error"];
+        let forbidden = [
+            "broker",
+            "stream",
+            " port ",
+            "socket",
+            "zmq",
+            "error code",
+            "stack trace",
+            "internal error",
+        ];
         for term in &forbidden {
             assert!(
                 !sanitized.to_lowercase().contains(term),
@@ -212,6 +226,9 @@ mod ac5_ack_timeout {
         let mut ack_rx = tracker.track("usr_abc123", "msg_001").await;
         tracker.cancel("usr_abc123", "msg_001").await;
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        assert!(ack_rx.try_recv().is_err(), "ack should not have fired after cancel");
+        assert!(
+            ack_rx.try_recv().is_err(),
+            "ack should not have fired after cancel"
+        );
     }
 }

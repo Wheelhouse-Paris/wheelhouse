@@ -7,7 +7,11 @@
 use std::process::Command;
 
 fn git_cmd() -> Command {
-    for path in &["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"] {
+    for path in &[
+        "/usr/bin/git",
+        "/usr/local/bin/git",
+        "/opt/homebrew/bin/git",
+    ] {
         if std::path::Path::new(path).exists() {
             return Command::new(*path);
         }
@@ -20,13 +24,33 @@ fn setup_deployed_repo() -> tempfile::TempDir {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let temp_path = temp_dir.path();
 
-    git_cmd().args(["init"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.email", "test@test.com"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.name", "Test"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["init"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.name", "Test"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     std::fs::write(temp_path.join(".gitkeep"), "").unwrap();
-    git_cmd().args(["add", "."]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["commit", "-m", "initial commit"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", "."])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["commit", "-m", "initial commit"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     // Write topology file
     std::fs::write(
@@ -56,11 +80,20 @@ fn setup_deployed_repo() -> tempfile::TempDir {
     std::fs::write(
         wh_dir.join("state.json"),
         serde_json::to_string_pretty(&topology).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     // Commit the deployed state
-    git_cmd().args(["add", "."]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["commit", "-m", "[operator] apply: add agent researcher"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", "."])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["commit", "-m", "[operator] apply: add agent researcher"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     temp_dir
 }
@@ -81,16 +114,28 @@ fn destroy_clears_state_and_commits() {
 
     let destroy_result = result.unwrap();
     // Agent count should be 1 (intent recorded even if container stop fails)
-    assert_eq!(destroy_result.destroyed, 1, "should record 1 agent destroyed");
-    assert_eq!(destroy_result.streams_removed, 1, "should record 1 stream removed");
+    assert_eq!(
+        destroy_result.destroyed, 1,
+        "should record 1 agent destroyed"
+    );
+    assert_eq!(
+        destroy_result.streams_removed, 1,
+        "should record 1 stream removed"
+    );
 
     // Verify state.json has empty agents/streams
     let state_path = temp_path.join(".wh").join("state.json");
     assert!(state_path.exists(), "state.json should still exist");
     let content = std::fs::read_to_string(&state_path).unwrap();
     let topo: wh_broker::deploy::Topology = serde_json::from_str(&content).unwrap();
-    assert!(topo.agents.is_empty(), "state.json should have no agents after destroy");
-    assert!(topo.streams.is_empty(), "state.json should have no streams after destroy");
+    assert!(
+        topo.agents.is_empty(),
+        "state.json should have no agents after destroy"
+    );
+    assert!(
+        topo.streams.is_empty(),
+        "state.json should have no streams after destroy"
+    );
 
     // Verify a destroy commit was created
     let log_output = git_cmd()
@@ -99,7 +144,10 @@ fn destroy_clears_state_and_commits() {
         .output()
         .unwrap();
     let log_msg = String::from_utf8_lossy(&log_output.stdout);
-    assert!(log_msg.contains("destroy"), "commit message should contain 'destroy': {log_msg}");
+    assert!(
+        log_msg.contains("destroy"),
+        "commit message should contain 'destroy': {log_msg}"
+    );
 }
 
 /// AC #1: destroy on empty state (no state.json) is a no-op.
@@ -108,17 +156,38 @@ fn destroy_on_empty_state_is_noop() {
     let temp_dir = tempfile::tempdir().unwrap();
     let temp_path = temp_dir.path();
 
-    git_cmd().args(["init"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.email", "test@test.com"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.name", "Test"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["init"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.name", "Test"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
     std::fs::write(temp_path.join(".gitkeep"), "").unwrap();
-    git_cmd().args(["add", "."]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["commit", "-m", "initial"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", "."])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["commit", "-m", "initial"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     std::fs::write(
         temp_path.join("topology.wh"),
         "api_version: wheelhouse.dev/v1\nname: dev\nagents: []\nstreams: []\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     let wh_path = temp_path.join("topology.wh");
     let result = wh_broker::deploy::apply::destroy(&wh_path, None);
@@ -135,17 +204,38 @@ fn destroy_on_empty_deployed_state_is_noop() {
     let temp_dir = tempfile::tempdir().unwrap();
     let temp_path = temp_dir.path();
 
-    git_cmd().args(["init"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.email", "test@test.com"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.name", "Test"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["init"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.name", "Test"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
     std::fs::write(temp_path.join(".gitkeep"), "").unwrap();
-    git_cmd().args(["add", "."]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["commit", "-m", "initial"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", "."])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["commit", "-m", "initial"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     std::fs::write(
         temp_path.join("topology.wh"),
         "api_version: wheelhouse.dev/v1\nname: dev\nagents: []\nstreams: []\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     // Write empty state.json
     let wh_dir = temp_path.join(".wh");
@@ -160,11 +250,15 @@ fn destroy_on_empty_deployed_state_is_noop() {
     std::fs::write(
         wh_dir.join("state.json"),
         serde_json::to_string(&empty_topo).unwrap(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let wh_path = temp_path.join("topology.wh");
     let result = wh_broker::deploy::apply::destroy(&wh_path, None);
-    assert!(result.is_ok(), "destroy on empty deployed state should succeed");
+    assert!(
+        result.is_ok(),
+        "destroy on empty deployed state should succeed"
+    );
 
     let destroy_result = result.unwrap();
     assert_eq!(destroy_result.destroyed, 0, "nothing to destroy");
@@ -184,7 +278,9 @@ fn destroy_commit_uses_adr003_format() {
         .current_dir(temp_path)
         .output()
         .unwrap();
-    let commit_subject = String::from_utf8_lossy(&log_output.stdout).trim().to_string();
+    let commit_subject = String::from_utf8_lossy(&log_output.stdout)
+        .trim()
+        .to_string();
     assert!(
         commit_subject.starts_with("[donna] destroy:"),
         "commit should start with '[donna] destroy:': {commit_subject}"
@@ -199,8 +295,14 @@ fn destroy_result_display() {
         streams_removed: 1,
     };
     let display = result.to_string();
-    assert!(display.contains("2 destroyed"), "should show destroyed count: {display}");
-    assert!(display.contains("1 streams removed"), "should show streams removed: {display}");
+    assert!(
+        display.contains("2 destroyed"),
+        "should show destroyed count: {display}"
+    );
+    assert!(
+        display.contains("1 streams removed"),
+        "should show streams removed: {display}"
+    );
 }
 
 // ── AC #2: Guardrails max_replicas blocks deployment ──
@@ -217,11 +319,23 @@ fn guardrails_max_replicas_blocks_exceeding_replicas() {
 
     let linted = wh_broker::deploy::lint::lint(&wh_path).unwrap();
     let err = wh_broker::deploy::plan::plan(linted).unwrap_err();
-    assert!(matches!(err, wh_broker::deploy::DeployError::PolicyViolation(_)));
+    assert!(matches!(
+        err,
+        wh_broker::deploy::DeployError::PolicyViolation(_)
+    ));
     let msg = err.to_string();
-    assert!(msg.contains("researcher"), "error should mention agent name: {msg}");
-    assert!(msg.contains("5"), "error should mention requested replicas: {msg}");
-    assert!(msg.contains("3"), "error should mention max_replicas: {msg}");
+    assert!(
+        msg.contains("researcher"),
+        "error should mention agent name: {msg}"
+    );
+    assert!(
+        msg.contains("5"),
+        "error should mention requested replicas: {msg}"
+    );
+    assert!(
+        msg.contains("3"),
+        "error should mention max_replicas: {msg}"
+    );
 }
 
 /// AC #2: max_replicas guardrail allows valid replicas.
@@ -251,7 +365,10 @@ fn guardrails_max_replicas_allows_exact_max() {
 
     let linted = wh_broker::deploy::lint::lint(&wh_path).unwrap();
     let plan_output = wh_broker::deploy::plan::plan(linted).unwrap();
-    assert!(plan_output.has_changes(), "should detect additions for exact max");
+    assert!(
+        plan_output.has_changes(),
+        "should detect additions for exact max"
+    );
 }
 
 // ── AC #3: Autonomous agent respects max_replicas ──
@@ -267,6 +384,10 @@ fn autonomous_plan_respects_max_replicas() {
     ).unwrap();
 
     let linted = wh_broker::deploy::lint::lint(&wh_path).unwrap();
-    let err = wh_broker::deploy::plan::plan_with_self_check(linted, Some("researcher")).unwrap_err();
-    assert!(matches!(err, wh_broker::deploy::DeployError::PolicyViolation(_)));
+    let err =
+        wh_broker::deploy::plan::plan_with_self_check(linted, Some("researcher")).unwrap_err();
+    assert!(matches!(
+        err,
+        wh_broker::deploy::DeployError::PolicyViolation(_)
+    ));
 }

@@ -8,7 +8,11 @@
 use std::process::Command;
 
 fn git_cmd() -> Command {
-    for path in &["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"] {
+    for path in &[
+        "/usr/bin/git",
+        "/usr/local/bin/git",
+        "/opt/homebrew/bin/git",
+    ] {
         if std::path::Path::new(path).exists() {
             return Command::new(*path);
         }
@@ -21,13 +25,33 @@ fn setup_git_repo() -> tempfile::TempDir {
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let temp_path = temp_dir.path();
 
-    git_cmd().args(["init"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.email", "test@test.com"]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["config", "user.name", "Test"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["init"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["config", "user.name", "Test"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     std::fs::write(temp_path.join(".gitkeep"), "").unwrap();
-    git_cmd().args(["add", "."]).current_dir(temp_path).output().unwrap();
-    git_cmd().args(["commit", "-m", "initial commit"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", "."])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    git_cmd()
+        .args(["commit", "-m", "initial commit"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     // Write topology file
     std::fs::write(
@@ -51,8 +75,8 @@ fn deploy_apply_commits_state_json() {
     let plan_output = wh_broker::deploy::plan::plan(linted).expect("plan should succeed");
     assert!(plan_output.has_changes());
 
-    let committed = wh_broker::deploy::apply::commit(plan_output, None)
-        .expect("commit should succeed");
+    let committed =
+        wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
     let _ = wh_broker::deploy::apply::apply(committed);
 
     // Verify .wh/state.json is in the commit
@@ -62,7 +86,10 @@ fn deploy_apply_commits_state_json() {
         .output()
         .expect("git show failed");
     let stat = String::from_utf8_lossy(&output.stdout);
-    assert!(stat.contains(".wh/state.json"), "commit must include .wh/state.json. Got: {stat}");
+    assert!(
+        stat.contains(".wh/state.json"),
+        "commit must include .wh/state.json. Got: {stat}"
+    );
 }
 
 /// AC #1: After deploy apply, .wh/.gitignore is committed.
@@ -74,13 +101,16 @@ fn deploy_apply_creates_gitignore() {
 
     let linted = wh_broker::deploy::lint::lint(&wh_path).expect("lint should succeed");
     let plan_output = wh_broker::deploy::plan::plan(linted).expect("plan should succeed");
-    let committed = wh_broker::deploy::apply::commit(plan_output, None)
-        .expect("commit should succeed");
+    let committed =
+        wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
     let _ = wh_broker::deploy::apply::apply(committed);
 
     // Verify .wh/.gitignore exists and is committed
     let gitignore_path = temp_path.join(".wh").join(".gitignore");
-    assert!(gitignore_path.exists(), ".wh/.gitignore must exist after deploy apply");
+    assert!(
+        gitignore_path.exists(),
+        ".wh/.gitignore must exist after deploy apply"
+    );
 
     let output = git_cmd()
         .args(["show", "--stat", "HEAD"])
@@ -88,7 +118,10 @@ fn deploy_apply_creates_gitignore() {
         .output()
         .expect("git show failed");
     let stat = String::from_utf8_lossy(&output.stdout);
-    assert!(stat.contains(".wh/.gitignore"), "commit must include .wh/.gitignore. Got: {stat}");
+    assert!(
+        stat.contains(".wh/.gitignore"),
+        "commit must include .wh/.gitignore. Got: {stat}"
+    );
 }
 
 // ── AC #3: Secrets exclusion ──
@@ -103,12 +136,21 @@ fn gitignore_excludes_wal_files() {
     wh_broker::deploy::gitignore::ensure_gitignore(temp_path)
         .expect("ensure_gitignore should succeed");
 
-    let gitignore = std::fs::read_to_string(temp_path.join(".wh/.gitignore"))
-        .expect("should read .gitignore");
+    let gitignore =
+        std::fs::read_to_string(temp_path.join(".wh/.gitignore")).expect("should read .gitignore");
 
-    assert!(gitignore.contains("*.db"), ".gitignore must exclude *.db WAL files");
-    assert!(gitignore.contains("*.db-wal"), ".gitignore must exclude *.db-wal");
-    assert!(gitignore.contains("*.db-shm"), ".gitignore must exclude *.db-shm");
+    assert!(
+        gitignore.contains("*.db"),
+        ".gitignore must exclude *.db WAL files"
+    );
+    assert!(
+        gitignore.contains("*.db-wal"),
+        ".gitignore must exclude *.db-wal"
+    );
+    assert!(
+        gitignore.contains("*.db-shm"),
+        ".gitignore must exclude *.db-shm"
+    );
 }
 
 /// AC #3: .wh/.gitignore excludes secret files.
@@ -120,12 +162,21 @@ fn gitignore_excludes_secrets() {
     wh_broker::deploy::gitignore::ensure_gitignore(temp_path)
         .expect("ensure_gitignore should succeed");
 
-    let gitignore = std::fs::read_to_string(temp_path.join(".wh/.gitignore"))
-        .expect("should read .gitignore");
+    let gitignore =
+        std::fs::read_to_string(temp_path.join(".wh/.gitignore")).expect("should read .gitignore");
 
-    assert!(gitignore.contains(".env"), ".gitignore must exclude .env files");
-    assert!(gitignore.contains("secrets/"), ".gitignore must exclude secrets/ directory");
-    assert!(gitignore.contains("*.token"), ".gitignore must exclude *.token files");
+    assert!(
+        gitignore.contains(".env"),
+        ".gitignore must exclude .env files"
+    );
+    assert!(
+        gitignore.contains("secrets/"),
+        ".gitignore must exclude secrets/ directory"
+    );
+    assert!(
+        gitignore.contains("*.token"),
+        ".gitignore must exclude *.token files"
+    );
 }
 
 /// AC #3: .wh/.gitignore excludes lock files.
@@ -137,10 +188,13 @@ fn gitignore_excludes_lock_files() {
     wh_broker::deploy::gitignore::ensure_gitignore(temp_path)
         .expect("ensure_gitignore should succeed");
 
-    let gitignore = std::fs::read_to_string(temp_path.join(".wh/.gitignore"))
-        .expect("should read .gitignore");
+    let gitignore =
+        std::fs::read_to_string(temp_path.join(".wh/.gitignore")).expect("should read .gitignore");
 
-    assert!(gitignore.contains("workspace.lock"), ".gitignore must exclude workspace.lock");
+    assert!(
+        gitignore.contains("workspace.lock"),
+        ".gitignore must exclude workspace.lock"
+    );
 }
 
 /// AC #3: ensure_gitignore preserves existing user patterns.
@@ -152,16 +206,26 @@ fn gitignore_preserves_user_patterns() {
     // Pre-create .wh/.gitignore with user content
     let wh_dir = temp_path.join(".wh");
     std::fs::create_dir_all(&wh_dir).unwrap();
-    std::fs::write(wh_dir.join(".gitignore"), "# my custom rule\ncustom_exclude/\n").unwrap();
+    std::fs::write(
+        wh_dir.join(".gitignore"),
+        "# my custom rule\ncustom_exclude/\n",
+    )
+    .unwrap();
 
     wh_broker::deploy::gitignore::ensure_gitignore(temp_path)
         .expect("ensure_gitignore should succeed");
 
-    let gitignore = std::fs::read_to_string(wh_dir.join(".gitignore"))
-        .expect("should read .gitignore");
+    let gitignore =
+        std::fs::read_to_string(wh_dir.join(".gitignore")).expect("should read .gitignore");
 
-    assert!(gitignore.contains("custom_exclude/"), "must preserve user patterns");
-    assert!(gitignore.contains("*.db"), "must also add required patterns");
+    assert!(
+        gitignore.contains("custom_exclude/"),
+        "must preserve user patterns"
+    );
+    assert!(
+        gitignore.contains("*.db"),
+        "must also add required patterns"
+    );
 }
 
 /// AC #3: Staging a file that matches secret patterns is blocked.
@@ -176,12 +240,19 @@ fn secrets_scan_detects_suspicious_files() {
     std::fs::write(wh_dir.join("api.token"), "sk-secret-value").unwrap();
 
     // Stage it
-    git_cmd().args(["add", ".wh/api.token"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", ".wh/api.token"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     let result = wh_broker::deploy::gitignore::scan_staged_for_secrets(temp_path);
     assert!(result.is_ok(), "scan should succeed");
     let suspicious = result.unwrap();
-    assert!(!suspicious.is_empty(), "should detect suspicious staged file");
+    assert!(
+        !suspicious.is_empty(),
+        "should detect suspicious staged file"
+    );
 }
 
 /// AC #3: Normal files are not flagged by secrets scan.
@@ -196,12 +267,19 @@ fn secrets_scan_allows_normal_files() {
     std::fs::write(wh_dir.join("state.json"), "{}").unwrap();
 
     // Stage it
-    git_cmd().args(["add", ".wh/state.json"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", ".wh/state.json"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     let result = wh_broker::deploy::gitignore::scan_staged_for_secrets(temp_path);
     assert!(result.is_ok());
     let suspicious = result.unwrap();
-    assert!(suspicious.is_empty(), "should not flag normal files. Got: {suspicious:?}");
+    assert!(
+        suspicious.is_empty(),
+        "should not flag normal files. Got: {suspicious:?}"
+    );
 }
 
 // ── AC #2, #4: Recovery flow ──
@@ -229,7 +307,10 @@ fn recovery_plan_detects_all_as_additions() {
     // Re-plan: should see all components as additions (same as first deploy)
     let linted2 = wh_broker::deploy::lint::lint(&wh_path).expect("lint2");
     let plan2 = wh_broker::deploy::plan::plan(linted2).expect("plan2");
-    assert!(plan2.has_changes(), "after removing state.json, plan should detect additions (recovery scenario)");
+    assert!(
+        plan2.has_changes(),
+        "after removing state.json, plan should detect additions (recovery scenario)"
+    );
 }
 
 /// AC #4: .wh/.gitignore content ensures WAL and secrets are not restored via git.
@@ -248,7 +329,11 @@ fn gitignore_ensures_non_restorable_files_excluded() {
     std::fs::write(wh_dir.join("workspace.lock"), "lock").unwrap();
 
     // Stage .wh/ and check what gets staged
-    git_cmd().args(["add", ".wh/"]).current_dir(temp_path).output().unwrap();
+    git_cmd()
+        .args(["add", ".wh/"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
 
     let output = git_cmd()
         .args(["diff", "--cached", "--name-only"])
@@ -257,8 +342,17 @@ fn gitignore_ensures_non_restorable_files_excluded() {
         .expect("git diff failed");
     let staged = String::from_utf8_lossy(&output.stdout);
 
-    assert!(!staged.contains("stream.db"), "WAL file should not be staged");
-    assert!(!staged.contains("workspace.lock"), "lock file should not be staged");
+    assert!(
+        !staged.contains("stream.db"),
+        "WAL file should not be staged"
+    );
+    assert!(
+        !staged.contains("workspace.lock"),
+        "lock file should not be staged"
+    );
     // .gitignore itself should be staged
-    assert!(staged.contains(".wh/.gitignore"), ".gitignore should be staged");
+    assert!(
+        staged.contains(".wh/.gitignore"),
+        ".gitignore should be staged"
+    );
 }

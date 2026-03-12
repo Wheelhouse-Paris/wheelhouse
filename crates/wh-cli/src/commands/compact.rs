@@ -69,12 +69,7 @@ impl CompactArgs {
         let workspace_root = self.wh_dir.clone();
         let stream = self.stream.clone();
 
-        match compaction::compact_stream(
-            &workspace_root,
-            &stream,
-            &wal_writer,
-            since_ms,
-        ).await {
+        match compaction::compact_stream(&workspace_root, &stream, &wal_writer, since_ms).await {
             Ok(summary) => {
                 match self.format {
                     OutputFormat::Json => {
@@ -97,10 +92,7 @@ impl CompactArgs {
                             summary.stream_name, summary.date
                         );
                         println!("  Records: {}", summary.record_count);
-                        println!(
-                            "  Summary: {}",
-                            summary.summary_path.display()
-                        );
+                        println!("  Summary: {}", summary.summary_path.display());
                         println!("  Commit:  {}", summary.commit_hash);
                     }
                 }

@@ -83,8 +83,7 @@ mod acceptance_reconnect {
         let cancel = CancellationToken::new();
         cancel.cancel(); // Cancel immediately
 
-        let result =
-            reconnect_subscribe("tcp://127.0.0.1:59997", "test\0", &cancel, None).await;
+        let result = reconnect_subscribe("tcp://127.0.0.1:59997", "test\0", &cancel, None).await;
 
         match result {
             Err(ReconnectError::Cancelled) => {} // expected
@@ -119,8 +118,7 @@ mod acceptance_reconnect {
         });
 
         let _ =
-            reconnect_subscribe("tcp://127.0.0.1:59996", "test\0", &cancel, Some(&callback))
-                .await;
+            reconnect_subscribe("tcp://127.0.0.1:59996", "test\0", &cancel, Some(&callback)).await;
 
         let captured = events.lock().unwrap();
         assert!(!captured.is_empty(), "Expected at least one callback event");

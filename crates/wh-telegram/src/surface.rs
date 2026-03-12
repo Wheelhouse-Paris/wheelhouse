@@ -38,11 +38,7 @@ pub struct TelegramSurface {
 impl TelegramSurface {
     /// Creates a new Telegram surface.
     #[instrument(skip_all)]
-    pub fn new(
-        config: TelegramConfig,
-        user_store: UserStore,
-        chat_mapping: ChatMapping,
-    ) -> Self {
+    pub fn new(config: TelegramConfig, user_store: UserStore, chat_mapping: ChatMapping) -> Self {
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
 
         Self {
@@ -67,11 +63,7 @@ impl TelegramSurface {
     /// 3. Creates and queues TextMessage for stream publication
     /// 4. Starts ack timer
     #[instrument(skip(self, bot, msg))]
-    pub async fn handle_incoming(
-        &self,
-        bot: &Bot,
-        msg: &Message,
-    ) -> Result<(), TelegramError> {
+    pub async fn handle_incoming(&self, bot: &Bot, msg: &Message) -> Result<(), TelegramError> {
         let chat_id = msg.chat.id.0;
         let text = msg.text().unwrap_or("").to_string();
         let display_name = msg
@@ -148,15 +140,15 @@ impl TelegramSurface {
         text_msg: &TextMessage,
     ) -> Result<(), TelegramError> {
         let target_user_id = if text_msg.reply_to_user_id.is_empty() {
-            return Err(TelegramError::StreamError("outgoing message has no reply_to_user_id".into()));
+            return Err(TelegramError::StreamError(
+                "outgoing message has no reply_to_user_id".into(),
+            ));
         } else {
             text_msg.reply_to_user_id.as_str()
         };
 
         // Cancel ack timer for this user
-        self.ack_tracker
-            .cancel_all_for_user(target_user_id)
-            .await;
+        self.ack_tracker.cancel_all_for_user(target_user_id).await;
 
         // Look up chat_id
         let chat_id = {
@@ -164,9 +156,8 @@ impl TelegramSurface {
             mapping.lookup_chat_id(target_user_id)
         };
 
-        let chat_id = chat_id.ok_or_else(|| {
-            TelegramError::SendFailed("no chat mapping found for user".into())
-        })?;
+        let chat_id = chat_id
+            .ok_or_else(|| TelegramError::SendFailed("no chat mapping found for user".into()))?;
 
         // Send to Telegram
         bot.send_message(ChatId(chat_id), &text_msg.content)
@@ -181,12 +172,7 @@ impl TelegramSurface {
 
     /// Handles errors by sending a sanitized message to the user.
     #[instrument(skip(self, bot))]
-    pub async fn send_error_to_user(
-        &self,
-        bot: &Bot,
-        chat_id: i64,
-        err: &TelegramError,
-    ) {
+    pub async fn send_error_to_user(&self, bot: &Bot, chat_id: i64, err: &TelegramError) {
         error!(error = %err, "telegram surface error");
         let safe_msg = sanitize_for_user(err);
         if let Err(send_err) = bot.send_message(ChatId(chat_id), safe_msg).await {

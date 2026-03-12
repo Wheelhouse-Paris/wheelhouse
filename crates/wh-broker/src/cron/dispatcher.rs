@@ -207,9 +207,9 @@ impl Default for CronEventDispatcher {
 mod tests {
     use super::*;
     use crate::cron::handler::{CronHandlerError, HandlerOutcome};
+    use prost_types::Timestamp;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex;
-    use prost_types::Timestamp;
 
     /// A test handler that records invocations.
     struct RecordingHandler {
@@ -441,7 +441,11 @@ mod tests {
 
         // Handler should have completed (not been cancelled)
         let invocations = handler_ref.invocations.lock().await;
-        assert_eq!(invocations.len(), 1, "handler should complete even after progress timeout");
+        assert_eq!(
+            invocations.len(),
+            1,
+            "handler should complete even after progress timeout"
+        );
     }
 
     #[tokio::test]

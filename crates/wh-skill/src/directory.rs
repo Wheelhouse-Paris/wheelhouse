@@ -122,10 +122,7 @@ mod tests {
         let steps_dir = skill_dir.join("steps");
         fs::create_dir_all(&steps_dir).unwrap();
 
-        let step_refs: Vec<String> = step_names
-            .iter()
-            .map(|s| format!("steps/{s}"))
-            .collect();
+        let step_refs: Vec<String> = step_names.iter().map(|s| format!("steps/{s}")).collect();
         let steps_yaml = step_refs
             .iter()
             .map(|s| format!("  - {s}"))
@@ -138,14 +135,23 @@ mod tests {
         fs::write(skill_dir.join("skill.md"), manifest).unwrap();
 
         for step_name in step_names {
-            fs::write(steps_dir.join(step_name), format!("# Step: {step_name}\n\nDo something.\n")).unwrap();
+            fs::write(
+                steps_dir.join(step_name),
+                format!("# Step: {step_name}\n\nDo something.\n"),
+            )
+            .unwrap();
         }
     }
 
     #[test]
     fn test_load_valid_skill_directory() {
         let tmp = TempDir::new().unwrap();
-        create_skill_dir(tmp.path(), "summarize", "1.0.0", &["01-gather.md", "02-execute.md"]);
+        create_skill_dir(
+            tmp.path(),
+            "summarize",
+            "1.0.0",
+            &["01-gather.md", "02-execute.md"],
+        );
 
         let skill = SkillDirectory::load(&tmp.path().join("summarize")).unwrap();
         assert_eq!(skill.manifest.name(), "summarize");
@@ -170,7 +176,8 @@ mod tests {
         let steps_dir = skill_dir.join("steps");
         fs::create_dir_all(&steps_dir).unwrap();
 
-        let manifest = "---\nname: broken\nversion: \"1.0.0\"\nsteps:\n  - steps/01-missing.md\n---\n";
+        let manifest =
+            "---\nname: broken\nversion: \"1.0.0\"\nsteps:\n  - steps/01-missing.md\n---\n";
         fs::write(skill_dir.join("skill.md"), manifest).unwrap();
 
         let err = SkillDirectory::load(&skill_dir).unwrap_err();
@@ -203,7 +210,12 @@ mod tests {
     fn test_step_ordering_preserved_from_manifest() {
         let tmp = TempDir::new().unwrap();
         // Create skill with steps in a specific order
-        create_skill_dir(tmp.path(), "ordered", "1.0.0", &["01-first.md", "02-second.md", "03-third.md"]);
+        create_skill_dir(
+            tmp.path(),
+            "ordered",
+            "1.0.0",
+            &["01-first.md", "02-second.md", "03-third.md"],
+        );
 
         let skill = SkillDirectory::load(&tmp.path().join("ordered")).unwrap();
         assert_eq!(skill.steps.len(), 3);

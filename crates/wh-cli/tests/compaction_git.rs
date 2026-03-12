@@ -46,7 +46,11 @@ fn init_git_repo(dir: &std::path::Path) {
 }
 
 fn find_git() -> &'static str {
-    for path in &["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"] {
+    for path in &[
+        "/usr/bin/git",
+        "/usr/local/bin/git",
+        "/opt/homebrew/bin/git",
+    ] {
         if std::path::Path::new(path).exists() {
             return path;
         }
@@ -113,7 +117,9 @@ async fn compaction_creates_summary_at_correct_path() {
     wal.write(b"test-payload").await.unwrap();
 
     let since = 0i64;
-    let result = compact_stream(dir.path(), "main", &wal, since).await.unwrap();
+    let result = compact_stream(dir.path(), "main", &wal, since)
+        .await
+        .unwrap();
 
     // Summary file should exist at the architecture-specified path
     assert!(result.summary_path.exists(), "summary file should exist");
@@ -189,7 +195,9 @@ async fn compaction_creates_git_commit_with_attribution() {
     wal.write(b"payload-data").await.unwrap();
 
     let since = 0i64;
-    let result = compact_stream(dir.path(), "main", &wal, since).await.unwrap();
+    let result = compact_stream(dir.path(), "main", &wal, since)
+        .await
+        .unwrap();
 
     // Verify git commit exists
     assert!(!result.commit_hash.is_empty(), "commit hash should be set");
@@ -240,7 +248,10 @@ async fn compaction_rollback_leaves_no_partial_summary() {
     }
 
     assert!(!temp_path.exists(), "temp file should be cleaned up");
-    assert!(!final_path.exists(), "final file should NOT exist after rollback");
+    assert!(
+        !final_path.exists(),
+        "final file should NOT exist after rollback"
+    );
 }
 
 // =============================================================================
@@ -264,14 +275,22 @@ async fn compaction_summary_contains_structured_data() {
     wal.write(b"message-three").await.unwrap();
 
     let since = 0i64;
-    let result = compact_stream(dir.path(), "main", &wal, since).await.unwrap();
+    let result = compact_stream(dir.path(), "main", &wal, since)
+        .await
+        .unwrap();
 
     assert_eq!(result.record_count, 3, "should report 3 records");
-    assert!(result.total_payload_bytes > 0, "should report payload bytes");
+    assert!(
+        result.total_payload_bytes > 0,
+        "should report payload bytes"
+    );
 
     // Read the summary file and verify structured content
     let content = std::fs::read_to_string(&result.summary_path).unwrap();
-    assert!(content.contains("record_count:"), "summary should have record_count");
+    assert!(
+        content.contains("record_count:"),
+        "summary should have record_count"
+    );
     assert!(content.contains("3"), "summary should report 3 records");
 }
 
@@ -289,7 +308,9 @@ async fn compaction_with_no_records_produces_empty_summary() {
     let wal = wh_broker::wal::WalWriter::open(dir.path(), "empty-stream").unwrap();
 
     let since = chrono::Utc::now().timestamp_millis(); // Future timestamp = no records
-    let result = compact_stream(dir.path(), "empty-stream", &wal, since).await.unwrap();
+    let result = compact_stream(dir.path(), "empty-stream", &wal, since)
+        .await
+        .unwrap();
 
     assert_eq!(result.record_count, 0, "empty stream should have 0 records");
 }
@@ -316,7 +337,9 @@ async fn wal_records_truncated_after_successful_compaction() {
     assert_eq!(count_before, 1);
 
     let since = 0i64;
-    compact_stream(dir.path(), "main", &wal, since).await.unwrap();
+    compact_stream(dir.path(), "main", &wal, since)
+        .await
+        .unwrap();
 
     let count_after = wal.record_count().await.unwrap();
     assert_eq!(count_after, 0, "WAL should be truncated after compaction");
@@ -366,7 +389,11 @@ async fn wal_read_records_since_returns_matching_records() {
     wal.write(b"msg2").await.unwrap();
 
     let records = wal.read_records_since(midpoint).await.unwrap();
-    assert_eq!(records.len(), 1, "should return only records after midpoint");
+    assert_eq!(
+        records.len(),
+        1,
+        "should return only records after midpoint"
+    );
 }
 
 #[tokio::test]
@@ -380,5 +407,8 @@ async fn wal_read_records_since_returns_empty_when_no_match() {
 
     let future = chrono::Utc::now().timestamp_millis() + 100_000;
     let records = wal.read_records_since(future).await.unwrap();
-    assert!(records.is_empty(), "should return empty vec for future timestamp");
+    assert!(
+        records.is_empty(),
+        "should return empty vec for future timestamp"
+    );
 }

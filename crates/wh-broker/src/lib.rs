@@ -175,8 +175,7 @@ async fn enforce_retention(state: &Arc<BrokerState>) {
     for (name, info) in streams.iter() {
         // Time-based retention
         if let Some(duration) = info.retention_duration {
-            let cutoff = chrono::Utc::now().timestamp_millis()
-                - (duration.as_millis() as i64);
+            let cutoff = chrono::Utc::now().timestamp_millis() - (duration.as_millis() as i64);
             match info.wal_writer.delete_before(cutoff).await {
                 Ok(deleted) if deleted > 0 => {
                     tracing::info!(
@@ -230,8 +229,7 @@ async fn run_compaction_loop(
     interval_secs: u64,
     workspace_root: std::path::PathBuf,
 ) {
-    let mut interval =
-        tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
 
     // Skip the first immediate tick — don't compact on startup
     interval.tick().await;
@@ -279,13 +277,8 @@ async fn run_compaction_for_all_streams(
 
         // Compact records from one interval ago
         let since = chrono::Utc::now().timestamp_millis() - (interval_secs as i64 * 1000);
-        match wal::compaction::compact_stream(
-            workspace_root,
-            &stream_name,
-            &info.wal_writer,
-            since,
-        )
-        .await
+        match wal::compaction::compact_stream(workspace_root, &stream_name, &info.wal_writer, since)
+            .await
         {
             Ok(summary) => {
                 tracing::info!(

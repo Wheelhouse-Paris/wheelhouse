@@ -67,11 +67,13 @@ impl SkillRepository {
                 .map_err(|_| SkillError::VersionNotFound {
                     version: version.to_string(),
                 })?;
-            let commit = branch.get().peel_to_commit().map_err(|_| {
-                SkillError::VersionNotFound {
-                    version: version.to_string(),
-                }
-            })?;
+            let commit =
+                branch
+                    .get()
+                    .peel_to_commit()
+                    .map_err(|_| SkillError::VersionNotFound {
+                        version: version.to_string(),
+                    })?;
             Ok(commit.id())
         } else if let Some(sha) = version.strip_prefix("commit:") {
             let oid = Oid::from_str(sha).map_err(|_| SkillError::VersionNotFound {
@@ -88,17 +90,17 @@ impl SkillRepository {
             // Bare semver -> tag v<version>
             let tag_name = format!("v{version}");
             let refname = format!("refs/tags/{tag_name}");
-            let reference = self
-                .repo
-                .find_reference(&refname)
+            let reference =
+                self.repo
+                    .find_reference(&refname)
+                    .map_err(|_| SkillError::VersionNotFound {
+                        version: version.to_string(),
+                    })?;
+            let commit = reference
+                .peel_to_commit()
                 .map_err(|_| SkillError::VersionNotFound {
                     version: version.to_string(),
                 })?;
-            let commit = reference.peel_to_commit().map_err(|_| {
-                SkillError::VersionNotFound {
-                    version: version.to_string(),
-                }
-            })?;
             Ok(commit.id())
         }
     }
@@ -162,11 +164,7 @@ impl SkillRepository {
     ///
     /// Reads the skill.md manifest and all step files referenced in it
     /// directly from the git object database (no checkout needed).
-    pub fn load_skill_at(
-        &self,
-        skill_dir_name: &str,
-        oid: Oid,
-    ) -> Result<LoadedSkill, SkillError> {
+    pub fn load_skill_at(&self, skill_dir_name: &str, oid: Oid) -> Result<LoadedSkill, SkillError> {
         let commit = self.repo.find_commit(oid)?;
         let tree = commit.tree()?;
 
@@ -186,12 +184,11 @@ impl SkillRepository {
                     path: format!("{skill_dir_name}/skill.md"),
                 })?;
         let skill_md_blob = self.repo.find_blob(skill_md_entry.id())?;
-        let skill_md_content =
-            std::str::from_utf8(skill_md_blob.content()).map_err(|_| {
-                SkillError::InvalidManifest {
-                    reason: "skill.md is not valid UTF-8".into(),
-                }
-            })?;
+        let skill_md_content = std::str::from_utf8(skill_md_blob.content()).map_err(|_| {
+            SkillError::InvalidManifest {
+                reason: "skill.md is not valid UTF-8".into(),
+            }
+        })?;
         let manifest = SkillManifest::parse(skill_md_content)?;
 
         // Read step files from the manifest references
@@ -220,11 +217,7 @@ impl SkillRepository {
     }
 
     /// Read a blob from a nested path within a tree (e.g., "steps/01-gather.md").
-    fn read_blob_at_path(
-        &self,
-        root_tree: &git2::Tree,
-        path: &str,
-    ) -> Result<Vec<u8>, SkillError> {
+    fn read_blob_at_path(&self, root_tree: &git2::Tree, path: &str) -> Result<Vec<u8>, SkillError> {
         let entry = root_tree
             .get_path(Path::new(path))
             .map_err(|_| SkillError::StepNotFound {
@@ -369,9 +362,7 @@ mod tests {
         let (tmp, oid) = create_repo_with_skill("test", "1.0.0", &["01-do.md"]);
 
         let repo = SkillRepository::open(tmp.path()).unwrap();
-        let resolved = repo
-            .resolve_version(&format!("commit:{}", oid))
-            .unwrap();
+        let resolved = repo.resolve_version(&format!("commit:{}", oid)).unwrap();
         assert_eq!(resolved, oid);
     }
 
@@ -432,14 +423,7 @@ mod tests {
         let tree_oid = index.write_tree().unwrap();
         let tree = git_repo.find_tree(tree_oid).unwrap();
         let oid_v2 = git_repo
-            .commit(
-                Some("HEAD"),
-                &sig,
-                &sig,
-                "v2",
-                &tree,
-                &[&commit_v1],
-            )
+            .commit(Some("HEAD"), &sig, &sig, "v2", &tree, &[&commit_v1])
             .unwrap();
         let commit_v2 = git_repo.find_commit(oid_v2).unwrap();
         git_repo

@@ -5,13 +5,13 @@
 
 use std::sync::LazyLock;
 
+use crate::output::{format_message, OutputFormat, SurfaceMessage as TextMessage};
 use chrono::Utc;
 use clap::Subcommand;
 use regex::Regex;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use tracing::instrument;
-use crate::output::{format_message, OutputFormat, SurfaceMessage as TextMessage};
 
 use crate::output::error::WhError;
 
@@ -50,7 +50,11 @@ pub fn validate_stream_name(name: &str) -> Result<(), WhError> {
 /// Trait for surface connections. Allows swapping stub for real ZMQ later.
 pub trait SurfaceConnection: Send + Sync {
     /// Publish a message to the stream.
-    fn publish(&self, stream: &str, msg: &TextMessage) -> impl std::future::Future<Output = Result<(), WhError>> + Send;
+    fn publish(
+        &self,
+        stream: &str,
+        msg: &TextMessage,
+    ) -> impl std::future::Future<Output = Result<(), WhError>> + Send;
 }
 
 /// Stub connection for MVP — no broker available yet.
@@ -77,9 +81,10 @@ impl Default for StubConnection {
 
 impl SurfaceConnection for StubConnection {
     async fn publish(&self, _stream: &str, msg: &TextMessage) -> Result<(), WhError> {
-        self.tx.send(msg.clone()).await.map_err(|e| {
-            WhError::InternalError(format!("failed to send message: {e}"))
-        })
+        self.tx
+            .send(msg.clone())
+            .await
+            .map_err(|e| WhError::InternalError(format!("failed to send message: {e}")))
     }
 }
 
@@ -92,9 +97,8 @@ pub async fn run_cli(stream: &str, format_str: &str) -> Result<(), WhError> {
     // Validate inputs before any connection attempt (architecture spec)
     validate_stream_name(stream)?;
 
-    let output_format = OutputFormat::from_str_value(format_str).map_err(|e| {
-        WhError::StreamError(e)
-    })?;
+    let output_format =
+        OutputFormat::from_str_value(format_str).map_err(|e| WhError::StreamError(e))?;
 
     let mut conn = StubConnection::new();
     // Take the receiver before moving into tasks
@@ -210,7 +214,10 @@ mod tests {
     fn test_stream_name_validation_error_contains_invalid_name() {
         let err = validate_stream_name("Bad").unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("INVALID_NAME"), "error should contain INVALID_NAME code");
+        assert!(
+            msg.contains("INVALID_NAME"),
+            "error should contain INVALID_NAME code"
+        );
     }
 
     #[tokio::test]

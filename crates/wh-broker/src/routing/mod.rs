@@ -143,9 +143,7 @@ async fn route_message(msg: ZmqMessage, pub_socket: &mut PubSocket, state: &Arc<
 
             // Now assign sequence number — only after successful WAL write (FR54)
             let forward_bytes = if let Some(mut envelope) = decoded_envelope {
-                let seq = stream_info
-                    .sequence_counter
-                    .fetch_add(1, Ordering::Relaxed);
+                let seq = stream_info.sequence_counter.fetch_add(1, Ordering::Relaxed);
                 envelope.sequence_number = seq;
                 envelope.published_at_ms = chrono::Utc::now().timestamp_millis();
                 envelope.encode_to_vec()
@@ -156,8 +154,7 @@ async fn route_message(msg: ZmqMessage, pub_socket: &mut PubSocket, state: &Arc<
             drop(streams);
 
             // Build the forwarded ZMQ message: stream_name\0augmented_payload
-            let mut wire: Vec<u8> =
-                Vec::with_capacity(stream_name.len() + 1 + forward_bytes.len());
+            let mut wire: Vec<u8> = Vec::with_capacity(stream_name.len() + 1 + forward_bytes.len());
             wire.extend_from_slice(stream_name.as_bytes());
             wire.push(0);
             wire.extend_from_slice(&forward_bytes);

@@ -111,10 +111,7 @@ impl Table {
         ));
 
         // Separator line
-        let sep_parts: Vec<String> = widths
-            .iter()
-            .map(|w| h_bar.repeat(w + 2))
-            .collect();
+        let sep_parts: Vec<String> = widths.iter().map(|w| h_bar.repeat(w + 2)).collect();
         output.push_str(&sep_parts.join(cross));
         output.push('\n');
 
@@ -133,10 +130,7 @@ impl Table {
                     }
                 })
                 .collect();
-            output.push_str(&format!(
-                " {} \n",
-                cells.join(&format!(" {} ", v_bar))
-            ));
+            output.push_str(&format!(" {} \n", cells.join(&format!(" {} ", v_bar))));
         }
 
         output

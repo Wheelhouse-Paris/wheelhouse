@@ -110,7 +110,11 @@ impl InvocationPipeline {
         tx: mpsc::Sender<SkillExecutorEvent>,
     ) -> Result<(), SkillError> {
         // Step 1: Allowlist validation (FM-05)
-        if self.allowlist.validate(&request.skill_name, &request.agent_id).is_err() {
+        if self
+            .allowlist
+            .validate(&request.skill_name, &request.agent_id)
+            .is_err()
+        {
             let _ = tx
                 .send(SkillExecutorEvent::Completed {
                     invocation_id: request.invocation_id.clone(),
@@ -128,26 +132,24 @@ impl InvocationPipeline {
 
         // Step 2: Resolve version from config
         let version = match &self.config {
-            Some(config) => {
-                match config.skills.iter().find(|s| s.name == request.skill_name) {
-                    Some(skill_ref) => skill_ref.version.clone(),
-                    None => {
-                        let _ = tx
-                            .send(SkillExecutorEvent::Completed {
-                                invocation_id: request.invocation_id.clone(),
-                                outcome: SkillInvocationOutcome::Error {
-                                    error_code: "SKILL_LOAD_FAILED".into(),
-                                    error_message: format!(
-                                        "Skill '{}' not found in skills config",
-                                        request.skill_name
-                                    ),
-                                },
-                            })
-                            .await;
-                        return Ok(());
-                    }
+            Some(config) => match config.skills.iter().find(|s| s.name == request.skill_name) {
+                Some(skill_ref) => skill_ref.version.clone(),
+                None => {
+                    let _ = tx
+                        .send(SkillExecutorEvent::Completed {
+                            invocation_id: request.invocation_id.clone(),
+                            outcome: SkillInvocationOutcome::Error {
+                                error_code: "SKILL_LOAD_FAILED".into(),
+                                error_message: format!(
+                                    "Skill '{}' not found in skills config",
+                                    request.skill_name
+                                ),
+                            },
+                        })
+                        .await;
+                    return Ok(());
                 }
-            }
+            },
             None => {
                 let _ = tx
                     .send(SkillExecutorEvent::Completed {
@@ -240,8 +242,7 @@ impl InvocationPipeline {
 
         // Wrap executor in catch_unwind for panic safety, then wrap in timeout
         let executor_future =
-            AssertUnwindSafe(self.executor.execute(&request, &loaded_skill, &tx))
-                .catch_unwind();
+            AssertUnwindSafe(self.executor.execute(&request, &loaded_skill, &tx)).catch_unwind();
 
         match tokio::time::timeout(timeout_duration, executor_future).await {
             Ok(Ok(())) => {
@@ -429,8 +430,8 @@ mod tests {
     #[test]
     fn pipeline_with_custom_timeout() {
         let allowlist = SkillAllowlist::new(vec![]);
-        let pipeline = InvocationPipeline::new(allowlist, None, None)
-            .with_timeout(Duration::from_millis(500));
+        let pipeline =
+            InvocationPipeline::new(allowlist, None, None).with_timeout(Duration::from_millis(500));
         assert_eq!(pipeline.timeout(), Duration::from_millis(500));
     }
 }

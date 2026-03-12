@@ -22,16 +22,10 @@ pub const SECRETS_PATTERNS: &[&str] = &[
 ];
 
 /// Patterns for WAL/database files (broker-owned ephemeral data).
-pub const WAL_PATTERNS: &[&str] = &[
-    "*.db",
-    "*.db-wal",
-    "*.db-shm",
-];
+pub const WAL_PATTERNS: &[&str] = &["*.db", "*.db-wal", "*.db-shm"];
 
 /// Patterns for lock files (process-local, never committed).
-pub const LOCK_PATTERNS: &[&str] = &[
-    "workspace.lock",
-];
+pub const LOCK_PATTERNS: &[&str] = &["workspace.lock"];
 
 /// All required gitignore patterns combined.
 fn all_required_patterns() -> Vec<&'static str> {
@@ -100,7 +94,10 @@ pub fn check_gitignore_completeness(workspace_root: &Path) -> Result<Vec<String>
     let gitignore_path = workspace_root.join(".wh").join(".gitignore");
 
     if !gitignore_path.exists() {
-        return Ok(all_required_patterns().iter().map(|s| s.to_string()).collect());
+        return Ok(all_required_patterns()
+            .iter()
+            .map(|s| s.to_string())
+            .collect());
     }
 
     let content = std::fs::read_to_string(&gitignore_path).map_err(DeployError::FileRead)?;
@@ -243,7 +240,10 @@ mod tests {
         ensure_gitignore(dir.path()).unwrap();
 
         let content = std::fs::read_to_string(wh_dir.join(".gitignore")).unwrap();
-        assert!(content.contains("custom_dir/"), "must preserve user patterns");
+        assert!(
+            content.contains("custom_dir/"),
+            "must preserve user patterns"
+        );
         assert!(content.contains("*.db"), "must also add required patterns");
     }
 

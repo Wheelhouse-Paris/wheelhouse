@@ -7,10 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use crate::deploy::{
-    canonicalize_topology, Agent, Change, DeployError, Stream, Topology,
-};
 use crate::deploy::lint::LintedFile;
+use crate::deploy::{canonicalize_topology, Agent, Change, DeployError, Stream, Topology};
 
 /// The output of a deploy plan operation.
 ///
@@ -169,10 +167,16 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
     let mut changes = Vec::new();
 
     // Diff agents
-    let current_agents: std::collections::BTreeMap<&str, &Agent> =
-        current.agents.iter().map(|a| (a.name.as_str(), a)).collect();
-    let desired_agents: std::collections::BTreeMap<&str, &Agent> =
-        desired.agents.iter().map(|a| (a.name.as_str(), a)).collect();
+    let current_agents: std::collections::BTreeMap<&str, &Agent> = current
+        .agents
+        .iter()
+        .map(|a| (a.name.as_str(), a))
+        .collect();
+    let desired_agents: std::collections::BTreeMap<&str, &Agent> = desired
+        .agents
+        .iter()
+        .map(|a| (a.name.as_str(), a))
+        .collect();
 
     // Added agents
     for (name, agent) in &desired_agents {
@@ -237,10 +241,16 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
     }
 
     // Diff streams
-    let current_streams: std::collections::BTreeMap<&str, &Stream> =
-        current.streams.iter().map(|s| (s.name.as_str(), s)).collect();
-    let desired_streams: std::collections::BTreeMap<&str, &Stream> =
-        desired.streams.iter().map(|s| (s.name.as_str(), s)).collect();
+    let current_streams: std::collections::BTreeMap<&str, &Stream> = current
+        .streams
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
+    let desired_streams: std::collections::BTreeMap<&str, &Stream> = desired
+        .streams
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
 
     for name in desired_streams.keys() {
         if !current_streams.contains_key(name) {
@@ -328,7 +338,10 @@ pub fn plan(linted: LintedFile) -> Result<PlanOutput, DeployError> {
 ///
 /// `force_destroy_all`: if true, allows plans that would destroy all agents (CM-05).
 #[tracing::instrument(skip_all, fields(topology = %linted.topology().name))]
-pub fn plan_with_options(linted: LintedFile, force_destroy_all: bool) -> Result<PlanOutput, DeployError> {
+pub fn plan_with_options(
+    linted: LintedFile,
+    force_destroy_all: bool,
+) -> Result<PlanOutput, DeployError> {
     let desired = canonicalize_topology(linted.topology.clone());
     let workspace_root = linted
         .source_path
@@ -562,10 +575,7 @@ mod tests {
         assert_eq!(plan_output.changes().len(), 1);
         assert_eq!(plan_output.changes()[0].op, "~");
         assert_eq!(plan_output.changes()[0].component, "agent researcher");
-        assert_eq!(
-            plan_output.changes()[0].field.as_deref(),
-            Some("replicas")
-        );
+        assert_eq!(plan_output.changes()[0].field.as_deref(), Some("replicas"));
     }
 
     #[test]
@@ -719,8 +729,14 @@ mod tests {
         let err = plan(linted).unwrap_err();
         assert!(matches!(err, DeployError::PolicyViolation(_)));
         let msg = err.to_string();
-        assert!(msg.contains("self-destruct"), "error should mention self-destruct: {msg}");
-        assert!(msg.contains("--force-destroy-all"), "error should mention --force-destroy-all: {msg}");
+        assert!(
+            msg.contains("self-destruct"),
+            "error should mention self-destruct: {msg}"
+        );
+        assert!(
+            msg.contains("--force-destroy-all"),
+            "error should mention --force-destroy-all: {msg}"
+        );
     }
 
     #[test]
@@ -759,7 +775,10 @@ mod tests {
         let plan_output = plan_with_options(linted, true).unwrap();
 
         assert!(plan_output.has_changes());
-        assert!(!plan_output.warnings().is_empty(), "should have self-destruct warning");
+        assert!(
+            !plan_output.warnings().is_empty(),
+            "should have self-destruct warning"
+        );
         assert!(
             plan_output.warnings()[0].contains("destroy"),
             "warning should mention destroy: {}",
@@ -794,11 +813,26 @@ mod tests {
         };
 
         let output = format!("{plan_data}");
-        assert!(output.contains("+ agent researcher (new)"), "should show (new): {output}");
-        assert!(output.contains("+ stream main (new, provider: local)"), "should show stream with provider: {output}");
-        assert!(output.contains("2 to create"), "should show create count: {output}");
-        assert!(output.contains("0 to update"), "should show update count: {output}");
-        assert!(output.contains("0 to destroy"), "should show destroy count: {output}");
+        assert!(
+            output.contains("+ agent researcher (new)"),
+            "should show (new): {output}"
+        );
+        assert!(
+            output.contains("+ stream main (new, provider: local)"),
+            "should show stream with provider: {output}"
+        );
+        assert!(
+            output.contains("2 to create"),
+            "should show create count: {output}"
+        );
+        assert!(
+            output.contains("0 to update"),
+            "should show update count: {output}"
+        );
+        assert!(
+            output.contains("0 to destroy"),
+            "should show destroy count: {output}"
+        );
     }
 
     #[test]
@@ -813,8 +847,14 @@ mod tests {
         };
 
         let output = format!("{plan_data}");
-        assert!(output.contains("No changes"), "should show no changes: {output}");
-        assert!(output.contains("up-to-date"), "should show up-to-date: {output}");
+        assert!(
+            output.contains("No changes"),
+            "should show no changes: {output}"
+        );
+        assert!(
+            output.contains("up-to-date"),
+            "should show up-to-date: {output}"
+        );
     }
 
     #[test]
@@ -835,7 +875,13 @@ mod tests {
         };
 
         let output = format!("{plan_data}");
-        assert!(output.contains("- agent researcher (destroy)"), "should show (destroy): {output}");
-        assert!(output.contains("1 to destroy"), "should show destroy count: {output}");
+        assert!(
+            output.contains("- agent researcher (destroy)"),
+            "should show (destroy): {output}"
+        );
+        assert!(
+            output.contains("1 to destroy"),
+            "should show destroy count: {output}"
+        );
     }
 }

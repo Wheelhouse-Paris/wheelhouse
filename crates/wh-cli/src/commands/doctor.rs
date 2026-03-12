@@ -66,9 +66,18 @@ impl DoctorArgs {
             checks.push(check_secrets_in_history(&self.path));
         }
 
-        let pass_count = checks.iter().filter(|c| c.status == CheckStatus::Pass).count();
-        let warn_count = checks.iter().filter(|c| c.status == CheckStatus::Warn).count();
-        let fail_count = checks.iter().filter(|c| c.status == CheckStatus::Fail).count();
+        let pass_count = checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Pass)
+            .count();
+        let warn_count = checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Warn)
+            .count();
+        let fail_count = checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Fail)
+            .count();
 
         match self.format {
             OutputFormat::Human => {

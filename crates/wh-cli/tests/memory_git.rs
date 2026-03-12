@@ -69,7 +69,10 @@ fn write_memory_creates_git_commit_with_agent_name_and_timestamp() {
     .unwrap();
 
     // Commit should exist
-    assert!(!result.commit_hash.is_empty(), "commit hash should not be empty");
+    assert!(
+        !result.commit_hash.is_empty(),
+        "commit hash should not be empty"
+    );
 
     // Commit message should contain agent name
     let msg = last_commit_message(dir.path());
@@ -101,16 +104,13 @@ fn write_memory_creates_file_at_correct_path() {
     use wh_broker::deploy::memory::write_memory;
 
     let dir = setup_workspace();
-    write_memory(
-        dir.path(),
-        "donna",
-        "Test memory content",
-        "test reason",
-    )
-    .unwrap();
+    write_memory(dir.path(), "donna", "Test memory content", "test reason").unwrap();
 
     let memory_path = dir.path().join(".wh/agents/donna/MEMORY.md");
-    assert!(memory_path.exists(), "MEMORY.md should exist at .wh/agents/donna/MEMORY.md");
+    assert!(
+        memory_path.exists(),
+        "MEMORY.md should exist at .wh/agents/donna/MEMORY.md"
+    );
     let content = std::fs::read_to_string(&memory_path).unwrap();
     assert_eq!(content, "Test memory content");
 }
@@ -145,12 +145,15 @@ fn read_memory_returns_none_for_nonexistent_agent() {
 
     let dir = setup_workspace();
     let result = read_memory(dir.path(), "nonexistent").unwrap();
-    assert!(result.is_none(), "read_memory should return None for non-existent agent");
+    assert!(
+        result.is_none(),
+        "read_memory should return None for non-existent agent"
+    );
 }
 
 #[test]
 fn read_memory_returns_content_after_write() {
-    use wh_broker::deploy::memory::{write_memory, read_memory};
+    use wh_broker::deploy::memory::{read_memory, write_memory};
 
     let dir = setup_workspace();
     let content = "Important decision: scaled researcher from 1 to 2 replicas";
@@ -166,7 +169,7 @@ fn read_memory_returns_content_after_write() {
 
 #[test]
 fn write_memory_overwrites_existing_content() {
-    use wh_broker::deploy::memory::{write_memory, read_memory};
+    use wh_broker::deploy::memory::{read_memory, write_memory};
 
     let dir = setup_workspace();
     write_memory(dir.path(), "donna", "First entry", "first reason").unwrap();
@@ -186,7 +189,7 @@ fn write_memory_overwrites_existing_content() {
 
 #[test]
 fn append_memory_adds_entry_with_separator() {
-    use wh_broker::deploy::memory::{write_memory, append_memory, read_memory};
+    use wh_broker::deploy::memory::{append_memory, read_memory, write_memory};
 
     let dir = setup_workspace();
     write_memory(dir.path(), "donna", "First entry", "first reason").unwrap();
@@ -224,7 +227,7 @@ fn append_memory_writes_directly_when_no_existing_content() {
 
 #[test]
 fn sequential_writes_both_succeed_without_corruption() {
-    use wh_broker::deploy::memory::{write_memory, read_memory};
+    use wh_broker::deploy::memory::{read_memory, write_memory};
 
     let dir = setup_workspace();
 
@@ -263,7 +266,12 @@ fn sequential_writes_to_different_agents_both_succeed() {
     let result1 = write_memory(dir.path(), "donna", "Donna's memory", "donna reason");
     assert!(result1.is_ok(), "donna write should succeed");
 
-    let result2 = write_memory(dir.path(), "researcher", "Researcher's memory", "researcher reason");
+    let result2 = write_memory(
+        dir.path(),
+        "researcher",
+        "Researcher's memory",
+        "researcher reason",
+    );
     assert!(result2.is_ok(), "researcher write should succeed");
 
     // Both files should exist
@@ -302,8 +310,14 @@ fn commit_message_follows_attribution_format() {
     );
 
     // Body should contain Timestamp and Agent fields
-    assert!(msg.contains("Timestamp: "), "body should contain 'Timestamp: ': {msg}");
-    assert!(msg.contains("Agent: donna"), "body should contain 'Agent: donna': {msg}");
+    assert!(
+        msg.contains("Timestamp: "),
+        "body should contain 'Timestamp: ': {msg}"
+    );
+    assert!(
+        msg.contains("Agent: donna"),
+        "body should contain 'Agent: donna': {msg}"
+    );
 }
 
 // =============================================================================

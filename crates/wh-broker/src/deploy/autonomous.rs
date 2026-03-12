@@ -12,13 +12,11 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::deploy::{
-    parse_topology, Change, DeployError, ThresholdLevel, Topology,
-};
 use crate::deploy::apply;
 use crate::deploy::approval::ApprovalRequest;
 use crate::deploy::lint;
 use crate::deploy::plan;
+use crate::deploy::{parse_topology, Change, DeployError, ThresholdLevel, Topology};
 
 /// Pre-compiled regex for timeout signal pattern.
 static TIMEOUT_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -204,10 +202,7 @@ pub fn modify_topology_replicas(
         .iter_mut()
         .find(|a| a.name == agent_name)
         .ok_or_else(|| {
-            DeployError::InvalidTopology(format!(
-                "agent '{}' not found in topology",
-                agent_name
-            ))
+            DeployError::InvalidTopology(format!("agent '{}' not found in topology", agent_name))
         })?;
 
     agent.replicas = new_replicas;
@@ -329,10 +324,7 @@ pub fn should_require_approval(impact: &ImpactLevel, threshold: &Option<Threshol
 /// Returns a `ThresholdDecision` indicating whether the change can proceed
 /// autonomously or requires human approval.
 #[tracing::instrument(skip_all)]
-pub fn evaluate_threshold(
-    evaluation: &SignalEvaluation,
-    topology: &Topology,
-) -> ThresholdDecision {
+pub fn evaluate_threshold(evaluation: &SignalEvaluation, topology: &Topology) -> ThresholdDecision {
     let threshold = topology
         .guardrails
         .as_ref()
@@ -342,8 +334,15 @@ pub fn evaluate_threshold(
 
     if should_require_approval(&impact, &threshold) {
         let what = match &evaluation.proposed_change {
-            ProposedChange::ScaleAgent { agent_name, from_replicas, to_replicas } => {
-                format!("Scale agent '{}' from {} to {} replicas", agent_name, from_replicas, to_replicas)
+            ProposedChange::ScaleAgent {
+                agent_name,
+                from_replicas,
+                to_replicas,
+            } => {
+                format!(
+                    "Scale agent '{}' from {} to {} replicas",
+                    agent_name, from_replicas, to_replicas
+                )
             }
         };
         let request = ApprovalRequest {
@@ -503,7 +502,11 @@ pub fn read_own_topology(wh_path: &Path) -> Result<TopologySummary, DeployError>
     let stream_count = topology.streams.len();
 
     let agents_word = if agent_count == 1 { "agent" } else { "agents" };
-    let streams_word = if stream_count == 1 { "stream" } else { "streams" };
+    let streams_word = if stream_count == 1 {
+        "stream"
+    } else {
+        "streams"
+    };
 
     let summary = format!(
         "Topology '{}': {} {}, {} {}",
@@ -524,7 +527,10 @@ pub fn read_own_topology(wh_path: &Path) -> Result<TopologySummary, DeployError>
 /// Creates a `TopologyPublishEvent` that represents what the agent would
 /// publish as a `TextMessage` to the stream.
 #[tracing::instrument(skip_all, fields(agent_name = %agent_name))]
-pub fn publish_topology_summary(summary: &TopologySummary, agent_name: &str) -> TopologyPublishEvent {
+pub fn publish_topology_summary(
+    summary: &TopologySummary,
+    agent_name: &str,
+) -> TopologyPublishEvent {
     TopologyPublishEvent {
         agent_name: agent_name.to_string(),
         summary: summary.summary.clone(),
@@ -543,7 +549,10 @@ pub fn publish_topology_summary(summary: &TopologySummary, agent_name: &str) -> 
 ///
 /// Propagates errors from `read_own_topology()`.
 #[tracing::instrument(skip_all, fields(agent_name = %agent_name))]
-pub fn smoke_test_read_loop(wh_path: &Path, agent_name: &str) -> Result<TopologyPublishEvent, DeployError> {
+pub fn smoke_test_read_loop(
+    wh_path: &Path,
+    agent_name: &str,
+) -> Result<TopologyPublishEvent, DeployError> {
     let summary = read_own_topology(wh_path)?;
 
     tracing::info!(
@@ -634,7 +643,10 @@ mod tests {
     fn evaluate_signal_respects_guardrail() {
         let topology = make_topology(
             vec![make_agent("researcher", 1)],
-            Some(Guardrails { max_replicas: Some(1), ..Default::default() }),
+            Some(Guardrails {
+                max_replicas: Some(1),
+                ..Default::default()
+            }),
         );
         let eval = evaluate_signal("4 daily timeouts on researcher", &topology);
         assert!(eval.is_none());
@@ -823,7 +835,10 @@ mod tests {
             justification: "test".to_string(),
             confidence: ChangeConfidence::High,
         };
-        assert!(matches!(evaluate_threshold(&eval, &topology), ThresholdDecision::ProceedAutonomously));
+        assert!(matches!(
+            evaluate_threshold(&eval, &topology),
+            ThresholdDecision::ProceedAutonomously
+        ));
     }
 
     #[test]
@@ -876,7 +891,10 @@ mod tests {
             justification: "Scaling up".to_string(),
             confidence: ChangeConfidence::High,
         };
-        assert!(matches!(evaluate_threshold(&eval, &topology), ThresholdDecision::ProceedAutonomously));
+        assert!(matches!(
+            evaluate_threshold(&eval, &topology),
+            ThresholdDecision::ProceedAutonomously
+        ));
     }
 
     // =========================================================================

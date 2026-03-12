@@ -55,9 +55,7 @@ pub fn find_podman() -> Result<&'static str, DeployError> {
         }
     }
     // Try PATH as fallback — check if podman is available
-    let output = Command::new("which")
-        .arg("podman")
-        .output();
+    let output = Command::new("which").arg("podman").output();
     if let Ok(out) = output {
         if out.status.success() {
             // podman is on PATH
@@ -76,7 +74,13 @@ pub fn find_podman() -> Result<&'static str, DeployError> {
 fn sanitize_name(name: &str) -> String {
     let mut result: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     // Collapse multiple dashes
     while result.contains("--") {
@@ -111,9 +115,9 @@ fn run_podman(
     loop {
         match child.try_wait() {
             Ok(Some(_)) => {
-                return child.wait_with_output().map_err(|e| {
-                    DeployError::PodmanFailed(format!("podman process error: {e}"))
-                });
+                return child
+                    .wait_with_output()
+                    .map_err(|e| DeployError::PodmanFailed(format!("podman process error: {e}")));
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
@@ -127,7 +131,9 @@ fn run_podman(
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                return Err(DeployError::PodmanFailed(format!("podman process error: {e}")));
+                return Err(DeployError::PodmanFailed(format!(
+                    "podman process error: {e}"
+                )));
             }
         }
     }
@@ -207,7 +213,14 @@ pub fn podman_run(
     persona_path: Option<&str>,
 ) -> Result<(), DeployError> {
     let podman = find_podman()?;
-    let args = build_run_args(topology_name, agent_name, image, streams, broker_url, persona_path);
+    let args = build_run_args(
+        topology_name,
+        agent_name,
+        image,
+        streams,
+        broker_url,
+        persona_path,
+    );
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
     tracing::info!("starting agent container");
@@ -227,7 +240,11 @@ pub fn build_stop_args(container_name: &str) -> Vec<String> {
 ///
 /// Returns the argument list for force-removing a container.
 pub fn build_rm_args(container_name: &str) -> Vec<String> {
-    vec!["rm".to_string(), "-f".to_string(), container_name.to_string()]
+    vec![
+        "rm".to_string(),
+        "-f".to_string(),
+        container_name.to_string(),
+    ]
 }
 
 /// Build command arguments for `podman ps --filter`.
@@ -268,7 +285,13 @@ pub fn podman_is_running(name: &str) -> Result<bool, DeployError> {
 
     let output = run_podman(
         podman,
-        &["ps", "--filter", &format!("name={name}"), "--format", "{{.Status}}"],
+        &[
+            "ps",
+            "--filter",
+            &format!("name={name}"),
+            "--format",
+            "{{.Status}}",
+        ],
         PODMAN_CMD_TIMEOUT,
     )?;
 
@@ -472,7 +495,14 @@ mod tests {
 
     #[test]
     fn build_run_args_correct() {
-        let args = build_run_args("dev", "researcher", "researcher:latest", &["main".to_string()], None, None);
+        let args = build_run_args(
+            "dev",
+            "researcher",
+            "researcher:latest",
+            &["main".to_string()],
+            None,
+            None,
+        );
         assert_eq!(args[0], "run");
         assert_eq!(args[1], "-d");
         assert_eq!(args[2], "--name");
@@ -488,25 +518,60 @@ mod tests {
 
     #[test]
     fn build_run_args_custom_url() {
-        let args = build_run_args("dev", "donna", "donna:v1", &["events".to_string(), "logs".to_string()], Some("tcp://10.0.0.1:5555"), None);
+        let args = build_run_args(
+            "dev",
+            "donna",
+            "donna:v1",
+            &["events".to_string(), "logs".to_string()],
+            Some("tcp://10.0.0.1:5555"),
+            None,
+        );
         assert_eq!(args[5], "WH_URL=tcp://10.0.0.1:5555");
         assert_eq!(args[9], "WH_STREAMS=events,logs");
     }
 
     #[test]
     fn build_run_args_with_persona() {
-        let args = build_run_args("dev", "donna", "agent:latest", &["main".to_string()], None, Some("/workspace/agents/donna"));
+        let args = build_run_args(
+            "dev",
+            "donna",
+            "agent:latest",
+            &["main".to_string()],
+            None,
+            Some("/workspace/agents/donna"),
+        );
         // Should contain volume mount
-        let v_idx = args.iter().position(|a| a == "-v").expect("should have -v flag");
-        assert!(args[v_idx + 1].contains("/persona:ro"), "volume mount should map to /persona:ro");
+        let v_idx = args
+            .iter()
+            .position(|a| a == "-v")
+            .expect("should have -v flag");
+        assert!(
+            args[v_idx + 1].contains("/persona:ro"),
+            "volume mount should map to /persona:ro"
+        );
         // Should contain WH_PERSONA_PATH env
-        assert!(args.iter().any(|a| a == "WH_PERSONA_PATH=/persona"), "should have WH_PERSONA_PATH env var");
+        assert!(
+            args.iter().any(|a| a == "WH_PERSONA_PATH=/persona"),
+            "should have WH_PERSONA_PATH env var"
+        );
     }
 
     #[test]
     fn build_run_args_without_persona_has_no_persona_args() {
-        let args = build_run_args("dev", "researcher", "r:latest", &["main".to_string()], None, None);
-        assert!(!args.iter().any(|a| a.contains("persona") || a.contains("PERSONA")), "should not have persona args");
+        let args = build_run_args(
+            "dev",
+            "researcher",
+            "r:latest",
+            &["main".to_string()],
+            None,
+            None,
+        );
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains("persona") || a.contains("PERSONA")),
+            "should not have persona args"
+        );
     }
 
     #[test]
@@ -519,15 +584,13 @@ mod tests {
 
     #[test]
     fn provision_containers_skips_stream_changes() {
-        let changes = vec![
-            Change {
-                op: "+".to_string(),
-                component: "stream main".to_string(),
-                field: None,
-                from: None,
-                to: None,
-            },
-        ];
+        let changes = vec![Change {
+            op: "+".to_string(),
+            component: "stream main".to_string(),
+            field: None,
+            from: None,
+            to: None,
+        }];
         let result = provision_containers("dev", &changes, &[], None);
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
@@ -536,8 +599,15 @@ mod tests {
 
     #[test]
     fn apply_result_display() {
-        let result = ApplyResult { created: 1, changed: 0, destroyed: 2 };
-        assert_eq!(result.to_string(), "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed");
+        let result = ApplyResult {
+            created: 1,
+            changed: 0,
+            destroyed: 2,
+        };
+        assert_eq!(
+            result.to_string(),
+            "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed"
+        );
     }
 
     #[test]
@@ -565,15 +635,13 @@ mod tests {
     #[test]
     fn provision_containers_skips_unknown_agent() {
         // Agent "ghost" is in the change list but not in the agents vec
-        let changes = vec![
-            Change {
-                op: "+".to_string(),
-                component: "agent ghost".to_string(),
-                field: None,
-                from: None,
-                to: None,
-            },
-        ];
+        let changes = vec![Change {
+            op: "+".to_string(),
+            component: "agent ghost".to_string(),
+            field: None,
+            from: None,
+            to: None,
+        }];
         let result = provision_containers("dev", &changes, &[], None);
         // Should skip gracefully, not panic, and not increment created
         assert_eq!(result.created, 0);

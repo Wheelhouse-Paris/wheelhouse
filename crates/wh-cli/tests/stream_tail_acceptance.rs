@@ -46,7 +46,10 @@ fn stream_tail_requires_stream_name() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(!output.status.success(), "Expected failure without stream name");
+    assert!(
+        !output.status.success(),
+        "Expected failure without stream name"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("required") || stderr.contains("Usage") || stderr.contains("error"),
@@ -130,7 +133,13 @@ fn stream_tail_json_format_error_envelope() {
 #[test]
 fn stream_tail_filter_publisher_accepted() {
     let output = wh_bin()
-        .args(["stream", "tail", "main", "--filter", "publisher=researcher-2"])
+        .args([
+            "stream",
+            "tail",
+            "main",
+            "--filter",
+            "publisher=researcher-2",
+        ])
         .output()
         .expect("failed to execute wh");
 
@@ -176,7 +185,10 @@ fn stream_tail_invalid_filter_rejected() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(!output.status.success(), "Expected failure with invalid filter");
+    assert!(
+        !output.status.success(),
+        "Expected failure with invalid filter"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("Invalid filter") || stderr.contains("error") || stderr.contains("invalid"),
@@ -192,7 +204,10 @@ fn stream_tail_unknown_filter_key_rejected() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(!output.status.success(), "Expected failure with unknown filter key");
+    assert!(
+        !output.status.success(),
+        "Expected failure with unknown filter key"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("Unknown filter") || stderr.contains("error") || stderr.contains("unknown"),

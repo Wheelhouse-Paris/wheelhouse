@@ -30,7 +30,10 @@ mod tests {
         generate(Shell::Bash, &mut cmd, "wh", &mut buf);
         let output = String::from_utf8(buf).expect("valid utf8");
         assert!(!output.is_empty(), "Bash completion should produce output");
-        assert!(output.contains("wh"), "Bash completion should reference 'wh'");
+        assert!(
+            output.contains("wh"),
+            "Bash completion should reference 'wh'"
+        );
     }
 
     #[test]
@@ -65,10 +68,7 @@ mod tests {
         let shells = ["bash", "zsh", "fish", "elvish", "powershell"];
         for shell_name in &shells {
             let parsed: Result<Shell, _> = shell_name.parse();
-            assert!(
-                parsed.is_ok(),
-                "Should parse shell name: {shell_name}"
-            );
+            assert!(parsed.is_ok(), "Should parse shell name: {shell_name}");
         }
     }
 
@@ -77,7 +77,9 @@ mod tests {
         let cmd = crate::Cli::command();
         // Rendering help text should not panic
         let mut buf = Vec::new();
-        cmd.clone().write_help(&mut buf).expect("help should render");
+        cmd.clone()
+            .write_help(&mut buf)
+            .expect("help should render");
         let help = String::from_utf8(buf).expect("valid utf8");
         assert!(help.contains("wh"), "Help should mention 'wh'");
         assert!(help.contains("completion"), "Help should list 'completion'");

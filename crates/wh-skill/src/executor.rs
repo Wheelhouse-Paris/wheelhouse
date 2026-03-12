@@ -65,10 +65,7 @@ impl SkillExecutor for LocalSkillExecutor {
                 .send(SkillExecutorEvent::ProgressUpdate {
                     invocation_id: request.invocation_id.clone(),
                     progress_percent: 0.0,
-                    status_message: format!(
-                        "Skill '{}' execution started",
-                        request.skill_name
-                    ),
+                    status_message: format!("Skill '{}' execution started", request.skill_name),
                 })
                 .await;
 

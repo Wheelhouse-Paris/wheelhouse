@@ -50,7 +50,11 @@ impl std::fmt::Display for LintDiagnostic {
         if let Some(line) = self.line {
             write!(f, ":{line}")?;
         }
-        write!(f, ": {}: {} \u{2014} {}", self.level, self.message, self.hint)
+        write!(
+            f,
+            ": {}: {} \u{2014} {}",
+            self.level, self.message, self.hint
+        )
     }
 }
 
@@ -129,10 +133,7 @@ pub fn lint_file(path: &Path) -> Result<(LintResult, Option<LintedFile>), LintEr
     validate_streams(&wh_file, &filename, &mut errors, &mut warnings);
     validate_stream_references(&wh_file, &filename, &mut errors);
 
-    let result = LintResult {
-        errors,
-        warnings,
-    };
+    let result = LintResult { errors, warnings };
 
     let linted = if result.has_errors() {
         None
@@ -281,9 +282,7 @@ fn validate_streams(
                     file: filename.to_string(),
                     line: None,
                     level: DiagnosticLevel::Error,
-                    message: format!(
-                        "unsupported provider '{provider}' on {stream_label}"
-                    ),
+                    message: format!("unsupported provider '{provider}' on {stream_label}"),
                     hint: format!(
                         "use a supported provider: {}",
                         SUPPORTED_PROVIDERS.join(", ")
@@ -299,9 +298,7 @@ fn validate_streams(
                     file: filename.to_string(),
                     line: None,
                     level: DiagnosticLevel::Warning,
-                    message: format!(
-                        "stream '{name}' has no compaction cron declared"
-                    ),
+                    message: format!("stream '{name}' has no compaction cron declared"),
                     hint: "WAL will grow unbounded".to_string(),
                 });
             }
@@ -309,20 +306,11 @@ fn validate_streams(
     }
 }
 
-fn validate_stream_references(
-    wh_file: &WhFile,
-    filename: &str,
-    errors: &mut Vec<LintDiagnostic>,
-) {
+fn validate_stream_references(wh_file: &WhFile, filename: &str, errors: &mut Vec<LintDiagnostic>) {
     let declared_streams: HashSet<String> = wh_file
         .streams
         .as_ref()
-        .map(|streams| {
-            streams
-                .iter()
-                .filter_map(|s| s.name.clone())
-                .collect()
-        })
+        .map(|streams| streams.iter().filter_map(|s| s.name.clone()).collect())
         .unwrap_or_default();
 
     let agents = match &wh_file.agents {
@@ -331,10 +319,7 @@ fn validate_stream_references(
     };
 
     for agent in agents {
-        let agent_name = agent
-            .name
-            .as_deref()
-            .unwrap_or("unknown");
+        let agent_name = agent.name.as_deref().unwrap_or("unknown");
 
         if let Some(stream_refs) = &agent.streams {
             for stream_ref in stream_refs {
@@ -387,7 +372,11 @@ streams:
         );
         let (result, linted) = lint_file(f.path()).unwrap();
         assert!(!result.has_errors(), "errors: {:?}", result.errors);
-        assert!(result.warnings.is_empty(), "warnings: {:?}", result.warnings);
+        assert!(
+            result.warnings.is_empty(),
+            "warnings: {:?}",
+            result.warnings
+        );
         assert!(linted.is_some(), "LintedFile should be produced");
     }
 
@@ -407,7 +396,10 @@ streams:
         assert!(result.has_errors());
         assert!(linted.is_none());
         assert!(
-            result.errors.iter().any(|e| e.message.contains("apiVersion")),
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("apiVersion")),
             "should mention apiVersion: {:?}",
             result.errors
         );
@@ -472,15 +464,23 @@ streams:
         );
         let (result, linted) = lint_file(f.path()).unwrap();
         assert!(!result.has_errors(), "should have no errors");
-        assert!(linted.is_some(), "should produce LintedFile (warnings only)");
         assert!(
-            result.warnings.iter().any(|w| w.message.contains("compaction")
-                && w.message.contains("main")),
+            linted.is_some(),
+            "should produce LintedFile (warnings only)"
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("compaction") && w.message.contains("main")),
             "warnings: {:?}",
             result.warnings
         );
         assert!(
-            result.warnings.iter().any(|w| w.hint.contains("WAL will grow unbounded")),
+            result
+                .warnings
+                .iter()
+                .any(|w| w.hint.contains("WAL will grow unbounded")),
             "hint should mention WAL growth"
         );
     }
@@ -543,7 +543,10 @@ streams:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("duplicate")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("duplicate")));
     }
 
     #[test]
@@ -564,7 +567,10 @@ streams:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("duplicate")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("duplicate")));
     }
 
     #[test]
@@ -584,12 +590,10 @@ streams:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(
-            result
-                .errors
-                .iter()
-                .any(|e| e.message.contains("nonexistent"))
-        );
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("nonexistent")));
     }
 
     #[test]

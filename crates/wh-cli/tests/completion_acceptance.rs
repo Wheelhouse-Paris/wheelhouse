@@ -24,7 +24,10 @@ fn completion_bash_generates_script() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(output.status.success(), "Expected exit 0 for completion bash");
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for completion bash"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         !stdout.is_empty(),
@@ -45,7 +48,10 @@ fn completion_zsh_generates_script() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(output.status.success(), "Expected exit 0 for completion zsh");
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for completion zsh"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         !stdout.is_empty(),
@@ -66,7 +72,10 @@ fn completion_fish_generates_script() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(output.status.success(), "Expected exit 0 for completion fish");
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for completion fish"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         !stdout.is_empty(),
@@ -115,7 +124,10 @@ fn wh_help_works_offline() {
     // Should list known subcommands
     assert!(stdout.contains("ps"), "Expected 'ps' in help output");
     assert!(stdout.contains("logs"), "Expected 'logs' in help output");
-    assert!(stdout.contains("deploy"), "Expected 'deploy' in help output");
+    assert!(
+        stdout.contains("deploy"),
+        "Expected 'deploy' in help output"
+    );
     assert!(
         stdout.contains("completion"),
         "Expected 'completion' in help output"
@@ -181,8 +193,8 @@ fn wh_completion_help_works_offline() {
 #[test]
 fn deploy_plan_exits_zero_or_two() {
     // Use the existing fixture which is a valid .wh topology
-    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/unchanged.wh");
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unchanged.wh");
 
     let output = Command::new(env!("CARGO_BIN_EXE_wh"))
         .args(["deploy", "plan", &fixture.to_string_lossy()])

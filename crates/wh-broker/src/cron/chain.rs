@@ -11,10 +11,7 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub enum ChainEvent {
     /// Cron event received from the scheduler.
-    CronEventReceived {
-        job_name: String,
-        timestamp_ms: i64,
-    },
+    CronEventReceived { job_name: String, timestamp_ms: i64 },
     /// SkillInvocation published to the stream.
     SkillInvocationPublished {
         invocation_id: String,
@@ -36,10 +33,7 @@ pub enum ChainEvent {
         timestamp_ms: i64,
     },
     /// TextMessage published as chain summary or error report.
-    TextMessagePublished {
-        content: String,
-        timestamp_ms: i64,
-    },
+    TextMessagePublished { content: String, timestamp_ms: i64 },
 }
 
 impl ChainEvent {

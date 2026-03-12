@@ -101,10 +101,7 @@ pub struct SilenceMonitor {
 
 impl SilenceMonitor {
     /// Create a new silence monitor for the given agent configuration.
-    pub fn new(
-        config: AgentMonitorConfig,
-        alert_sender: mpsc::Sender<SilenceAlert>,
-    ) -> Self {
+    pub fn new(config: AgentMonitorConfig, alert_sender: mpsc::Sender<SilenceAlert>) -> Self {
         let epoch = tokio::time::Instant::now();
         let last_activity_ms = Arc::new(AtomicU64::new(0));
         Self {
@@ -137,10 +134,7 @@ impl SilenceMonitor {
 
         let timeout = self.config.timeout;
         // Check interval: timeout/2, minimum 10ms (for test compatibility)
-        let check_interval = std::cmp::max(
-            Duration::from_millis(10),
-            timeout / 2,
-        );
+        let check_interval = std::cmp::max(Duration::from_millis(10), timeout / 2);
 
         let mut interval = time::interval(check_interval);
         interval.tick().await; // first tick is immediate

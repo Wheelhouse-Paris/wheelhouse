@@ -38,7 +38,9 @@ fn test_all_error_codes_documented_in_errors_md() {
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../ERRORS.md"))
             .expect("ERRORS.md must exist at repo root");
 
-    let codes = ["WH-1001", "WH-2001", "WH-2002", "WH-2003", "WH-3001", "WH-4001", "WH-9001"];
+    let codes = [
+        "WH-1001", "WH-2001", "WH-2002", "WH-2003", "WH-3001", "WH-4001", "WH-9001",
+    ];
     for code in &codes {
         assert!(
             errors_md.contains(code),

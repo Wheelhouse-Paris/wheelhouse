@@ -359,4 +359,3 @@ mod tests {
         assert_eq!(profile, deserialized);
     }
 }
-

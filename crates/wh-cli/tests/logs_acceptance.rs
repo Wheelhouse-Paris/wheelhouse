@@ -46,7 +46,10 @@ fn logs_requires_agent_name() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(!output.status.success(), "Expected failure without agent name");
+    assert!(
+        !output.status.success(),
+        "Expected failure without agent name"
+    );
     // clap should produce a usage error
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -85,7 +88,10 @@ fn logs_rejects_invalid_level() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(!output.status.success(), "Expected failure for invalid level");
+    assert!(
+        !output.status.success(),
+        "Expected failure for invalid level"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("invalid") || stderr.contains("possible values"),
@@ -134,12 +140,16 @@ fn logs_json_error_envelope_no_broker() {
         String::from_utf8_lossy(&output.stdout).to_string()
     };
 
-    let parsed: serde_json::Value = serde_json::from_str(json_str.trim())
-        .unwrap_or_else(|e| panic!("Expected valid JSON error envelope, got parse error: {e}\nOutput: {json_str}"));
+    let parsed: serde_json::Value = serde_json::from_str(json_str.trim()).unwrap_or_else(|e| {
+        panic!("Expected valid JSON error envelope, got parse error: {e}\nOutput: {json_str}")
+    });
 
     assert_eq!(parsed["v"], 1, "Schema version must be 1");
     assert_eq!(parsed["status"], "error", "Status must be 'error'");
-    assert_eq!(parsed["code"], "CONNECTION_ERROR", "Error code must be CONNECTION_ERROR");
+    assert_eq!(
+        parsed["code"], "CONNECTION_ERROR",
+        "Error code must be CONNECTION_ERROR"
+    );
 }
 
 /// AC #3: `wh logs <agent> --format json` exit code is 1 on error.

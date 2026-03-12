@@ -122,8 +122,7 @@ impl WalWriter {
             Ok(count as u64)
         })
         .await
-        .map_err(|e| WalError::Database(format!("spawn_blocking join error: {e}")))?
-        ?;
+        .map_err(|e| WalError::Database(format!("spawn_blocking join error: {e}")))??;
 
         Ok(deleted)
     }
@@ -166,16 +165,12 @@ impl WalWriter {
 
         let count = tokio::task::spawn_blocking(move || -> Result<u64, WalError> {
             let conn = conn.blocking_lock();
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM wal_records",
-                [],
-                |row| row.get(0),
-            )?;
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM wal_records", [], |row| row.get(0))?;
             Ok(count as u64)
         })
         .await
-        .map_err(|e| WalError::Database(format!("spawn_blocking join error: {e}")))?
-        ?;
+        .map_err(|e| WalError::Database(format!("spawn_blocking join error: {e}")))??;
 
         Ok(count)
     }
@@ -274,11 +269,9 @@ mod tests {
         // Verify CRC in database
         let conn = writer.conn.lock().await;
         let stored_crc: i64 = conn
-            .query_row(
-                "SELECT crc32 FROM wal_records WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT crc32 FROM wal_records WHERE id = 1", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(stored_crc, expected_crc);
     }

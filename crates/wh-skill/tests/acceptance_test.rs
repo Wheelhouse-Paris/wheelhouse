@@ -282,7 +282,10 @@ async fn test_lazy_load_and_cache_hit() {
     let mut pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
 
     // Verify cache is empty before first invocation
-    assert!(pipeline.cache().is_empty(), "cache must be empty before first invocation");
+    assert!(
+        pipeline.cache().is_empty(),
+        "cache must be empty before first invocation"
+    );
 
     // First invocation — should fetch from git and populate cache
     let request1 = SkillInvocationRequest {
@@ -310,7 +313,11 @@ async fn test_lazy_load_and_cache_hit() {
     );
 
     // Cache should now have one entry
-    assert_eq!(pipeline.cache().len(), 1, "cache should have 1 entry after first invocation");
+    assert_eq!(
+        pipeline.cache().len(),
+        1,
+        "cache should have 1 entry after first invocation"
+    );
 
     // Second invocation — should use cache (same skill, same version)
     let request2 = SkillInvocationRequest {

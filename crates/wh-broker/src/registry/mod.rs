@@ -299,7 +299,16 @@ fn chrono_now_iso() -> String {
     let month_days: [i64; 12] = [
         31,
         if leap { 29 } else { 28 },
-        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
     ];
     let mut m = 0usize;
     while m < 12 && remaining_days >= month_days[m] {
@@ -338,9 +347,7 @@ mod tests {
     #[test]
     fn registers_custom_type_under_namespace() {
         let (mut registry, _dir) = test_registry();
-        let entry = registry
-            .register("biotech.MoleculeObject", None)
-            .unwrap();
+        let entry = registry.register("biotech.MoleculeObject", None).unwrap();
         assert_eq!(entry.namespace, "biotech");
         assert_eq!(entry.short_name, "MoleculeObject");
         assert_eq!(entry.type_name, "biotech.MoleculeObject");
@@ -389,12 +396,8 @@ mod tests {
     #[test]
     fn two_namespaces_same_type_name_coexist() {
         let (mut registry, _dir) = test_registry();
-        registry
-            .register("biotech.MoleculeObject", None)
-            .unwrap();
-        registry
-            .register("pharma.MoleculeObject", None)
-            .unwrap();
+        registry.register("biotech.MoleculeObject", None).unwrap();
+        registry.register("pharma.MoleculeObject", None).unwrap();
 
         assert!(registry.contains("biotech.MoleculeObject"));
         assert!(registry.contains("pharma.MoleculeObject"));

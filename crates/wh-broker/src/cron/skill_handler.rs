@@ -27,8 +27,11 @@ impl CronEventHandler for CronSkillHandler {
     #[tracing::instrument(skip_all, fields(job_name = %event.job_name, skill = %self.skill_name))]
     async fn handle(&self, event: CronEventMessage) -> Result<HandlerOutcome, CronHandlerError> {
         // Build the SkillInvocation proto from the cron event
-        let invocation =
-            proto_bridge::build_skill_invocation_from_cron(&event, &self.skill_name, &self.agent_id);
+        let invocation = proto_bridge::build_skill_invocation_from_cron(
+            &event,
+            &self.skill_name,
+            &self.agent_id,
+        );
 
         let invocation_id = invocation.invocation_id.clone();
         let skill_name = invocation.skill_name.clone();
@@ -72,7 +75,10 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: HashMap::new(),
             target_stream: "test-stream".into(),
         };
@@ -108,7 +114,10 @@ mod tests {
             job_name: "echo-cron".into(),
             action: "event".into(),
             schedule: "* * * * *".into(),
-            triggered_at: prost_types::Timestamp { seconds: 0, nanos: 0 },
+            triggered_at: prost_types::Timestamp {
+                seconds: 0,
+                nanos: 0,
+            },
             payload: [("input".into(), "hello world".into())]
                 .into_iter()
                 .collect(),

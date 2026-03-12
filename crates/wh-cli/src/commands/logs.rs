@@ -414,10 +414,16 @@ mod tests {
 
     #[test]
     fn test_log_level_serialization_uppercase() {
-        assert_eq!(serde_json::to_string(&LogLevel::Debug).unwrap(), "\"DEBUG\"");
+        assert_eq!(
+            serde_json::to_string(&LogLevel::Debug).unwrap(),
+            "\"DEBUG\""
+        );
         assert_eq!(serde_json::to_string(&LogLevel::Info).unwrap(), "\"INFO\"");
         assert_eq!(serde_json::to_string(&LogLevel::Warn).unwrap(), "\"WARN\"");
-        assert_eq!(serde_json::to_string(&LogLevel::Error).unwrap(), "\"ERROR\"");
+        assert_eq!(
+            serde_json::to_string(&LogLevel::Error).unwrap(),
+            "\"ERROR\""
+        );
     }
 
     // ============================================================
