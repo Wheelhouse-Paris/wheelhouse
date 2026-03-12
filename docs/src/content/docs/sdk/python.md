@@ -15,6 +15,73 @@ pip install wheelhouse-sdk
 uv add wheelhouse-sdk
 ```
 
+## Quick start — four examples
+
+These four examples cover the full SDK surface. Each is self-contained and copy-pasteable.
+
+```python
+# 1. Define a type — no broker needed
+import wheelhouse
+from dataclasses import dataclass
+
+@wheelhouse.register_type("myapp.Greeting")
+@dataclass
+class Greeting:
+    text: str = ""
+
+msg = Greeting(text="hello")
+print(msg)  # Greeting(text='hello')
+```
+
+```python
+# 2. Connect and publish — broker required
+import asyncio, wheelhouse
+from wheelhouse.types import TextMessage
+
+async def main():
+    async with await wheelhouse.connect() as conn:
+        await conn.publish("main", TextMessage(content="hello"))
+
+asyncio.run(main())
+```
+
+```python
+# 3. Test without a broker — works in CI without Podman or ZMQ
+import asyncio, wheelhouse
+from wheelhouse.types import TextMessage
+
+async def main():
+    conn = await wheelhouse.connect(mock=True)
+    received = []
+
+    async def handler(msg):
+        received.append(msg)
+
+    await conn.subscribe("main", handler)
+    await conn.publish("main", TextMessage(content="hello"))
+    assert received[0].content == "hello"
+
+asyncio.run(main())
+```
+
+```python
+# 4. Error handling — catch by type, not by string
+from wheelhouse.errors import PublishTimeout
+import wheelhouse
+
+async def main():
+    async with await wheelhouse.connect() as conn:
+        try:
+            await conn.publish_confirmed("main", TextMessage(content="hi"), timeout=5.0)
+        except PublishTimeout:
+            # handle timeout — retry or publish to an error stream
+            pass
+
+asyncio.run(main())
+```
+
+---
+
 ## Connecting
 
 All SDK operations require a connection. The `connect()` function is async and returns a `Connection` object:

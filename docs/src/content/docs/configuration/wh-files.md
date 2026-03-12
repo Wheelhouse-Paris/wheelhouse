@@ -8,22 +8,29 @@ A `.wh` file is a declarative YAML topology definition — the Dockerfile of age
 ## Structure
 
 ```yaml
+# topology.wh — minimal working example
 apiVersion: wheelhouse.dev/v1
-name: <topology-name>
 
+# Streams are the typed message bus connecting all components.
+# Each stream is an append log; objects are retained for the specified duration.
 streams:
-  - name: <stream-name>
-    retention: <duration>    # e.g. "7d", "30d" (optional)
+  - name: main
+    retention: "30d"    # optional duration string; omit to keep forever
+                        # a stream without a compaction cron generates a lint warning
 
+# Agents subscribe to streams, make decisions, and publish results.
+# They can also modify this file autonomously via wh deploy apply.
 agents:
-  - name: <agent-name>
-    image: <container-image>
-    replicas: <n>            # default: 1
-    streams: [<stream-names>]
-    persona: <path-to-persona-dir>  # e.g. agents/donna/
+  - name: donna
+    image: ghcr.io/wheelhouse-paris/agent-claude:latest
+    replicas: 1                 # default: 1
+    streams: [main]             # list of streams this agent subscribes to
+    persona: agents/donna/      # optional: path to SOUL.md / IDENTITY.md / MEMORY.md
 
+# Guardrails live here, not on individual agents.
+# This separation ensures agents cannot modify their own constraints.
 guardrails:
-  max_replicas: <n>          # caps replicas across all agents in this topology
+  max_replicas: 2    # topology-wide cap — deployment blocked if any agent exceeds this
 ```
 
 ## Operator safety policy

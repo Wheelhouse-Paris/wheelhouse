@@ -1,12 +1,36 @@
-/* Wheelhouse custom theme */
+/* Wheelhouse brand theme — The Wheelhouse Paris brand book */
+/* Palette: Ardoise #2A323E · Pierre Calcaire #F2EDE4 · Cuivre Ferronnerie #B28264 */
+
+/* Light mode — warm cream + copper */
 :root {
-  --sl-color-accent-low: #1a2744;
-  --sl-color-accent: #3b6fd4;
-  --sl-color-accent-high: #93b4f0;
+  --sl-color-accent-low: #ead9cc;
+  --sl-color-accent: #8B6347;     /* darkened copper — 4.6:1 on cream (WCAG AA) */
+  --sl-color-accent-high: #6b4930;
+  --sl-color-bg: #F2EDE4;         /* Pierre Calcaire */
+  --sl-color-bg-nav: #2A323E;     /* Ardoise — nav always dark */
+  --sl-color-bg-sidebar: #2A323E;
+  --sl-color-text-nav: #f0ede8;
+  --sl-color-text-sidebar: #e8e4de;
 }
 
+/* Dark mode — ardoise dark + copper */
 :root[data-theme='dark'] {
-  --sl-color-accent-low: #0d1a33;
-  --sl-color-accent: #5585e0;
-  --sl-color-accent-high: #b3ccf7;
+  --sl-color-accent-low: #4a2e1e;
+  --sl-color-accent: #B28264;     /* Cuivre Ferronnerie */
+  --sl-color-accent-high: #d4a88a;
+  --sl-color-bg: #1e252e;         /* darker than Ardoise for contrast */
+  --sl-color-bg-nav: #2A323E;     /* Ardoise */
+  --sl-color-bg-sidebar: #232b35;
+}
+
+/* Copper underline on h2 section titles */
+.sl-markdown-content h2 {
+  border-bottom: 2px solid var(--sl-color-accent);
+  padding-bottom: 0.25rem;
+}
+
+/* Code blocks — slightly darker than page bg */
+:root[data-theme='dark'] .sl-markdown-content pre {
+  background-color: #141d27;
+  border: 1px solid rgba(255, 255, 255, 0.07);
 }
