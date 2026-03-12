@@ -26,3 +26,4 @@ tracing-subscriber = { version = "0.3", features = ["json"] }
 clap = { version = "4", features = ["derive"] }
 prost = "0.13"
 zeromq = "0.4"
+tokio-util = { version = "0.7", features = ["time"] }

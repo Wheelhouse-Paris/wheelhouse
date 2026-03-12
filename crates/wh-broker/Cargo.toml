@@ -3,3 +3,14 @@ name = "wh-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util", "macros"] }
