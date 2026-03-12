@@ -95,6 +95,8 @@ mod tests {
             content: "hello world".to_string(),
             publisher_id: "test-pub".to_string(),
             timestamp_ms: 1710000000000,
+            user_id: String::new(),
+            reply_to_user_id: String::new(),
         };
         let encoded = original.encode_to_vec();
         let decoded = TextMessage::decode(encoded.as_slice()).unwrap();

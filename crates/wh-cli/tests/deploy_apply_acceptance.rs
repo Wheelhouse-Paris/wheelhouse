@@ -177,6 +177,7 @@ fn podman_module_builds_correct_run_command() {
         "researcher:latest",
         &["main".to_string()],
         None,
+        None,
     );
 
     assert_eq!(args[0], "run");

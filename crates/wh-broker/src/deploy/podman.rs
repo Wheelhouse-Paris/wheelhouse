@@ -153,18 +153,21 @@ fn run_podman_checked(
 /// Build command arguments for `podman run`.
 ///
 /// Returns the argument list (without the "podman" binary itself).
+/// When `persona_path` is provided, adds a read-only volume mount and
+/// `WH_PERSONA_PATH` environment variable for persona files.
 pub fn build_run_args(
     topology_name: &str,
     agent_name: &str,
     image: &str,
     streams: &[String],
     broker_url: Option<&str>,
+    persona_path: Option<&str>,
 ) -> Vec<String> {
     let name = container_name(topology_name, agent_name);
     let url = broker_url.unwrap_or(DEFAULT_BROKER_URL);
     let streams_csv = streams.join(",");
 
-    vec![
+    let mut args = vec![
         "run".to_string(),
         "-d".to_string(),
         "--name".to_string(),
@@ -175,13 +178,24 @@ pub fn build_run_args(
         format!("WH_AGENT_NAME={agent_name}"),
         "-e".to_string(),
         format!("WH_STREAMS={streams_csv}"),
-        image.to_string(),
-    ]
+    ];
+
+    // Add persona volume mount and env var when configured
+    if let Some(path) = persona_path {
+        args.push("-v".to_string());
+        args.push(format!("{path}:/persona:ro"));
+        args.push("-e".to_string());
+        args.push("WH_PERSONA_PATH=/persona".to_string());
+    }
+
+    args.push(image.to_string());
+    args
 }
 
 /// Start an agent container via Podman.
 ///
 /// Uses `podman run -d` with the appropriate environment variables.
+/// When `persona_path` is provided, mounts persona files read-only.
 /// Timeout: 120s (image pull may be slow on first run).
 #[tracing::instrument(skip_all, fields(agent = agent_name, topology = topology_name))]
 pub fn podman_run(
@@ -190,9 +204,10 @@ pub fn podman_run(
     image: &str,
     streams: &[String],
     broker_url: Option<&str>,
+    persona_path: Option<&str>,
 ) -> Result<(), DeployError> {
     let podman = find_podman()?;
-    let args = build_run_args(topology_name, agent_name, image, streams, broker_url);
+    let args = build_run_args(topology_name, agent_name, image, streams, broker_url, persona_path);
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
     tracing::info!("starting agent container");
@@ -266,11 +281,32 @@ fn parse_agent_name(component: &str) -> Option<&str> {
     component.strip_prefix("agent ")
 }
 
+/// Resolve an agent's persona path to an absolute path for volume mounting.
+///
+/// Returns `None` if the agent has no persona configured or if workspace_root
+/// is not available.
+fn resolve_persona_path(
+    agent: &crate::deploy::Agent,
+    workspace_root: Option<&std::path::Path>,
+) -> Option<String> {
+    match (&agent.persona, workspace_root) {
+        (Some(persona_rel), Some(ws_root)) => {
+            let abs_path = ws_root.join(persona_rel);
+            Some(abs_path.to_string_lossy().to_string())
+        }
+        _ => None,
+    }
+}
+
 /// Provision containers based on plan changes.
 ///
 /// Iterates over changes and starts/stops containers as needed.
 /// Stream changes are no-ops (local provider, handled by broker).
 /// Returns an `ApplyResult` with change counts.
+///
+/// When an agent has a `persona` path configured, persona files are
+/// validated before container startup and MEMORY.md is initialized
+/// if missing (FR61). The persona directory is volume-mounted read-only.
 ///
 /// On container failure, logs the error but does NOT fail the entire apply.
 /// The git commit is already done; the operator can retry `apply` (idempotent).
@@ -279,6 +315,7 @@ pub fn provision_containers(
     topology_name: &str,
     changes: &[Change],
     agents: &[crate::deploy::Agent],
+    workspace_root: Option<&std::path::Path>,
 ) -> ApplyResult {
     let mut result = ApplyResult {
         created: 0,
@@ -303,12 +340,32 @@ pub fn provision_containers(
                     );
                     continue;
                 };
+
+                // Resolve persona path for volume mount (FR61)
+                let persona_abs = resolve_persona_path(agent, workspace_root);
+
+                // Validate persona files before starting container (FR61)
+                // SOUL.md and IDENTITY.md are required — fail if missing
+                if let Some(ref persona_rel) = agent.persona {
+                    if let Some(ws_root) = workspace_root {
+                        if let Err(e) = crate::deploy::persona::load_persona(ws_root, persona_rel) {
+                            tracing::error!(
+                                agent = %agent.name,
+                                error = %e,
+                                "persona validation failed — skipping container creation"
+                            );
+                            continue;
+                        }
+                    }
+                }
+
                 match podman_run(
                     topology_name,
                     &agent.name,
                     &agent.image,
                     &agent.streams,
                     None,
+                    persona_abs.as_deref(),
                 ) {
                     Ok(()) => result.created += 1,
                     Err(e) => {
@@ -343,6 +400,24 @@ pub fn provision_containers(
                     );
                     continue;
                 };
+                // Resolve persona path for volume mount (FR61)
+                let persona_abs = resolve_persona_path(agent, workspace_root);
+
+                // Validate persona files before restarting container (FR61)
+                // SOUL.md and IDENTITY.md are required — fail if missing
+                if let Some(ref persona_rel) = agent.persona {
+                    if let Some(ws_root) = workspace_root {
+                        if let Err(e) = crate::deploy::persona::load_persona(ws_root, persona_rel) {
+                            tracing::error!(
+                                agent = %agent.name,
+                                error = %e,
+                                "persona validation failed — skipping container restart"
+                            );
+                            continue;
+                        }
+                    }
+                }
+
                 // Stop old
                 let _ = podman_stop(&name);
                 // Start new
@@ -352,6 +427,7 @@ pub fn provision_containers(
                     &agent.image,
                     &agent.streams,
                     None,
+                    persona_abs.as_deref(),
                 ) {
                     Ok(()) => result.changed += 1,
                     Err(e) => {
@@ -396,7 +472,7 @@ mod tests {
 
     #[test]
     fn build_run_args_correct() {
-        let args = build_run_args("dev", "researcher", "researcher:latest", &["main".to_string()], None);
+        let args = build_run_args("dev", "researcher", "researcher:latest", &["main".to_string()], None, None);
         assert_eq!(args[0], "run");
         assert_eq!(args[1], "-d");
         assert_eq!(args[2], "--name");
@@ -412,9 +488,25 @@ mod tests {
 
     #[test]
     fn build_run_args_custom_url() {
-        let args = build_run_args("dev", "donna", "donna:v1", &["events".to_string(), "logs".to_string()], Some("tcp://10.0.0.1:5555"));
+        let args = build_run_args("dev", "donna", "donna:v1", &["events".to_string(), "logs".to_string()], Some("tcp://10.0.0.1:5555"), None);
         assert_eq!(args[5], "WH_URL=tcp://10.0.0.1:5555");
         assert_eq!(args[9], "WH_STREAMS=events,logs");
+    }
+
+    #[test]
+    fn build_run_args_with_persona() {
+        let args = build_run_args("dev", "donna", "agent:latest", &["main".to_string()], None, Some("/workspace/agents/donna"));
+        // Should contain volume mount
+        let v_idx = args.iter().position(|a| a == "-v").expect("should have -v flag");
+        assert!(args[v_idx + 1].contains("/persona:ro"), "volume mount should map to /persona:ro");
+        // Should contain WH_PERSONA_PATH env
+        assert!(args.iter().any(|a| a == "WH_PERSONA_PATH=/persona"), "should have WH_PERSONA_PATH env var");
+    }
+
+    #[test]
+    fn build_run_args_without_persona_has_no_persona_args() {
+        let args = build_run_args("dev", "researcher", "r:latest", &["main".to_string()], None, None);
+        assert!(!args.iter().any(|a| a.contains("persona") || a.contains("PERSONA")), "should not have persona args");
     }
 
     #[test]
@@ -436,7 +528,7 @@ mod tests {
                 to: None,
             },
         ];
-        let result = provision_containers("dev", &changes, &[]);
+        let result = provision_containers("dev", &changes, &[], None);
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
         assert_eq!(result.destroyed, 0);
@@ -482,7 +574,7 @@ mod tests {
                 to: None,
             },
         ];
-        let result = provision_containers("dev", &changes, &[]);
+        let result = provision_containers("dev", &changes, &[], None);
         // Should skip gracefully, not panic, and not increment created
         assert_eq!(result.created, 0);
     }

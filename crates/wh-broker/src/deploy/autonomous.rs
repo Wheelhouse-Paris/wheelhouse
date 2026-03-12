@@ -306,6 +306,7 @@ mod tests {
             image: format!("{name}:latest"),
             replicas,
             streams: vec![],
+            persona: None,
         }
     }
 
