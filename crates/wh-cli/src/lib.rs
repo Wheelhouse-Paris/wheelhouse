@@ -28,7 +28,7 @@ use output::OutputFormat;
 ///
 /// Unified control plane for operators and agents.
 #[derive(Debug, Parser)]
-#[command(name = "wh", version, about)]
+#[command(name = "wh", version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("WH_GIT_HASH"), ", ", env!("WH_TARGET_TRIPLE"), ")"), about)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
