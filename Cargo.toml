@@ -25,4 +25,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 clap = { version = "4", features = ["derive"] }
 prost = "0.13"
+serde_json = "1"
 zeromq = "0.4"
