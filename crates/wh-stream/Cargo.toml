@@ -3,3 +3,8 @@ name = "wh-stream"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wheelhouse stream abstraction layer"
+
+[dependencies]
+wh-proto = { workspace = true }
+prost = { workspace = true }

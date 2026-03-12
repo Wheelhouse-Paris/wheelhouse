@@ -1,0 +1,4 @@
+# Generated protobuf files — never committed (FP-02)
+# Regenerate with: make proto-python
+*.py
+!__init__.py

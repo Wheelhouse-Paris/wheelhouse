@@ -3,3 +3,16 @@ name = "wh-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Wheelhouse message broker — ZMQ XPUB/XSUB routing and stream persistence"
+
+[[bin]]
+name = "wh-broker"
+path = "src/main.rs"
+
+[dependencies]
+wh-proto = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+prost = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
