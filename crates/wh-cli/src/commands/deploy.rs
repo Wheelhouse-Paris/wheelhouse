@@ -32,6 +32,9 @@ pub enum DeployCommand {
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
+        /// Allow plans that would destroy all agents (self-destruct safety override, CM-05)
+        #[arg(long)]
+        force_destroy_all: bool,
     },
     /// Apply a topology, optionally without prompting
     Apply {
@@ -54,7 +57,7 @@ impl DeployCommand {
     pub fn execute(self) -> i32 {
         match self {
             DeployCommand::Lint { file, format } => execute_lint(&file, format),
-            DeployCommand::Plan { file, format } => execute_plan(&file, format),
+            DeployCommand::Plan { file, format, force_destroy_all } => execute_plan(&file, format, force_destroy_all),
             DeployCommand::Apply { file, yes, format, agent_name } => {
                 execute_apply(&file, yes, format, agent_name.as_deref())
             }
@@ -62,7 +65,7 @@ impl DeployCommand {
     }
 }
 
-fn execute_lint(file: &PathBuf, format: OutputFormat) -> i32 {
+fn execute_lint(file: &std::path::Path, format: OutputFormat) -> i32 {
     let (result, _linted) = match lint_engine::lint_file(file) {
         Ok(r) => r,
         Err(LintError::FileReadError(e)) => {
@@ -125,7 +128,7 @@ fn execute_lint(file: &PathBuf, format: OutputFormat) -> i32 {
     if result.has_errors() { error::EXIT_ERROR } else { error::EXIT_SUCCESS }
 }
 
-fn execute_plan(file: &PathBuf, format: OutputFormat) -> i32 {
+fn execute_plan(file: &PathBuf, format: OutputFormat, force_destroy_all: bool) -> i32 {
     let linted = match lint::lint(file) {
         Ok(l) => l,
         Err(e) => {
@@ -135,7 +138,7 @@ fn execute_plan(file: &PathBuf, format: OutputFormat) -> i32 {
         }
     };
 
-    let plan_output = match plan::plan(linted) {
+    let plan_output = match plan::plan_with_options(linted, force_destroy_all) {
         Ok(p) => p,
         Err(e) => {
             let msg = output::format_error(e.code(), &e.to_string(), format);

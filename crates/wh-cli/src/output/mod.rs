@@ -43,7 +43,7 @@ pub fn format_message(msg: &SurfaceMessage, format: OutputFormat) -> String {
             };
             let envelope = OutputEnvelope::ok(data);
             serde_json::to_string(&envelope).unwrap_or_else(|_| {
-                format!("{{\"v\":1,\"status\":\"error\",\"code\":\"SERIALIZATION_ERROR\",\"message\":\"failed\"}}")
+                "{\"v\":1,\"status\":\"error\",\"code\":\"SERIALIZATION_ERROR\",\"message\":\"failed\"}".to_string()
             })
         }
     }
