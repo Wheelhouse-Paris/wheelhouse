@@ -111,5 +111,9 @@ async fn main() {
         Commands::Completion(args) => {
             completion::execute(&args);
         }
+        Commands::Doctor(args) => {
+            let exit_code = args.execute();
+            std::process::exit(exit_code);
+        }
     }
 }
