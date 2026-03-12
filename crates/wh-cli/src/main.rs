@@ -5,6 +5,7 @@
 
 use clap::{Parser, Subcommand};
 
+use wh_cli::commands::deploy::DeployCommand;
 use wh_cli::commands::ps::{self, PsArgs};
 use wh_cli::commands::secrets::SecretsCmd;
 use wh_cli::output::{OutputEnvelope, OutputFormat};
@@ -28,37 +29,60 @@ enum Commands {
         #[command(subcommand)]
         cmd: SecretsCmd,
     },
+    /// Manage topology deployment.
+    Deploy {
+        #[command(subcommand)]
+        command: DeployCommand,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
 
-    let (result, format) = match cli.command {
+    match cli.command {
         Commands::Ps(args) => {
             let fmt = args.format;
-            (ps::execute(&args).map_err(|e| Box::new(e) as Box<dyn std::error::Error>), fmt)
+            let result = ps::execute(&args).map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+            if let Err(e) = result {
+                match fmt {
+                    OutputFormat::Json => {
+                        let envelope = OutputEnvelope::<()>::error("ERROR", e.to_string());
+                        if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                            eprintln!("{json}");
+                        } else {
+                            eprintln!("Error: {e}");
+                        }
+                    }
+                    OutputFormat::Human => {
+                        eprintln!("Error: {e}");
+                    }
+                }
+                std::process::exit(1);
+            }
         }
         Commands::Secrets { cmd } => {
             let fmt = cmd.format();
-            (cmd.run().map_err(|e| Box::new(e) as Box<dyn std::error::Error>), fmt)
-        }
-    };
-
-    if let Err(e) = result {
-        let exit_code = 1i32;
-        match format {
-            OutputFormat::Json => {
-                let envelope = OutputEnvelope::<()>::error("ERROR", e.to_string());
-                if let Ok(json) = serde_json::to_string_pretty(&envelope) {
-                    eprintln!("{json}");
-                } else {
-                    eprintln!("Error: {e}");
+            let result = cmd.run().map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+            if let Err(e) = result {
+                match fmt {
+                    OutputFormat::Json => {
+                        let envelope = OutputEnvelope::<()>::error("ERROR", e.to_string());
+                        if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                            eprintln!("{json}");
+                        } else {
+                            eprintln!("Error: {e}");
+                        }
+                    }
+                    OutputFormat::Human => {
+                        eprintln!("Error: {e}");
+                    }
                 }
-            }
-            OutputFormat::Human => {
-                eprintln!("Error: {e}");
+                std::process::exit(1);
             }
         }
-        std::process::exit(exit_code);
+        Commands::Deploy { command } => {
+            let exit_code = command.execute();
+            std::process::exit(exit_code);
+        }
     }
 }

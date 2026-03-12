@@ -4,4 +4,5 @@
 //! and cron scheduler.
 
 pub mod control;
+pub mod deploy;
 pub mod registry;

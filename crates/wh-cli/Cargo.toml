@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 wh-proto = { workspace = true }
+wh-broker = { path = "../wh-broker" }
 tokio = { workspace = true, features = ["rt", "macros"] }
 clap = { workspace = true }
 prost = { workspace = true }
@@ -26,3 +27,4 @@ console = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+tempfile = { workspace = true }

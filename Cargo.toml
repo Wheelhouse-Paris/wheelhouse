@@ -33,6 +33,7 @@ console = "0.15"
 prost = "0.13"
 zeromq = "0.4"
 git2 = "0.19"
+sha2 = "0.10"
 tempfile = "3"
 
 # Proto build

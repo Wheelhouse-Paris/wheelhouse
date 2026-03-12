@@ -2,7 +2,15 @@
 //!
 //! Typed errors using `thiserror`. `anyhow` is never used in library modules (SCV-04).
 //! User-facing messages never mention "broker", "connection refused", or port numbers (RT-B1).
+//!
+//! Exit codes (ADR-014):
+//! - 0: success
+//! - 1: error
+//! - 2: plan change detected
 
+use wh_broker::deploy::DeployError;
+
+/// CLI exit codes per ADR-014.
 pub const EXIT_SUCCESS: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
 pub const EXIT_PLAN_CHANGE: i32 = 2;
@@ -52,4 +60,14 @@ impl WhError {
     pub fn exit_code(&self) -> i32 {
         EXIT_ERROR
     }
+}
+
+/// Map a DeployError to its error code string.
+pub fn deploy_error_code(err: &DeployError) -> &'static str {
+    err.code()
+}
+
+/// Map a DeployError to its exit code.
+pub fn exit_code_for_deploy_error(_err: &DeployError) -> i32 {
+    EXIT_ERROR
 }
