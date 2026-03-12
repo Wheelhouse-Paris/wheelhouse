@@ -1,0 +1,11 @@
+api_version: wheelhouse.dev/v1
+name: dev
+streams:
+  - name: main
+    retention: 7d
+agents:
+  - name: researcher
+    streams:
+      - main
+    image: researcher:latest
+    replicas: 2
