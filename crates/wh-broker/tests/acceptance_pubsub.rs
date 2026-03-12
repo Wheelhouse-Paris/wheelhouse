@@ -83,6 +83,8 @@ fn build_text_envelope(stream: &str, content: &str, publisher: &str) -> Vec<u8> 
         content: content.to_string(),
         publisher_id: publisher.to_string(),
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        user_id: String::new(),
+        reply_to_user_id: String::new(),
     };
     let envelope = StreamEnvelope {
         stream_name: stream.to_string(),

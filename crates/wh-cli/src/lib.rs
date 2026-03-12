@@ -8,6 +8,7 @@ pub mod commands;
 pub mod lint;
 pub mod model;
 pub mod output;
+pub mod reconnect;
 
 use clap::{Parser, Subcommand};
 

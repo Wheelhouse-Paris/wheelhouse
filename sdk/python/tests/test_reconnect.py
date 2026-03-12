@@ -1,13 +1,14 @@
-"""Acceptance tests for auto-reconnect — AC #4.
+"""Acceptance tests for auto-reconnect — Story 1.5.
 
-Unit tests verifying reconnect backoff logic without a running broker.
+Unit tests verifying reconnect backoff logic and connection event callbacks
+without a running Wheelhouse instance.
 """
 
 import pytest
 
 
 class TestAutoReconnect:
-    """AC #4: automatic reconnect with exponential backoff."""
+    """AC #1, #3: automatic reconnect with exponential backoff."""
 
     def test_reconnect_capability_exists(self):
         """Given the Connection class,
@@ -74,3 +75,113 @@ class TestAutoReconnect:
         conn.register_type("TextMessage", TextMessage)
         assert "TextMessage" in conn._instance_types
         assert conn._instance_types["TextMessage"] is TextMessage
+
+
+class TestConnectionEventCallback:
+    """AC #3: Connection events surfaced to callback (CM-02)."""
+
+    def test_connection_accepts_on_connection_event_callback(self):
+        """Given a Connection,
+        When on_connection_event callback is provided,
+        Then the connection stores it for use during reconnect.
+        """
+        from wheelhouse._core import Connection
+
+        events = []
+        conn = Connection(
+            "tcp://127.0.0.1:5555",
+            on_connection_event=lambda e: events.append(e),
+        )
+        assert conn._on_connection_event is not None
+
+    def test_connection_default_callback_is_none(self):
+        """Given a Connection without callback,
+        Then _on_connection_event is None.
+        """
+        from wheelhouse._core import Connection
+
+        conn = Connection("tcp://127.0.0.1:5555")
+        assert conn._on_connection_event is None
+
+    def test_fire_connection_event_invokes_callback(self):
+        """Given a Connection with callback,
+        When _fire_connection_event is called,
+        Then the callback receives the event dict.
+        """
+        from wheelhouse._core import Connection
+
+        events = []
+        conn = Connection(
+            "tcp://127.0.0.1:5555",
+            on_connection_event=lambda e: events.append(e),
+        )
+        conn._fire_connection_event("disconnected", reason="test")
+
+        assert len(events) == 1
+        assert events[0]["type"] == "disconnected"
+        assert events[0]["reason"] == "test"
+
+    def test_fire_connection_event_reconnecting(self):
+        """Given a callback,
+        When reconnecting event fires,
+        Then it contains the attempt number.
+        """
+        from wheelhouse._core import Connection
+
+        events = []
+        conn = Connection(
+            "tcp://127.0.0.1:5555",
+            on_connection_event=lambda e: events.append(e),
+        )
+        conn._fire_connection_event("reconnecting", attempt=3)
+
+        assert events[0]["type"] == "reconnecting"
+        assert events[0]["attempt"] == 3
+
+    def test_fire_connection_event_reconnect_failed(self):
+        """Given a callback,
+        When reconnect_failed event fires,
+        Then it contains attempts count and error.
+        """
+        from wheelhouse._core import Connection
+
+        events = []
+        conn = Connection(
+            "tcp://127.0.0.1:5555",
+            on_connection_event=lambda e: events.append(e),
+        )
+        conn._fire_connection_event(
+            "reconnect_failed", attempts=5, last_error="timeout"
+        )
+
+        assert events[0]["type"] == "reconnect_failed"
+        assert events[0]["attempts"] == 5
+        assert events[0]["last_error"] == "timeout"
+
+    def test_fire_connection_event_no_callback_no_error(self):
+        """Given a Connection without callback,
+        When _fire_connection_event is called,
+        Then no error is raised.
+        """
+        from wheelhouse._core import Connection
+
+        conn = Connection("tcp://127.0.0.1:5555")
+        # Should not raise
+        conn._fire_connection_event("disconnected", reason="test")
+
+    def test_callback_error_is_swallowed(self):
+        """Given a callback that raises an exception,
+        When _fire_connection_event is called,
+        Then the exception is caught and logged (not propagated).
+        """
+        from wheelhouse._core import Connection
+
+        def bad_callback(event):
+            raise ValueError("callback error")
+
+        conn = Connection(
+            "tcp://127.0.0.1:5555",
+            on_connection_event=bad_callback,
+        )
+        # Should not raise
+        conn._fire_connection_event("disconnected", reason="test")

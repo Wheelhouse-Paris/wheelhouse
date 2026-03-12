@@ -30,6 +30,8 @@ keyring = { workspace = true }
 dialoguer = { workspace = true }
 console = { workspace = true }
 uuid = { workspace = true }
+rand = { workspace = true }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

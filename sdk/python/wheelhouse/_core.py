@@ -158,7 +158,11 @@ class Connection:
     Supports async context manager pattern for automatic cleanup.
     """
 
-    def __init__(self, endpoint: str) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        on_connection_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self._endpoint = endpoint
         self._ctx: zmq.asyncio.Context | None = None
         self._pub_socket: zmq.asyncio.Socket | None = None
@@ -168,6 +172,20 @@ class Connection:
         self._connected = False
         self._listener_task: asyncio.Task[None] | None = None
         self._closing = False
+        self._on_connection_event = on_connection_event
+
+    def _fire_connection_event(self, event_type: str, **kwargs: Any) -> None:
+        """Fire a connection event to the registered callback (CM-02).
+
+        Event types: "disconnected", "reconnecting", "reconnected", "reconnect_failed".
+        User-facing text avoids "broker" (RT-B1).
+        """
+        if self._on_connection_event is not None:
+            event = {"type": event_type, **kwargs}
+            try:
+                self._on_connection_event(event)
+            except Exception:
+                logger.exception("Connection event callback error")
 
     async def _connect(self) -> None:
         """Establish ZMQ connections to Wheelhouse.
@@ -329,9 +347,12 @@ class Connection:
                                 )
             except asyncio.TimeoutError:
                 continue
-            except zmq.ZMQError:
+            except zmq.ZMQError as exc:
                 if not self._closing:
                     logger.warning("ZMQ error in listener, attempting reconnect")
+                    self._fire_connection_event(
+                        "disconnected", reason=f"Connection lost: {exc}"
+                    )
                     await self._reconnect()
                 break
             except Exception:
@@ -365,16 +386,21 @@ class Connection:
         """Reconnect with exponential backoff (ADR-011).
 
         Re-registers custom types before resuming subscriptions (CM-07).
+        Fires connection events at each state transition (CM-02).
         """
         attempt = 0
         saved_subscriptions = dict(self._subscriptions)
         saved_instance_types = dict(self._instance_types)
 
         while not self._closing:
-            delay = _calculate_backoff(attempt)
+            attempt += 1
+            delay = _calculate_backoff(attempt - 1)
+
+            self._fire_connection_event("reconnecting", attempt=attempt)
+
             logger.info(
                 "Reconnecting to Wheelhouse (attempt %d, delay %.1fs)",
-                attempt + 1,
+                attempt,
                 delay,
             )
             await asyncio.sleep(delay)
@@ -392,10 +418,15 @@ class Connection:
                     for handler in handlers:
                         await self.subscribe(stream, handler)
 
+                self._fire_connection_event("reconnected")
                 logger.info("Reconnected to Wheelhouse at %s", self._endpoint)
                 return
-            except (ConnectionError, zmq.ZMQError):
-                attempt += 1
+            except (ConnectionError, zmq.ZMQError) as exc:
+                self._fire_connection_event(
+                    "reconnect_failed",
+                    attempts=attempt,
+                    last_error=str(exc),
+                )
                 continue
 
     def register_type(self, type_name: str, type_class: type) -> None:
@@ -438,12 +469,18 @@ class Connection:
 Surface = Connection
 
 
-async def connect(endpoint: str | None = None) -> Connection:
+async def connect(
+    endpoint: str | None = None,
+    on_connection_event: Callable[[dict[str, Any]], None] | None = None,
+) -> Connection:
     """Connect to Wheelhouse.
 
     Args:
         endpoint: Wheelhouse endpoint URL. If not provided, uses WH_URL
                   environment variable, or defaults to tcp://127.0.0.1:5555.
+        on_connection_event: Optional callback for connection lifecycle events
+            (CM-02). Receives a dict with "type" key: "disconnected",
+            "reconnecting", "reconnected", or "reconnect_failed".
 
     Returns:
         A Connection object for publishing and subscribing to streams.
@@ -453,7 +490,7 @@ async def connect(endpoint: str | None = None) -> Connection:
             not reachable.
     """
     resolved = _resolve_endpoint(endpoint)
-    conn = Connection(resolved)
+    conn = Connection(resolved, on_connection_event=on_connection_event)
 
     try:
         await conn._connect()
