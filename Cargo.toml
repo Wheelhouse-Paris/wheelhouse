@@ -34,7 +34,7 @@ keyring = { version = "3", features = ["apple-native", "linux-native"] }
 dialoguer = "0.11"
 console = "0.15"
 prost = "0.13"
-tokio-util = "0.7"
+tokio-util = { version = "0.7", features = ["time"] }
 async-trait = "0.1"
 zeromq = "0.4"
 git2 = "0.19"

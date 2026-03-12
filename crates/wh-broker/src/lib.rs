@@ -10,6 +10,7 @@ pub mod cron;
 pub mod deploy;
 pub mod error;
 pub mod metrics;
+pub mod monitor;
 pub mod registry;
 pub mod routing;
 pub mod wal;
