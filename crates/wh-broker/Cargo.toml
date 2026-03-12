@@ -24,6 +24,7 @@ regex = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
+async-trait = { workspace = true }
 rusqlite = { workspace = true }
 crc32fast = { workspace = true }
 chrono = { workspace = true }

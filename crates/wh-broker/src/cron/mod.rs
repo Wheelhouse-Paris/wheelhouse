@@ -4,6 +4,9 @@
 //! Uses `cron` crate for expression parsing + `tokio::time::interval` for tick loop.
 //! Missed fires are silently skipped in MVP.
 
+pub mod dispatcher;
+pub mod handler;
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
