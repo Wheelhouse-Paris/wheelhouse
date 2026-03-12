@@ -3,3 +3,22 @@ name = "wh-broker"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[[bin]]
+name = "wh-broker"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net", "time", "sync"] }
+zeromq = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
+wh-proto = { path = "../wh-proto" }
+
+[dev-dependencies]
+portpicker = "0.1"
