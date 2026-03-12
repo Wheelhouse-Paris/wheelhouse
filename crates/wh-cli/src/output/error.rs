@@ -8,7 +8,32 @@
 //! - 1: error
 //! - 2: plan change detected
 
+use serde::Serialize;
 use wh_broker::deploy::DeployError;
+
+/// Contextual information about where an error occurred (ADR-014).
+///
+/// All fields are optional — populate whichever are relevant to the error.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ErrorContext {
+    /// Source file where the error was detected (e.g., "topology.wh")
+    pub file: Option<String>,
+    /// Line number in the source file
+    pub line: Option<u32>,
+    /// Field name that caused the error (e.g., "replicas")
+    pub field: Option<String>,
+}
+
+/// Sub-categories for deploy-related errors (maps to WH-2001/2002/2003).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeployErrorKind {
+    /// Lint validation failure (WH-2001)
+    LintError,
+    /// Plan generation failure (WH-2002)
+    PlanError,
+    /// Apply execution failure (WH-2003)
+    ApplyError,
+}
 
 /// Wrapper for error code strings to allow `.as_str()` calls.
 #[derive(Debug, Clone, Copy)]

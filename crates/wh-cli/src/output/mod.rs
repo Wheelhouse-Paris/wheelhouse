@@ -8,6 +8,21 @@ pub mod table;
 
 pub use error::LintError;
 
+/// Render an error in the specified output format (ADR-014).
+///
+/// - `Human`: produces `Error [WH-XXXX]: <message>` — reserved for future numeric-code errors
+/// - `Json`: produces the full JSON error envelope
+pub fn render_error(error: &error::WhError, format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Human => format!("{error}"),
+        OutputFormat::Json => {
+            let envelope = OutputEnvelope::<()>::error(error.error_code(), error.to_string());
+            serde_json::to_string(&envelope)
+                .unwrap_or_else(|_| r#"{"v":1,"status":"error","code":"SERIALIZATION_ERROR","message":"failed"}"#.to_string())
+        }
+    }
+}
+
 /// A text message exchanged on a surface stream (CLI, Telegram, etc.).
 ///
 /// This is a CLI-layer type for surface commands; it uses string fields
