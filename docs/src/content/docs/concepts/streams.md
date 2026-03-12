@@ -7,7 +7,7 @@ A **stream** is a real-time, multi-subscriber, typed object bus. It is the conne
 
 ## Core capabilities
 
-Every stream, regardless of provider, supports:
+Every stream supports:
 
 - **Pub/sub** — any number of publishers and subscribers
 - **Persistence** — objects stored in a local append log; no objects lost on restart within the configured retention limit
@@ -22,7 +22,6 @@ Streams carry typed objects. Core types shipped with Wheelhouse:
 |------|-------------|
 | `TextMessage` | Plain text message |
 | `FileMessage` | File or binary payload |
-| `Reaction` | Reaction to a previous object |
 | `SkillInvocation` | Request to execute a skill |
 | `SkillResult` | Result or error from a skill execution |
 | `SkillProgress` | Progress signal from a long-running skill |
@@ -35,22 +34,16 @@ Stream messages from human users carry a `user_id` field referencing a registere
 
 ## Providers
 
-| Provider | Pub/Sub | Historical Query | Semantic Search |
-|----------|---------|-----------------|-----------------|
-| `local` | ✅ | — | — |
-| `elasticsearch` | ✅ | ✅ | — |
-| `weaviate` | ✅ | ✅ | ✅ |
+Currently implemented: **local** (WAL-backed, in-process).
 
-Historical query and semantic search are Phase 2 capabilities.
+Multi-provider support (elasticsearch, weaviate) with historical query and semantic search is planned for Phase 2.
 
 ## Configuration
 
 ```yaml
 streams:
   - name: main
-    provider: local
-    retention:
-      max_age: 30d
+    retention: "30d"   # optional duration string; omit to keep forever
 ```
 
 A stream without a compaction cron generates a lint warning at `wh deploy lint` time — objects will accumulate without bound.

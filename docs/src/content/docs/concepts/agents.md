@@ -52,14 +52,17 @@ GPG-signed commits with cryptographic PKI are planned for Phase 2.
 agents:
   - name: donna
     image: ghcr.io/wheelhouse-paris/agent-claude:latest
+    replicas: 1                 # default: 1
     streams: [main, ops]
-    max_replicas: 2
-    skills: [summarize, web-search]
+    persona: agents/donna/      # optional: path to SOUL.md / IDENTITY.md / MEMORY.md
+
+guardrails:
+  max_replicas: 2               # topology-wide cap — deployment blocked if exceeded
 ```
 
 ## Guardrails
 
-`max_replicas` is mandatory — it prevents unconstrained autonomous scaling.
+`max_replicas` is a topology-level guardrail — it caps the maximum replicas for any single agent in the topology. It lives in the `guardrails:` block, not on the agent itself.
 
 Operator safety limits (validation thresholds, apply rate limits) are configured in `wh-policy.yaml`, not in the agent's `.wh` file. This separation ensures agents cannot modify their own guardrails.
 

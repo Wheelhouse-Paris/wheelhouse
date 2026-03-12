@@ -17,32 +17,49 @@ Shipped with Wheelhouse:
 
 ## Custom surfaces
 
-Build your own surface with the Python SDK:
+Build your own surface with the Python SDK by subclassing `wheelhouse.Surface`:
 
 ```python
 import wheelhouse
+from wheelhouse.types import TextMessage
 
-@wheelhouse.register_type("biotech.MoleculeObject")
-class MoleculeObject(wheelhouse.BaseStreamObject):
-    smiles: str
-    name: str
-    metadata: dict
+class MyCLISurface(wheelhouse.Surface):
+    async def on_message(self, message):
+        print(message.content)
 
 async def main():
-    async with wheelhouse.Surface("biotech-sketcher") as surface:
-        await surface.connect("main")
-        await surface.publish(MoleculeObject(
-            smiles="CC(=O)Oc1ccccc1C(=O)O",
-            name="Aspirin",
-            metadata={}
-        ))
+    conn = await wheelhouse.connect()
+    surface = MyCLISurface(conn)
+
+    # Subscribe a handler to receive messages
+    await surface.subscribe("main", surface.on_message)
+
+    # Publish a message to the stream
+    await surface.publish("main", TextMessage(content="Hello from custom surface"))
 ```
 
-## Hot-pluggable
+`Surface` provides three methods wrapping the underlying connection:
 
-Surfaces can be added to a running topology without restarting existing agents:
+| Method | Description |
+|--------|-------------|
+| `publish(stream, message)` | Fire-and-forget publish |
+| `publish_confirmed(stream, message)` | Publish with WAL acknowledgement |
+| `subscribe(stream, handler)` | Register an async handler for incoming objects |
 
-```sh
-wh deploy plan my-agent.wh  # shows + surface biotech-sketcher
-wh deploy apply my-agent.wh
+## Custom types
+
+Register application-specific types with `@wheelhouse.register_type`:
+
+```python
+import betterproto
+import wheelhouse
+
+@wheelhouse.register_type("biotech.MoleculeObject")
+class MoleculeObject(betterproto.Message):
+    smiles: str = betterproto.string_field(1)
+    name: str = betterproto.string_field(2)
+
+conn = await wheelhouse.connect()
+surface = wheelhouse.Surface(conn)
+await surface.publish("main", MoleculeObject(smiles="CC(=O)Oc1ccccc1C(=O)O", name="Aspirin"))
 ```

@@ -10,7 +10,6 @@ The `wh` CLI is the primary control plane for Wheelhouse — used by human opera
 | Flag | Description |
 |------|-------------|
 | `--format json` | Output as JSON (all commands) |
-| `--quiet` | Suppress non-essential output |
 | `--help` | Show help (works offline) |
 
 ## Exit codes
@@ -25,17 +24,21 @@ The `wh` CLI is the primary control plane for Wheelhouse — used by human opera
 
 | Command | Description |
 |---------|-------------|
-| `wh deploy apply <file>` | Apply a topology |
-| `wh deploy plan <file>` | Preview topology changes |
-| `wh deploy destroy <file>` | Destroy a topology |
 | `wh deploy lint <file>` | Validate `.wh` syntax |
+| `wh deploy plan <file>` | Preview topology changes |
+| `wh deploy apply <file>` | Apply a topology |
+| `wh deploy destroy <file>` | Destroy a topology |
 | `wh ps` | List running components |
-| `wh ls` | List all deployed topologies |
 | `wh logs <agent>` | Stream agent logs |
-| `wh status` | Topology health and metrics |
-| `wh restart` | Restart the topology |
+| `wh status` | Topology health summary |
+| `wh stream create <name>` | Create a stream |
+| `wh stream list` | List streams |
+| `wh stream delete <name>` | Delete a stream |
 | `wh stream tail <name>` | Live stream of objects |
 | `wh secrets init` | Initialize credential wizard |
+| `wh memory` | Show agent memory (MEMORY.md) |
+| `wh compact` | Trigger stream compaction |
+| `wh doctor` | Check topology and git health |
 | `wh completion <shell>` | Generate shell completion |
 
 ## Shell completion

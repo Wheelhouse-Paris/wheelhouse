@@ -5,49 +5,25 @@ description: Declarative topology configuration for Wheelhouse
 
 A `.wh` file is a declarative YAML topology definition — the Dockerfile of agentic infrastructure.
 
-## Quickstart
-
-Generate a minimal local topology:
-
-```sh
-wh init
-```
-
-This creates a `dev.wh` with a single stream — the minimal starting point for SDK development.
-
 ## Structure
 
 ```yaml
 apiVersion: wheelhouse.dev/v1
-kind: Topology
+name: <topology-name>
 
 streams:
   - name: <stream-name>
-    provider: local | elasticsearch | weaviate
-    retention:
-      max_age: <duration>      # e.g. 30d
-      max_size: <bytes>        # e.g. 1GB
+    retention: <duration>    # e.g. "7d", "30d" (optional)
 
 agents:
   - name: <agent-name>
     image: <container-image>
+    replicas: <n>            # default: 1
     streams: [<stream-names>]
-    max_replicas: <n>          # required guardrail
-    skills:
-      - name: <skill-name>
-        repo: <git-url>
-        ref: <commit-hash>     # pinned commit hash, not a branch
+    persona: <path-to-persona-dir>  # e.g. agents/donna/
 
-surfaces:
-  - name: <surface-name>
-    type: telegram | cli | custom
-    streams: [<stream-names>]
-
-cron:
-  - name: <job-name>
-    schedule: "<cron-expression>"
-    target: <stream-name>
-    action: compact | event
+guardrails:
+  max_replicas: <n>          # caps replicas across all agents in this topology
 ```
 
 ## Operator safety policy
@@ -86,8 +62,15 @@ wh doctor
 
 ## Guardrails
 
-`max_replicas` is mandatory per agent. Deployment is blocked if exceeded.
-
-Skill `ref` must be a pinned commit hash — branch references are rejected at lint time.
+`max_replicas` in the `guardrails` block caps the maximum replicas allowed for any single agent in the topology. Deployment is blocked if exceeded.
 
 Additional guardrails planned for Phase 2: rate limiting on autonomous apply, anomaly detection on destructive plans.
+
+## Phase 2 — coming soon
+
+The following fields are planned but not yet parsed:
+
+- **`streams[].provider`** — storage backend (local / elasticsearch / weaviate)
+- **`agents[].skills`** — pinned skill references from git
+- **`surfaces`** — surface declarations (telegram, cli, custom)
+- **`cron`** — scheduled job declarations
