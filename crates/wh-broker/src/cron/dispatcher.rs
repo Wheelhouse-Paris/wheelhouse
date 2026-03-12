@@ -209,6 +209,7 @@ mod tests {
     use crate::cron::handler::{CronHandlerError, HandlerOutcome};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::sync::Mutex;
+    use prost_types::Timestamp;
 
     /// A test handler that records invocations.
     struct RecordingHandler {
@@ -254,6 +255,8 @@ mod tests {
             action: "event".to_string(),
             schedule: "* * * * *".to_string(),
             payload: HashMap::new(),
+            target_stream: String::new(),
+            triggered_at: Timestamp::default(),
         }
     }
 

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use prost_types::Timestamp;
 use tokio::sync::{mpsc, Mutex};
 
 use wh_broker::cron::dispatcher::CronEventDispatcher;
@@ -22,6 +23,8 @@ fn make_event(job_name: &str, action: &str) -> CronEventMessage {
         action: action.to_string(),
         schedule: "* * * * * *".to_string(),
         payload: HashMap::new(),
+        target_stream: String::new(),
+        triggered_at: Timestamp::default(),
     }
 }
 
