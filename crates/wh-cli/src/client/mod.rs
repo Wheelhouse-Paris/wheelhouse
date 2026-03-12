@@ -43,6 +43,15 @@ impl ControlClient {
     /// The payload should include the "command" field plus any additional fields
     /// needed by the handler (e.g., "name", "retention" for stream commands).
     pub async fn send_command_with_payload(&self, payload: Value) -> Result<Value, WhError> {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(RECV_TIMEOUT_MS),
+            self.send_command_inner(payload),
+        )
+        .await
+        .map_err(|_| WhError::Timeout)?
+    }
+
+    async fn send_command_inner(&self, payload: Value) -> Result<Value, WhError> {
         let mut socket = ReqSocket::new();
         socket
             .connect(&self.endpoint)
@@ -58,14 +67,7 @@ impl ControlClient {
             .await
             .map_err(|_| WhError::ConnectionError)?;
 
-        // Receive with timeout (CF-02)
-        let response = tokio::time::timeout(
-            std::time::Duration::from_millis(RECV_TIMEOUT_MS),
-            socket.recv(),
-        )
-        .await
-        .map_err(|_| WhError::Timeout)?
-        .map_err(|_| WhError::ConnectionError)?;
+        let response = socket.recv().await.map_err(|_| WhError::ConnectionError)?;
 
         let response_bytes: Vec<u8> = response.try_into().unwrap_or_default();
         let response_str = String::from_utf8_lossy(&response_bytes);
