@@ -14,7 +14,7 @@ use zeromq::{PubSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
 
 use crate::client::ControlClient;
 use crate::output::error::WhError;
-use crate::output::{self, OutputFormat};
+use crate::output::{self, OutputEnvelope, OutputFormat};
 
 /// Stream management and observation subcommands.
 #[derive(Debug, Subcommand)]
@@ -163,7 +163,18 @@ pub async fn execute(cmd: &StreamCommand) {
         }
         StreamCommand::Tail(args) => {
             if let Err(e) = execute_tail(args) {
-                e.exit();
+                match args.format {
+                    OutputFormat::Json => {
+                        let envelope = OutputEnvelope::<()>::error(e.error_code(), e.to_string());
+                        if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                            eprintln!("{json}");
+                        } else {
+                            eprintln!("Error: {e}");
+                        }
+                    }
+                    OutputFormat::Human => eprintln!("Error: {e}"),
+                }
+                std::process::exit(1);
             }
         }
     }
