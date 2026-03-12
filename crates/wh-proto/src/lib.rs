@@ -16,6 +16,9 @@ pub mod wheelhouse {
     }
 }
 
+// Re-export prost_types for consumers using Timestamp in CronEvent and other proto messages.
+pub use prost_types;
+
 // Re-export all types at crate root for ergonomic imports:
 // `use wh_proto::TextMessage;` instead of `use wh_proto::wheelhouse::v1::TextMessage;`
 pub use wheelhouse::v1::*;
@@ -191,14 +194,22 @@ mod tests {
     fn cron_event_roundtrip() {
         let original = CronEvent {
             job_name: "daily-job".to_string(),
-            stream_name: "system".to_string(),
-            cron_expression: "0 0 * * *".to_string(),
-            fired_at_ms: 1710000000000,
+            action: "event".to_string(),
+            schedule: "0 0 * * *".to_string(),
+            triggered_at: Some(prost_types::Timestamp {
+                seconds: 1710000000,
+                nanos: 0,
+            }),
+            payload: std::collections::HashMap::new(),
         };
         let encoded = original.encode_to_vec();
         let decoded = CronEvent::decode(encoded.as_slice()).unwrap();
         assert_eq!(original.job_name, decoded.job_name);
-        assert_eq!(original.cron_expression, decoded.cron_expression);
+        assert_eq!(original.schedule, decoded.schedule);
+        assert_eq!(
+            original.triggered_at.unwrap().seconds,
+            decoded.triggered_at.unwrap().seconds
+        );
     }
 
     #[test]

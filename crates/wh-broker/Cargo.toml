@@ -28,6 +28,8 @@ rusqlite = { workspace = true }
 crc32fast = { workspace = true }
 chrono = { workspace = true }
 dirs = { workspace = true }
+cron = "0.13"
+prost-types = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

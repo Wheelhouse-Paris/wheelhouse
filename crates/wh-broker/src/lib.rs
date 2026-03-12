@@ -6,6 +6,7 @@
 
 pub mod config;
 pub mod control;
+pub mod cron;
 pub mod deploy;
 pub mod error;
 pub mod metrics;
