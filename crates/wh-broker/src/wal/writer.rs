@@ -44,17 +44,17 @@ impl WalWriter {
         )?;
 
         // Create the WAL table with tombstone column reserved for GDPR (ADR-002)
+        // Note: stream name is NOT stored per-row since each stream has its own
+        // dedicated SQLite file under {data_dir}/wal/{stream_name}.db.
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS wal_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stream TEXT NOT NULL,
                 payload BLOB NOT NULL,
                 crc32 INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 tombstone INTEGER DEFAULT 0
             );
-            CREATE INDEX IF NOT EXISTS idx_wal_created_at ON wal_records(created_at);
-            CREATE INDEX IF NOT EXISTS idx_wal_stream ON wal_records(stream);",
+            CREATE INDEX IF NOT EXISTS idx_wal_created_at ON wal_records(created_at);",
         )?;
 
         Ok(Self {
@@ -72,7 +72,6 @@ impl WalWriter {
     /// All SQLite I/O happens inside `spawn_blocking` (PP-03).
     pub async fn write(&self, payload: &[u8]) -> Result<WalReceipt, WalError> {
         let conn = Arc::clone(&self.conn);
-        let stream_name = self.stream_name.clone();
         let payload = payload.to_vec();
 
         let record_id = tokio::task::spawn_blocking(move || -> Result<i64, WalError> {
@@ -80,8 +79,8 @@ impl WalWriter {
             let now = chrono::Utc::now().timestamp_millis();
             let conn = conn.blocking_lock();
             conn.execute(
-                "INSERT INTO wal_records (stream, payload, crc32, created_at, tombstone) VALUES (?1, ?2, ?3, ?4, 0)",
-                rusqlite::params![stream_name, payload, crc as i64, now],
+                "INSERT INTO wal_records (payload, crc32, created_at, tombstone) VALUES (?1, ?2, ?3, 0)",
+                rusqlite::params![payload, crc as i64, now],
             )?;
             Ok(conn.last_insert_rowid())
         })

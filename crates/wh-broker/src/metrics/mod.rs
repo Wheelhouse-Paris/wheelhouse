@@ -233,15 +233,26 @@ impl BrokerState {
     }
 
     /// Delete a named stream and its WAL data.
+    ///
+    /// Removes the stream from the registry first (dropping the WalWriter and
+    /// closing the SQLite connection), then deletes the WAL files from disk.
+    /// If WAL file cleanup fails, the stream is still removed from the registry
+    /// and a warning is logged — the orphaned files are harmless.
     pub async fn delete_stream(self: &Arc<Self>, name: &str) -> Result<(), StreamError> {
         let mut streams = self.streams.write().await;
         if streams.remove(name).is_none() {
             return Err(StreamError::NotFound(name.to_string()));
         }
-        drop(streams);
+        drop(streams); // Drop StreamInfo → closes WalWriter's SQLite connection
 
-        // Delete WAL files
-        WalWriter::delete_stream(&self.data_dir, name)?;
+        // Delete WAL files after connection is closed
+        if let Err(e) = WalWriter::delete_stream(&self.data_dir, name) {
+            tracing::warn!(
+                stream = name,
+                error = %e,
+                "failed to delete WAL files — orphaned files may remain"
+            );
+        }
 
         self.persist_registry().await?;
 
