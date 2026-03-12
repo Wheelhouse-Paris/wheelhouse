@@ -3,6 +3,9 @@
 //! The executor is responsible for running a loaded skill and emitting
 //! `SkillProgress` and `SkillResult` events through a channel.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use tokio::sync::mpsc;
 
 use crate::invocation::{SkillInvocationOutcome, SkillInvocationRequest};
@@ -29,53 +32,62 @@ pub enum SkillExecutorEvent {
     },
 }
 
+/// Trait for skill executors.
+///
+/// Implementors run a loaded skill and emit events through a channel.
+/// The trait is object-safe and supports async execution.
+pub trait SkillExecutor: Send + Sync {
+    /// Execute a loaded skill, emitting events through `tx`.
+    fn execute<'a>(
+        &'a self,
+        request: &'a SkillInvocationRequest,
+        skill: &'a LoadedSkill,
+        tx: &'a mpsc::Sender<SkillExecutorEvent>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+}
+
 /// A local skill executor that runs skills in-process.
 ///
 /// In MVP, "execution" is a placeholder that concatenates skill step
 /// contents as output. Real execution (LLM calls, tool use) is out of scope.
 pub struct LocalSkillExecutor;
 
-impl LocalSkillExecutor {
-    /// Execute a loaded skill for a given invocation request.
-    ///
-    /// Emits events through the provided channel:
-    /// 1. `ProgressUpdate` with 0% to indicate skill has started (CM-06)
-    /// 2. `Completed` with the execution outcome
-    ///
-    /// In MVP, the output is the concatenation of all skill step contents.
-    pub async fn execute(
-        &self,
-        request: &SkillInvocationRequest,
-        skill: &LoadedSkill,
-        tx: &mpsc::Sender<SkillExecutorEvent>,
-    ) {
-        // CM-06: Emit progress "started" event
-        let _ = tx
-            .send(SkillExecutorEvent::ProgressUpdate {
-                invocation_id: request.invocation_id.clone(),
-                progress_percent: 0.0,
-                status_message: format!(
-                    "Skill '{}' execution started",
-                    request.skill_name
-                ),
-            })
-            .await;
+impl SkillExecutor for LocalSkillExecutor {
+    fn execute<'a>(
+        &'a self,
+        request: &'a SkillInvocationRequest,
+        skill: &'a LoadedSkill,
+        tx: &'a mpsc::Sender<SkillExecutorEvent>,
+    ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            // CM-06: Emit progress "started" event
+            let _ = tx
+                .send(SkillExecutorEvent::ProgressUpdate {
+                    invocation_id: request.invocation_id.clone(),
+                    progress_percent: 0.0,
+                    status_message: format!(
+                        "Skill '{}' execution started",
+                        request.skill_name
+                    ),
+                })
+                .await;
 
-        // MVP placeholder: concatenate step contents as output
-        let output = skill
-            .steps
-            .iter()
-            .map(|s| s.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+            // MVP placeholder: concatenate step contents as output
+            let output = skill
+                .steps
+                .iter()
+                .map(|s| s.content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
 
-        // Emit completion event
-        let _ = tx
-            .send(SkillExecutorEvent::Completed {
-                invocation_id: request.invocation_id.clone(),
-                outcome: SkillInvocationOutcome::Success { output },
-            })
-            .await;
+            // Emit completion event
+            let _ = tx
+                .send(SkillExecutorEvent::Completed {
+                    invocation_id: request.invocation_id.clone(),
+                    outcome: SkillInvocationOutcome::Success { output },
+                })
+                .await;
+        })
     }
 }
 

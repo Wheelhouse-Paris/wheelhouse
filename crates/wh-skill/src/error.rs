@@ -60,4 +60,55 @@ pub enum SkillError {
         /// Human-readable reason for the fetch failure.
         reason: String,
     },
+
+    /// The skill execution timed out (Story 5-4).
+    ///
+    /// Emitted when the executor wall-clock timeout fires before the skill
+    /// completes. Maps to error code `SKILL_TIMEOUT`.
+    #[error("skill '{skill_name}' execution timed out after {timeout_secs}s")]
+    SkillTimeout {
+        /// The skill that timed out.
+        skill_name: String,
+        /// The timeout duration in seconds.
+        timeout_secs: u64,
+    },
+
+    /// The skill execution failed due to an unhandled panic or exception (Story 5-4).
+    ///
+    /// Emitted when the executor panics during execution. Maps to error code
+    /// `SKILL_EXECUTION_FAILED`.
+    #[error("skill '{skill_name}' execution failed: {reason}")]
+    SkillExecutionFailed {
+        /// The skill that failed.
+        skill_name: String,
+        /// Human-readable reason for the execution failure.
+        reason: String,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skill_timeout_display_includes_name_and_duration() {
+        let err = SkillError::SkillTimeout {
+            skill_name: "web-search".into(),
+            timeout_secs: 30,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("web-search"), "should contain skill name");
+        assert!(msg.contains("30"), "should contain timeout duration");
+    }
+
+    #[test]
+    fn skill_execution_failed_display_includes_name_and_reason() {
+        let err = SkillError::SkillExecutionFailed {
+            skill_name: "summarize".into(),
+            reason: "thread panicked".into(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("summarize"), "should contain skill name");
+        assert!(msg.contains("thread panicked"), "should contain reason");
+    }
 }
