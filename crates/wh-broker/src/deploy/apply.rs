@@ -37,7 +37,7 @@ impl CommittedPlan {
 }
 
 /// Find the git binary, checking common paths.
-fn find_git() -> &'static str {
+pub(crate) fn find_git() -> &'static str {
     // Try common paths for git
     for path in &["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"] {
         if std::path::Path::new(path).exists() {
@@ -53,7 +53,7 @@ fn find_git() -> &'static str {
 ///
 /// Spawns git as a subprocess and polls for completion. If the timeout
 /// fires, the process is killed and `DeployError::GitTimeout` is returned.
-fn run_git(
+pub(crate) fn run_git(
     workspace_root: &Path,
     args: &[&str],
 ) -> Result<std::process::Output, DeployError> {
@@ -91,7 +91,7 @@ fn run_git(
 }
 
 /// Run a git command and check that it succeeded.
-fn run_git_checked(
+pub(crate) fn run_git_checked(
     workspace_root: &Path,
     args: &[&str],
 ) -> Result<std::process::Output, DeployError> {

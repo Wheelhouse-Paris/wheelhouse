@@ -9,6 +9,7 @@
 pub mod apply;
 pub mod autonomous;
 pub mod lint;
+pub mod memory;
 pub mod plan;
 
 use serde::{Deserialize, Serialize};
@@ -111,6 +112,12 @@ pub enum DeployError {
 
     #[error("self-destruct detected: {0}")]
     SelfDestructDetected(String),
+
+    #[error("Podman not found: {0}")]
+    PodmanNotFound(String),
+
+    #[error("Podman operation failed: {0}")]
+    PodmanFailed(String),
 }
 
 impl DeployError {
@@ -126,6 +133,8 @@ impl DeployError {
             DeployError::GitTimeout(_) => "GIT_TIMEOUT",
             DeployError::PolicyViolation(_) => "POLICY_VIOLATION",
             DeployError::SelfDestructDetected(_) => "SELF_DESTRUCT_DETECTED",
+            DeployError::PodmanNotFound(_) => "PODMAN_NOT_FOUND",
+            DeployError::PodmanFailed(_) => "PODMAN_FAILED",
         }
     }
 }

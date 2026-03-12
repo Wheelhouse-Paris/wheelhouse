@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 
 use wh_cli::commands::deploy::DeployCommand;
 use wh_cli::commands::logs::{self, LogsArgs};
+use wh_cli::commands::memory::MemoryCommand;
 use wh_cli::commands::ps::{self, PsArgs};
 use wh_cli::commands::secrets::SecretsCmd;
 use wh_cli::commands::status;
@@ -49,6 +50,11 @@ enum Commands {
     Stream {
         #[command(subcommand)]
         command: StreamCommand,
+    },
+    /// Manage agent memory (MEMORY.md) files.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
     },
     /// Check Wheelhouse health and status.
     Status {
@@ -137,6 +143,10 @@ async fn main() {
                     }
                 }
             }
+        }
+        Commands::Memory { command } => {
+            let exit_code = command.execute();
+            std::process::exit(exit_code);
         }
         Commands::Stream { command } => {
             stream::execute(&command).await;
