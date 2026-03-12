@@ -19,6 +19,7 @@ authors = ["The Wheelhouse Paris <hello@wheelhouse.paris>"]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+serde_json = "1"
 anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
