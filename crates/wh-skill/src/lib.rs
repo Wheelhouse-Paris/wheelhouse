@@ -15,6 +15,8 @@
 
 /// Skill allowlist validation (FM-05).
 pub mod allowlist;
+/// Session-scoped skill cache for lazy loading.
+pub mod cache;
 /// `.wh` skill configuration parsing.
 pub mod config;
 /// Skill directory scanning and filesystem loading.
@@ -33,6 +35,7 @@ pub mod pipeline;
 pub mod repository;
 
 pub use allowlist::SkillAllowlist;
+pub use cache::SkillCache;
 pub use config::{SkillRef, SkillsConfig};
 pub use directory::SkillDirectory;
 pub use error::SkillError;

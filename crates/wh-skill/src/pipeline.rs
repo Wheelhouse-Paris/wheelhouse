@@ -1,33 +1,39 @@
-//! Skill invocation pipeline: allowlist validation + execution.
+//! Skill invocation pipeline: allowlist validation + lazy loading + execution.
 //!
 //! The pipeline validates an invocation against the allowlist (FM-05),
-//! resolves the skill version from config, loads the skill from git,
-//! and executes it via `LocalSkillExecutor`.
+//! resolves the skill version from config, checks the cache for a previously
+//! loaded skill, and if not cached, fetches from git and populates the cache.
+//! Finally, executes the skill via `LocalSkillExecutor`.
 
 use tokio::sync::mpsc;
 
 use crate::allowlist::SkillAllowlist;
+use crate::cache::SkillCache;
 use crate::config::SkillsConfig;
 use crate::error::SkillError;
 use crate::executor::{LocalSkillExecutor, SkillExecutorEvent};
 use crate::invocation::{SkillInvocationOutcome, SkillInvocationRequest};
 use crate::repository::SkillRepository;
 
-/// The invocation pipeline: allowlist check -> version resolution -> skill load -> execute.
+/// The invocation pipeline: allowlist check -> version resolution -> cache/fetch -> execute.
 pub struct InvocationPipeline {
     allowlist: SkillAllowlist,
     /// Skills config for version resolution. None means no version resolution is possible.
     config: Option<SkillsConfig>,
-    /// Git-based skill repository. None means skills cannot be loaded.
+    /// Git-based skill repository. None means skills cannot be fetched.
     repo: Option<SkillRepository>,
+    /// Session-scoped skill cache for lazy loading.
+    cache: SkillCache,
 }
 
 impl InvocationPipeline {
-    /// Create a new pipeline with an allowlist and optional skill repository.
+    /// Create a new pipeline with an allowlist, optional skill repository, and a cache.
+    ///
+    /// No skills are loaded at construction time — the cache starts empty and is
+    /// populated lazily on first invocation of each skill (AC1).
     ///
     /// If `config` is None, version resolution will fail for any invocation.
-    /// If `repo` is None, skill loading will fail for any invocation.
-    /// Both are useful for testing allowlist-only scenarios.
+    /// If `repo` is None, skill fetching will fail for any invocation.
     pub fn new(
         allowlist: SkillAllowlist,
         config: Option<SkillsConfig>,
@@ -37,7 +43,13 @@ impl InvocationPipeline {
             allowlist,
             config,
             repo,
+            cache: SkillCache::new(),
         }
+    }
+
+    /// Return a reference to the skill cache (for testing/inspection).
+    pub fn cache(&self) -> &SkillCache {
+        &self.cache
     }
 
     /// Process a skill invocation request.
@@ -45,12 +57,12 @@ impl InvocationPipeline {
     /// Steps:
     /// 1. Validate the skill is in the allowlist (FM-05)
     /// 2. Resolve the skill version from config
-    /// 3. Load the skill from the git repository
+    /// 3. Check cache; if miss, fetch from git and populate cache
     /// 4. Execute the skill and emit progress/result events
     ///
     /// On any failure, emits a `Completed` event with an error outcome.
     pub async fn process(
-        &self,
+        &mut self,
         request: SkillInvocationRequest,
         tx: mpsc::Sender<SkillExecutorEvent>,
     ) -> Result<(), SkillError> {
@@ -108,7 +120,7 @@ impl InvocationPipeline {
             }
         };
 
-        // Step 3: Load skill from repository
+        // Step 3: Resolve OID and check cache; fetch from git on miss
         let repo = match &self.repo {
             Some(r) => r,
             None => {
@@ -116,8 +128,11 @@ impl InvocationPipeline {
                     .send(SkillExecutorEvent::Completed {
                         invocation_id: request.invocation_id.clone(),
                         outcome: SkillInvocationOutcome::Error {
-                            error_code: "SKILL_LOAD_FAILED".into(),
-                            error_message: "No skill repository available".into(),
+                            error_code: "SKILL_FETCH_FAILED".into(),
+                            error_message: format!(
+                                "No skill repository available to fetch skill '{}'",
+                                request.skill_name
+                            ),
                         },
                     })
                     .await;
@@ -132,7 +147,7 @@ impl InvocationPipeline {
                     .send(SkillExecutorEvent::Completed {
                         invocation_id: request.invocation_id.clone(),
                         outcome: SkillInvocationOutcome::Error {
-                            error_code: "SKILL_LOAD_FAILED".into(),
+                            error_code: "SKILL_FETCH_FAILED".into(),
                             error_message: format!(
                                 "Failed to resolve version '{}' for skill '{}'",
                                 version, request.skill_name
@@ -144,26 +159,38 @@ impl InvocationPipeline {
             }
         };
 
-        let loaded_skill = match repo.load_skill_at(&request.skill_name, oid) {
-            Ok(skill) => skill,
-            Err(_) => {
-                let _ = tx
-                    .send(SkillExecutorEvent::Completed {
-                        invocation_id: request.invocation_id.clone(),
-                        outcome: SkillInvocationOutcome::Error {
-                            error_code: "SKILL_LOAD_FAILED".into(),
-                            error_message: format!(
-                                "Failed to load skill '{}' at version '{}'",
-                                request.skill_name, version
-                            ),
-                        },
-                    })
-                    .await;
-                return Ok(());
+        // Check cache before git fetch
+        if !self.cache.contains(&request.skill_name, oid) {
+            // Cache miss — fetch from git
+            match repo.load_skill_at(&request.skill_name, oid) {
+                Ok(skill) => {
+                    self.cache.insert(&request.skill_name, oid, skill);
+                }
+                Err(_) => {
+                    let _ = tx
+                        .send(SkillExecutorEvent::Completed {
+                            invocation_id: request.invocation_id.clone(),
+                            outcome: SkillInvocationOutcome::Error {
+                                error_code: "SKILL_FETCH_FAILED".into(),
+                                error_message: format!(
+                                    "Failed to fetch skill '{}' at version '{}'",
+                                    request.skill_name, version
+                                ),
+                            },
+                        })
+                        .await;
+                    return Ok(());
+                }
             }
-        };
+        }
 
-        // Step 4: Execute
+        // Step 4: Execute from cache
+        let loaded_skill = self
+            .cache
+            .get(&request.skill_name, oid)
+            .expect("skill was just inserted into cache")
+            .clone();
+
         let executor = LocalSkillExecutor;
         executor.execute(&request, &loaded_skill, &tx).await;
 
@@ -189,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_disallowed_skill() {
         let allowlist = SkillAllowlist::new(vec!["summarize".into()]);
-        let pipeline = InvocationPipeline::new(allowlist, None, None);
+        let mut pipeline = InvocationPipeline::new(allowlist, None, None);
         let (tx, mut rx) = mpsc::channel(10);
 
         pipeline.process(disallowed_request(), tx).await.unwrap();
@@ -217,9 +244,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn allowed_skill_without_repo_gives_load_error() {
+    async fn allowed_skill_without_repo_gives_fetch_error() {
         let allowlist = SkillAllowlist::new(vec!["summarize".into()]);
-        let pipeline = InvocationPipeline::new(allowlist, None, None);
+        let config = SkillsConfig {
+            skills_repo: "/path".into(),
+            skills: vec![crate::config::SkillRef {
+                name: "summarize".into(),
+                version: "1.0.0".into(),
+            }],
+        };
+        let mut pipeline = InvocationPipeline::new(allowlist, Some(config), None);
         let request = SkillInvocationRequest {
             skill_name: "summarize".into(),
             agent_id: "agent-1".into(),
@@ -235,7 +269,7 @@ mod tests {
         match event {
             SkillExecutorEvent::Completed { outcome, .. } => match outcome {
                 SkillInvocationOutcome::Error { error_code, .. } => {
-                    assert_eq!(error_code, "SKILL_LOAD_FAILED");
+                    assert_eq!(error_code, "SKILL_FETCH_FAILED");
                 }
                 _ => panic!("expected Error"),
             },
@@ -250,7 +284,7 @@ mod tests {
             skills_repo: "/path".into(),
             skills: vec![], // empty config — skill not found
         };
-        let pipeline = InvocationPipeline::new(allowlist, Some(config), None);
+        let mut pipeline = InvocationPipeline::new(allowlist, Some(config), None);
         let request = SkillInvocationRequest {
             skill_name: "summarize".into(),
             agent_id: "agent-1".into(),
@@ -276,5 +310,12 @@ mod tests {
             },
             _ => panic!("expected Completed"),
         }
+    }
+
+    #[tokio::test]
+    async fn pipeline_cache_starts_empty() {
+        let allowlist = SkillAllowlist::new(vec!["summarize".into()]);
+        let pipeline = InvocationPipeline::new(allowlist, None, None);
+        assert!(pipeline.cache().is_empty());
     }
 }
