@@ -10,7 +10,6 @@
 use clap::Args;
 use serde::Serialize;
 
-use crate::client::ControlClient;
 use crate::output::error::WhError;
 use crate::output::table;
 use crate::output::OutputFormat;
@@ -107,9 +106,6 @@ pub struct StreamEnd {
 
 /// Execute `wh logs`.
 pub fn execute(_args: &LogsArgs) -> Result<(), WhError> {
-    // Attempt to connect to the control socket
-    let _client = ControlClient::connect()?;
-
     // [PHASE-2-ONLY: logs-streaming] Send logs command with agent name, tail, level filter.
     // The broker will stream back log records. For now, connection succeeds only if
     // .wh/control.sock exists, and send_command always returns ConnectionError.

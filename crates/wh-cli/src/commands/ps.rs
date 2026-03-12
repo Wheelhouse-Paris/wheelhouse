@@ -88,17 +88,12 @@ pub struct PsSummary {
 }
 
 /// Execute `wh ps`.
-pub fn execute(args: &PsArgs) -> Result<(), WhError> {
+pub async fn execute(args: &PsArgs) -> Result<(), WhError> {
     // Attempt to connect to the control socket
-    let client = match ControlClient::connect() {
-        Ok(c) => c,
-        Err(e) => {
-            return Err(e);
-        }
-    };
+    let client = ControlClient::new();
 
     // Send ps command and parse response
-    let response = client.send_command("ps")?;
+    let response = client.send_command("ps").await?;
 
     // Parse components from response
     let components = parse_components(&response)?;

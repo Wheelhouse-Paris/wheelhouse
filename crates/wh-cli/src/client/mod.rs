@@ -1,61 +1,74 @@
-//! Control socket client (JSON-over-ZMQ REQ) connecting to `.wh/control.sock`.
+//! Control socket client for CLI-to-broker communication (ADR-010).
 //!
-//! The CLI connects as a REQ client to the broker's control socket (ADR-010).
-//! Connection failures are mapped to user-friendly messages using approved
-//! vocabulary — never "broker", "connection refused", or port numbers (RT-B1).
+//! Connects via ZMQ REQ socket to the broker's REP control socket.
+//! 5-second receive timeout (CF-02).
 
-use std::path::PathBuf;
+use serde_json::{json, Value};
+use zeromq::{ReqSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
 
 use crate::output::error::WhError;
 
-/// Default control socket path relative to working directory.
-const CONTROL_SOCK_RELATIVE: &str = ".wh/control.sock";
+/// Receive timeout in milliseconds (CF-02).
+const RECV_TIMEOUT_MS: u64 = 5000;
 
-// [PHASE-2-ONLY: zmq-recv-timeout] Timeout for receiving a response from the control socket (CF-02).
-// const RECV_TIMEOUT_SECS: u64 = 5;
-
-/// Control socket client for communicating with the running Wheelhouse instance.
+/// Control socket client.
 pub struct ControlClient {
-    _socket_path: PathBuf,
+    endpoint: String,
 }
 
 impl ControlClient {
-    /// Attempt to connect to the control socket.
-    ///
-    /// Returns `Err(WhError::ConnectionError)` if:
-    /// - `.wh/` directory does not exist (never deployed)
-    /// - `.wh/control.sock` does not exist (Wheelhouse not running)
-    /// - Connection to socket fails
-    pub fn connect() -> Result<Self, WhError> {
-        let socket_path = PathBuf::from(CONTROL_SOCK_RELATIVE);
+    /// Create a new client connecting to the default or env-specified endpoint.
+    pub fn new() -> Self {
+        let endpoint = std::env::var("WH_CONTROL_ENDPOINT").unwrap_or_else(|_| {
+            let port = std::env::var("WH_CONTROL_PORT")
+                .ok()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(5557);
+            format!("tcp://127.0.0.1:{port}")
+        });
 
-        // Check if .wh/ directory exists
-        let wh_dir = PathBuf::from(".wh");
-        if !wh_dir.exists() {
-            return Err(WhError::ConnectionError);
-        }
-
-        // Check if control socket file exists
-        if !socket_path.exists() {
-            return Err(WhError::ConnectionError);
-        }
-
-        // [PHASE-2-ONLY: zmq-control-client] Full ZMQ REQ/REP implementation.
-        // For now, we verify the socket path exists but actual ZMQ connection
-        // requires the broker to be running. Since the broker is not yet
-        // implemented (Epic 1), this will always fail at the exists() check.
-        Ok(Self {
-            _socket_path: socket_path,
-        })
+        Self { endpoint }
     }
 
-    /// Send a command to the control socket and receive a JSON response.
+    /// Send a command and receive the response.
     ///
-    /// The command is a JSON object sent as a ZMQ message.
-    /// The response is a JSON object with `"v": 1` schema version.
-    pub fn send_command(&self, _command: &str) -> Result<serde_json::Value, WhError> {
-        // [PHASE-2-ONLY: zmq-control-client] Actual ZMQ send/recv implementation.
-        // This requires the broker's control socket server (Epic 1, Story 1.2).
-        Err(WhError::ConnectionError)
+    /// Returns the parsed JSON response or a `WhError`.
+    pub async fn send_command(&self, command: &str) -> Result<Value, WhError> {
+        let mut socket = ReqSocket::new();
+        socket
+            .connect(&self.endpoint)
+            .await
+            .map_err(|_| WhError::ConnectionError)?;
+
+        let request = json!({"command": command});
+        let request_bytes = serde_json::to_vec(&request)
+            .map_err(|e| WhError::Other(format!("Failed to serialize request: {e}")))?;
+
+        let msg = ZmqMessage::from(request_bytes);
+        socket
+            .send(msg)
+            .await
+            .map_err(|_| WhError::ConnectionError)?;
+
+        // Receive with timeout (CF-02)
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(RECV_TIMEOUT_MS),
+            socket.recv(),
+        )
+        .await
+        .map_err(|_| WhError::Timeout)?
+        .map_err(|_| WhError::ConnectionError)?;
+
+        let response_bytes: Vec<u8> = response.try_into().unwrap_or_default();
+        let response_str = String::from_utf8_lossy(&response_bytes);
+
+        serde_json::from_str(&response_str)
+            .map_err(|e| WhError::InvalidResponse(format!("Invalid JSON: {e}")))
+    }
+}
+
+impl Default for ControlClient {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -13,6 +13,7 @@ path = "src/main.rs"
 wh-proto = { workspace = true }
 wh-broker = { path = "../wh-broker" }
 tokio = { workspace = true, features = ["rt", "macros", "signal", "io-util", "io-std"] }
+zeromq = { workspace = true }
 clap = { workspace = true }
 prost = { workspace = true }
 tracing = { workspace = true }

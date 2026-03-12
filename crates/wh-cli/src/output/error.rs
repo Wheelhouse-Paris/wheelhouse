@@ -63,6 +63,18 @@ pub enum WhError {
     /// A stream operation failed.
     #[error("Stream error: {0}")]
     StreamError(String),
+
+    /// Control socket request timed out.
+    #[error("Wheelhouse not responding")]
+    Timeout,
+
+    /// Control socket returned an invalid response.
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
+
+    /// Generic error (used by ControlClient).
+    #[error("{0}")]
+    Other(String),
 }
 
 impl WhError {
@@ -83,12 +95,21 @@ impl WhError {
             WhError::Internal(_) => WhErrorCode("INTERNAL_ERROR"),
             WhError::InternalError(_) => WhErrorCode("INTERNAL_ERROR"),
             WhError::StreamError(_) => WhErrorCode("STREAM_ERROR"),
+            WhError::Timeout => WhErrorCode("TIMEOUT"),
+            WhError::InvalidResponse(_) => WhErrorCode("INVALID_RESPONSE"),
+            WhError::Other(_) => WhErrorCode("INTERNAL_ERROR"),
         }
     }
 
     /// Returns the exit code for this error.
     pub fn exit_code(&self) -> i32 {
         EXIT_ERROR
+    }
+
+    /// Print the error and exit with the appropriate exit code.
+    pub fn exit(&self) -> ! {
+        eprintln!("Error: {self}");
+        std::process::exit(self.exit_code());
     }
 }
 

@@ -25,12 +25,13 @@ serde_yaml = "0.9"
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json"] }
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 clap = { version = "4", features = ["derive"] }
 keyring = { version = "3", features = ["apple-native", "linux-native"] }
 dialoguer = "0.11"
 console = "0.15"
 prost = "0.13"
+tokio-util = "0.7"
 zeromq = "0.4"
 git2 = "0.19"
 sha2 = "0.10"

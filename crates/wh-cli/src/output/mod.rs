@@ -200,3 +200,50 @@ pub fn format_error(code: &str, message: &str, format: OutputFormat) -> String {
         }
     }
 }
+
+/// Print and format a status response from the broker control socket.
+///
+/// Routes through the format switch — human-readable or JSON (SCV-05).
+pub fn print_status(response: &serde_json::Value, format: OutputFormat) {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
+        }
+        OutputFormat::Human => {
+            let data = match response.get("data") {
+                Some(d) => d,
+                None => {
+                    eprintln!("Error: invalid response from Wheelhouse");
+                    return;
+                }
+            };
+            let uptime = data.get("uptime_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+            let hours = uptime / 3600;
+            let minutes = (uptime % 3600) / 60;
+            let seconds = uptime % 60;
+            let subscribers = data.get("subscriber_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let streams = data.get("streams").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
+            let panics = data.get("panic_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            println!("Wheelhouse is running");
+            println!("  Uptime:      {hours}h {minutes}m {seconds}s");
+            println!("  Subscribers: {subscribers}");
+            println!("  Streams:     {streams}");
+            if panics > 0 {
+                println!("  Panics:      {panics} (recovered)");
+            }
+        }
+    }
+}
+
+/// Print an error response from the broker control socket.
+pub fn print_error(response: &serde_json::Value, format: OutputFormat) {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(response).unwrap_or_default());
+        }
+        OutputFormat::Human => {
+            let msg = response.get("message").and_then(|v| v.as_str()).unwrap_or("unknown error");
+            eprintln!("Error: {msg}");
+        }
+    }
+}

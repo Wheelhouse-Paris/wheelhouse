@@ -9,6 +9,7 @@ use wh_cli::commands::deploy::DeployCommand;
 use wh_cli::commands::logs::{self, LogsArgs};
 use wh_cli::commands::ps::{self, PsArgs};
 use wh_cli::commands::secrets::SecretsCmd;
+use wh_cli::commands::status;
 use wh_cli::commands::surface::{self, SurfaceCommand};
 use wh_cli::output::{OutputEnvelope, OutputFormat};
 
@@ -43,6 +44,12 @@ enum Commands {
         #[command(subcommand)]
         command: SurfaceCommand,
     },
+    /// Check Wheelhouse health and status.
+    Status {
+        /// Output format: human (default) or json.
+        #[arg(long, default_value = "human")]
+        format: OutputFormat,
+    },
 }
 
 #[tokio::main]
@@ -53,7 +60,7 @@ async fn main() {
     match cli.command {
         Commands::Ps(args) => {
             let fmt = args.format;
-            let result = ps::execute(&args).map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
+            let result = ps::execute(&args).await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
             if let Err(e) = result {
                 match fmt {
                     OutputFormat::Json => {
@@ -124,6 +131,9 @@ async fn main() {
                     }
                 }
             }
+        }
+        Commands::Status { format } => {
+            status::execute(format).await;
         }
     }
 }
