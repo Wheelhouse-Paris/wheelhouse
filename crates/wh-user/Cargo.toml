@@ -1,0 +1,18 @@
+[package]
+name = "wh-user"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wh-proto = { path = "../wh-proto" }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }

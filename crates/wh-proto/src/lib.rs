@@ -55,6 +55,25 @@ impl TypedMessage {
     }
 }
 
+use serde::{Deserialize, Serialize};
+
+/// A user profile representing a human participant in the system.
+///
+/// Users are registered entities: their profiles are git-versioned,
+/// their messages are attributed by `user_id` in stream objects,
+/// and their data is GDPR-purgeable (FR58).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct UserProfile {
+    /// Deterministic user identifier (e.g., `usr_a1b2c3d4e5f6g7h8`).
+    pub user_id: String,
+    /// Platform where the user was first registered (e.g., "cli", "telegram").
+    pub platform: String,
+    /// Human-readable display name.
+    pub display_name: String,
+    /// RFC 3339 datetime when the profile was created (e.g., `2026-03-12T10:30:00Z`).
+    pub created_at: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,4 +315,35 @@ mod tests {
         assert!(msg.is_known());
         assert_eq!(msg.type_name(), "biotech.MoleculeObject");
     }
+
+    // ── UserProfile ─────────────────────────────────────────
+
+    #[test]
+    fn test_user_profile_yaml_roundtrip() {
+        let profile = UserProfile {
+            user_id: "usr_abc123def456".to_string(),
+            platform: "cli".to_string(),
+            display_name: "Alice".to_string(),
+            created_at: "2026-03-12T10:30:00Z".to_string(),
+        };
+
+        let yaml = serde_yaml::to_string(&profile).unwrap();
+        let deserialized: UserProfile = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(profile, deserialized);
+    }
+
+    #[test]
+    fn test_user_profile_json_roundtrip() {
+        let profile = UserProfile {
+            user_id: "usr_abc123def456".to_string(),
+            platform: "telegram".to_string(),
+            display_name: "Bob".to_string(),
+            created_at: "2026-03-12T10:30:00Z".to_string(),
+        };
+
+        let json = serde_json::to_string(&profile).unwrap();
+        let deserialized: UserProfile = serde_json::from_str(&json).unwrap();
+        assert_eq!(profile, deserialized);
+    }
 }
+

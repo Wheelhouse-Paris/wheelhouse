@@ -5,6 +5,7 @@ members = [
     "crates/wh-stream",
     "crates/wh-proto",
     "crates/wh-skill",
+    "crates/wh-user",
 ]
 resolver = "2"
 
