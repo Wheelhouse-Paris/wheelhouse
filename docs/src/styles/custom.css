@@ -1,36 +1,97 @@
-/* Wheelhouse brand theme — The Wheelhouse Paris brand book */
-/* Palette: Ardoise #2A323E · Pierre Calcaire #F2EDE4 · Cuivre Ferronnerie #B28264 */
+/* Wheelhouse brand theme — Direction ①: Ardoise + Split */
+/* Palette from The Wheelhouse Paris brand book & ux-design-directions.html */
+/* Ardoise #2A323E · Pierre Calcaire #F2EDE4 · Cuivre #B28264 */
 
-/* Light mode — warm cream + copper */
 :root {
+  /* CSS variables mirroring the mockup tokens */
+  --wh-ardoise: #2A323E;
+  --wh-ardoise-topbar: #1e2731;
+  --wh-ardoise-sidebar: #222c38;
+  --wh-ardoise-code: #141d27;
+  --wh-pierre: #F2EDE4;
+  --wh-cuivre: #B28264;
+  --wh-cuivre-dark: #8B6347;
+  --wh-text-dark: #302C28;
+  --wh-text-muted: #78736C;
+
+  /* Starlight accent — copper */
   --sl-color-accent-low: #ead9cc;
-  --sl-color-accent: #8B6347;     /* darkened copper — 4.6:1 on cream (WCAG AA) */
+  --sl-color-accent: var(--wh-cuivre-dark);  /* 4.6:1 on cream — WCAG AA */
   --sl-color-accent-high: #6b4930;
-  --sl-color-bg: #F2EDE4;         /* Pierre Calcaire */
-  --sl-color-bg-nav: #2A323E;     /* Ardoise — nav always dark */
-  --sl-color-bg-sidebar: #2A323E;
-  --sl-color-text-nav: #f0ede8;
-  --sl-color-text-sidebar: #e8e4de;
 }
 
-/* Dark mode — ardoise dark + copper */
+/* ── Dark mode (primary — Ardoise First) ── */
 :root[data-theme='dark'] {
   --sl-color-accent-low: #4a2e1e;
-  --sl-color-accent: #B28264;     /* Cuivre Ferronnerie */
+  --sl-color-accent: var(--wh-cuivre);
   --sl-color-accent-high: #d4a88a;
-  --sl-color-bg: #1e252e;         /* darker than Ardoise for contrast */
-  --sl-color-bg-nav: #2A323E;     /* Ardoise */
-  --sl-color-bg-sidebar: #232b35;
+
+  /* Page background */
+  --sl-color-bg: var(--wh-ardoise);
+  --sl-color-bg-nav: var(--wh-ardoise-topbar);
+  --sl-color-bg-sidebar: var(--wh-ardoise-sidebar);
+
+  /* Body text — subdued white, not pure white (matches d1-prose rgba(255,255,255,0.55)) */
+  --sl-color-text: rgba(255, 255, 255, 0.78);
+  --sl-color-text-accent: rgba(255, 255, 255, 0.45);
+
+  /* Nav border — subtle copper */
+  --sl-color-hairline: rgba(178, 130, 100, 0.22);
 }
 
-/* Copper underline on h2 section titles */
+/* ── Light mode — warm cream ── */
+:root[data-theme='light'] {
+  --sl-color-bg: var(--wh-pierre);
+  --sl-color-bg-nav: var(--wh-ardoise);  /* nav always Ardoise */
+  --sl-color-bg-sidebar: #fff;
+  --sl-color-text: var(--wh-text-dark);
+}
+
+/* ── H2 copper underline bar — short decorative bar, not full-width border ── */
+/* Matches .copper-bar { width: 36px; height: 2px; background: var(--cuivre) } in mockup */
 .sl-markdown-content h2 {
-  border-bottom: 2px solid var(--sl-color-accent);
-  padding-bottom: 0.25rem;
+  padding-bottom: 0;    /* no border — use ::after instead */
+  border-bottom: none;
+}
+.sl-markdown-content h2::after {
+  content: '';
+  display: block;
+  width: 36px;
+  height: 2px;
+  background: var(--wh-cuivre);
+  margin-top: 8px;
 }
 
-/* Code blocks — slightly darker than page bg */
-:root[data-theme='dark'] .sl-markdown-content pre {
-  background-color: #141d27;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+/* ── Code blocks — darker than page bg, matching #141d27 in mockup ── */
+:root[data-theme='dark'] .sl-markdown-content pre,
+:root[data-theme='dark'] :not(pre) > code {
+  background-color: var(--wh-ardoise-code);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+/* ── Tables — copper headers (uppercase, letter-spaced) ── */
+/* Matches .d1-flag-table th in mockup */
+:root[data-theme='dark'] .sl-markdown-content table th {
+  color: var(--wh-cuivre);
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.18);
+}
+:root[data-theme='dark'] .sl-markdown-content table td {
+  color: rgba(255, 255, 255, 0.55);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+/* First column code values in copper — matches td:first-child in mockup */
+:root[data-theme='dark'] .sl-markdown-content table td:first-child code {
+  color: var(--wh-cuivre);
+}
+
+/* ── Aside / callout notes — copper left border ── */
+/* Matches .d1-note in mockup: border-left + subtle copper bg */
+:root[data-theme='dark'] .sl-markdown-content blockquote {
+  border-left: 2px solid var(--wh-cuivre);
+  background: rgba(178, 130, 100, 0.08);
+  color: rgba(255, 255, 255, 0.45);
 }
