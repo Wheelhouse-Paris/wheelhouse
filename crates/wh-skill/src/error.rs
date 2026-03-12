@@ -38,4 +38,13 @@ pub enum SkillError {
     /// An I/O error occurred while reading skill files.
     #[error("I/O error: {0}")]
     IoError(#[from] std::io::Error),
+
+    /// The skill is not in the agent's allowlist (FM-05).
+    #[error("skill '{skill_name}' is not permitted for agent '{agent_id}'")]
+    SkillNotPermitted {
+        /// The skill name that was not allowed.
+        skill_name: String,
+        /// The agent that attempted the invocation.
+        agent_id: String,
+    },
 }

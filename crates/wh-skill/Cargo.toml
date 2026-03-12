@@ -13,6 +13,8 @@ serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 git2 = { workspace = true }
+wh-proto = { workspace = true }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
