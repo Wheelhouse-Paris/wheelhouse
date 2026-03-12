@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "list_types control command",
+  "description": "List all registered custom Protobuf types",
+  "type": "object",
+  "properties": {
+    "request": {
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "command": { "type": "string", "const": "list_types" }
+      },
+      "required": ["v", "command"]
+    },
+    "response_success": {
+      "type": "object",
+      "properties": {
+        "v": { "type": "integer", "const": 1 },
+        "status": { "type": "string", "const": "ok" },
+        "data": {
+          "type": "object",
+          "properties": {
+            "types": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type_name": { "type": "string" },
+                  "namespace": { "type": "string" },
+                  "short_name": { "type": "string" },
+                  "registered_at": { "type": "string" }
+                },
+                "required": ["type_name", "namespace", "short_name", "registered_at"]
+              }
+            },
+            "total_count": { "type": "integer" }
+          },
+          "required": ["types", "total_count"]
+        }
+      },
+      "required": ["v", "status", "data"]
+    }
+  }
+}

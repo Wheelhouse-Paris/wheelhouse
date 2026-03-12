@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package wheelhouse.v1;
+
+// Stream envelope for carrying typed messages through the data plane.
+// Per SC-01, the ZMQ data plane uses a 3-frame envelope:
+//   Frame 0: topic/stream name
+//   Frame 1: type name (fully-qualified: <namespace>.<TypeName>)
+//   Frame 2: payload bytes (this message, serialized)
+//
+// This proto defines the payload structure. The type_name in Frame 1
+// allows receivers to determine the message type before deserialization.
+message StreamEnvelope {
+  // Fully-qualified type name: <namespace>.<TypeName>
+  string type_name = 1;
+
+  // Serialized payload bytes — the actual message content
+  bytes payload = 2;
+
+  // Optional publisher identity for attribution
+  string publisher_id = 3;
+
+  // Monotonic sequence number from publisher
+  uint64 sequence = 4;
+
+  // Unix timestamp in milliseconds
+  int64 timestamp_ms = 5;
+
+  // Reserved for future fields (TT-02)
+  reserved 10 to 20;
+}
+
+// Type registration request sent via control socket.
+// Used by SDKs to register custom Protobuf types with the broker.
+message TypeRegistration {
+  // Fully-qualified type name: <namespace>.<TypeName>
+  string type_name = 1;
+
+  // Optional FileDescriptorProto bytes for self-description
+  bytes descriptor_bytes = 2;
+
+  // Reserved for future fields (TT-02)
+  reserved 10 to 20;
+}
