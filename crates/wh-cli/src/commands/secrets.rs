@@ -1,0 +1,490 @@
+use std::io::IsTerminal;
+use std::process::Command;
+
+use clap::Subcommand;
+use console::style;
+use serde::Serialize;
+
+use crate::output::error::WhError;
+use crate::output::{Format, OutputEnvelope};
+
+/// Credential spec for a single secret that the wizard manages.
+#[derive(Debug, Clone)]
+pub struct CredentialSpec {
+    /// Internal name used as keychain service suffix (e.g., "anthropic_api_key").
+    pub name: &'static str,
+    /// Environment variable to check (e.g., "ANTHROPIC_API_KEY").
+    pub env_var: &'static str,
+    /// Display name shown to users (e.g., "Claude API key").
+    pub display_name: &'static str,
+    /// Whether the credential is required for Wheelhouse to function.
+    pub required: bool,
+}
+
+/// The MVP credential registry.
+pub const CREDENTIALS: &[CredentialSpec] = &[
+    CredentialSpec {
+        name: "anthropic_api_key",
+        env_var: "ANTHROPIC_API_KEY",
+        display_name: "Claude API key",
+        required: true,
+    },
+    CredentialSpec {
+        name: "telegram_bot_token",
+        env_var: "TELEGRAM_BOT_TOKEN",
+        display_name: "Telegram bot token",
+        required: false,
+    },
+];
+
+/// Result of auto-detecting a tool on the system.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DetectionResult {
+    Detected { version: String },
+    NotFound { reason: String },
+}
+
+/// Status of an individual credential after processing.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialStatus {
+    /// Detected from an environment variable — no prompt needed.
+    DetectedFromEnv,
+    /// Already stored in keychain — no prompt needed.
+    AlreadyConfigured,
+    /// User entered value during wizard — now stored in keychain.
+    Configured,
+    /// User skipped an optional credential.
+    Skipped,
+}
+
+/// Per-credential result included in JSON output.
+#[derive(Debug, Clone, Serialize)]
+pub struct CredentialResult {
+    pub name: String,
+    pub display_name: String,
+    pub required: bool,
+    pub status: CredentialStatus,
+}
+
+/// Full result of the `secrets init` wizard for JSON output.
+#[derive(Debug, Serialize)]
+pub struct SecretsInitData {
+    pub podman: DetectionResult,
+    pub git: DetectionResult,
+    pub credentials: Vec<CredentialResult>,
+    pub next_command: String,
+}
+
+/// The keychain service prefix used for all Wheelhouse secrets.
+const KEYRING_SERVICE_PREFIX: &str = "wh";
+/// The keyring user for all entries.
+const KEYRING_USER: &str = "wh";
+
+#[derive(Debug, Subcommand)]
+pub enum SecretsCmd {
+    /// Initialize credential wizard — detect providers and configure API keys.
+    Init {
+        /// Output format: human (default) or json.
+        #[arg(long, default_value = "human")]
+        format: Format,
+    },
+}
+
+impl SecretsCmd {
+    /// Extract the output format from the command, without consuming self.
+    pub fn format(&self) -> Format {
+        match self {
+            SecretsCmd::Init { format, .. } => *format,
+        }
+    }
+
+    pub fn run(self) -> Result<(), WhError> {
+        match self {
+            SecretsCmd::Init { format } => run_init(format),
+        }
+    }
+}
+
+/// Main entry point for `wh secrets init`.
+fn run_init(format: Format) -> Result<(), WhError> {
+    // Non-TTY guard: interactive prompting requires a terminal.
+    // In JSON mode we still need to check — if all creds are already configured
+    // via env vars we can proceed, but if prompting would be needed we must fail.
+    let is_tty = std::io::stdin().is_terminal();
+
+    // --- Provider auto-detection ---
+    let podman = detect_podman();
+    let git = detect_git();
+
+    // Git is mandatory for Wheelhouse.
+    if let DetectionResult::NotFound { ref reason } = git {
+        // Error output is handled by main.rs — do not print here to avoid duplicates.
+        return Err(WhError::GitNotFound(reason.clone()));
+    }
+
+    if format == Format::Human {
+        // Print detection results.
+        match &podman {
+            DetectionResult::Detected { version } => {
+                println!("{} Podman {} detected", style("✓").green().bold(), version);
+            }
+            DetectionResult::NotFound { reason } => {
+                println!(
+                    "{} Podman not found — {}",
+                    style("!").yellow().bold(),
+                    reason,
+                );
+                println!("  You can still configure credentials now and install Podman later.");
+            }
+        }
+        match &git {
+            DetectionResult::Detected { version } => {
+                println!("{} Git {} detected", style("✓").green().bold(), version);
+            }
+            DetectionResult::NotFound { .. } => unreachable!(), // handled above
+        }
+        println!(); // blank line before credential section
+    }
+
+    // --- Credential processing ---
+    let mut results: Vec<CredentialResult> = Vec::new();
+    let mut needs_prompt = false;
+
+    // First pass: determine which credentials need prompting.
+    for spec in CREDENTIALS {
+        let status = check_credential(spec);
+        match status {
+            None => {
+                // Credential not yet configured — will need prompting.
+                needs_prompt = true;
+            }
+            Some(status) => {
+                if format == Format::Human {
+                    print_credential_status(spec, &status);
+                }
+                results.push(CredentialResult {
+                    name: spec.name.to_string(),
+                    display_name: spec.display_name.to_string(),
+                    required: spec.required,
+                    status,
+                });
+            }
+        }
+    }
+
+    // Non-TTY check: if we need prompting but have no terminal, fail.
+    // Error output is handled by main.rs — do not print here to avoid duplicates.
+    if needs_prompt && !is_tty {
+        return Err(WhError::NonInteractive);
+    }
+
+    // Second pass: prompt for unconfigured credentials.
+    for spec in CREDENTIALS {
+        // Skip if already processed in first pass.
+        if results.iter().any(|r| r.name == spec.name) {
+            continue;
+        }
+
+        let status = prompt_credential(spec, format)?;
+        if format == Format::Human {
+            print_credential_status(spec, &status);
+        }
+        results.push(CredentialResult {
+            name: spec.name.to_string(),
+            display_name: spec.display_name.to_string(),
+            required: spec.required,
+            status,
+        });
+    }
+
+    // --- Summary ---
+    let next_command = "wh deploy apply topology.wh".to_string();
+
+    if format == Format::Human {
+        println!(); // blank line before summary
+        let configured = results
+            .iter()
+            .filter(|r| matches!(r.status, CredentialStatus::Configured | CredentialStatus::DetectedFromEnv | CredentialStatus::AlreadyConfigured))
+            .count();
+        let skipped = results
+            .iter()
+            .filter(|r| matches!(r.status, CredentialStatus::Skipped))
+            .count();
+        println!(
+            "{} {} credential(s) configured, {} skipped.",
+            style("✓").green().bold(),
+            configured,
+            skipped,
+        );
+        println!("Run '{}' to start.", style(&next_command).bold());
+    }
+
+    if format == Format::Json {
+        let data = SecretsInitData {
+            podman,
+            git,
+            credentials: results,
+            next_command,
+        };
+        let envelope = OutputEnvelope::ok(data);
+        let json = serde_json::to_string_pretty(&envelope)
+            .map_err(|e| WhError::Internal(e.to_string()))?;
+        println!("{json}");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Provider detection
+// ---------------------------------------------------------------------------
+
+fn detect_podman() -> DetectionResult {
+    match Command::new("podman").arg("version").arg("--format").arg("{{.Client.Version}}").output() {
+        Ok(output) if output.status.success() => {
+            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            DetectionResult::Detected { version }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            DetectionResult::NotFound {
+                reason: if stderr.is_empty() {
+                    "podman returned an error".to_string()
+                } else {
+                    stderr
+                },
+            }
+        }
+        Err(e) => DetectionResult::NotFound {
+            reason: e.to_string(),
+        },
+    }
+}
+
+fn detect_git() -> DetectionResult {
+    match Command::new("git").arg("--version").output() {
+        Ok(output) if output.status.success() => {
+            let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // `git --version` returns e.g. "git version 2.43.0"
+            let version = raw.strip_prefix("git version ").unwrap_or(&raw).to_string();
+            DetectionResult::Detected { version }
+        }
+        Ok(_) => DetectionResult::NotFound {
+            reason: "git returned an error".to_string(),
+        },
+        Err(e) => DetectionResult::NotFound {
+            reason: e.to_string(),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Credential helpers
+// ---------------------------------------------------------------------------
+
+/// Check if a credential is already configured (env var or keychain).
+/// Returns `Some(status)` if already configured, `None` if prompting is needed.
+fn check_credential(spec: &CredentialSpec) -> Option<CredentialStatus> {
+    // 1. Check environment variable.
+    if std::env::var(spec.env_var).is_ok() {
+        return Some(CredentialStatus::DetectedFromEnv);
+    }
+
+    // 2. Check keychain.
+    let service = format!("{}.{}", KEYRING_SERVICE_PREFIX, spec.name);
+    if let Ok(entry) = keyring::Entry::new(&service, KEYRING_USER) {
+        if entry.get_password().is_ok() {
+            return Some(CredentialStatus::AlreadyConfigured);
+        }
+    }
+
+    None
+}
+
+/// Prompt the user for a credential value and store it.
+fn prompt_credential(spec: &CredentialSpec, format: Format) -> Result<CredentialStatus, WhError> {
+    if format == Format::Human {
+        // Print prompt header.
+        if spec.required {
+            println!(
+                "  {} (required):",
+                style(spec.display_name).bold(),
+            );
+        } else {
+            println!(
+                "  {} (optional — press Enter to skip):",
+                style(spec.display_name).bold(),
+            );
+        }
+    }
+
+    loop {
+        let input = dialoguer::Password::new()
+            .with_prompt(format!("  Enter {}", spec.display_name))
+            .allow_empty_password(!spec.required)
+            .interact()
+            .map_err(|e| WhError::PromptFailed(e.to_string()))?;
+
+        if input.is_empty() {
+            if spec.required {
+                if format == Format::Human {
+                    println!(
+                        "    {} is required. Please enter a value.",
+                        spec.display_name,
+                    );
+                }
+                continue;
+            }
+            return Ok(CredentialStatus::Skipped);
+        }
+
+        // Store in keychain.
+        let service = format!("{}.{}", KEYRING_SERVICE_PREFIX, spec.name);
+        let entry = keyring::Entry::new(&service, KEYRING_USER)
+            .map_err(|e| WhError::KeychainError(e.to_string()))?;
+        entry
+            .set_password(&input)
+            .map_err(|e| WhError::KeychainError(e.to_string()))?;
+
+        return Ok(CredentialStatus::Configured);
+    }
+}
+
+fn print_credential_status(spec: &CredentialSpec, status: &CredentialStatus) {
+    match status {
+        CredentialStatus::DetectedFromEnv => {
+            println!(
+                "  {} {} detected from environment",
+                style("✓").green().bold(),
+                spec.display_name,
+            );
+        }
+        CredentialStatus::AlreadyConfigured => {
+            println!(
+                "  {} {} already configured",
+                style("✓").green().bold(),
+                spec.display_name,
+            );
+        }
+        CredentialStatus::Configured => {
+            println!(
+                "  {} {} configured",
+                style("✓").green().bold(),
+                spec.display_name,
+            );
+        }
+        CredentialStatus::Skipped => {
+            println!(
+                "  {} {} skipped",
+                style("⊘").dim(),
+                spec.display_name,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_registry_contains_expected_entries() {
+        assert_eq!(CREDENTIALS.len(), 2);
+
+        let anthropic = &CREDENTIALS[0];
+        assert_eq!(anthropic.name, "anthropic_api_key");
+        assert_eq!(anthropic.env_var, "ANTHROPIC_API_KEY");
+        assert!(anthropic.required);
+
+        let telegram = &CREDENTIALS[1];
+        assert_eq!(telegram.name, "telegram_bot_token");
+        assert_eq!(telegram.env_var, "TELEGRAM_BOT_TOKEN");
+        assert!(!telegram.required);
+    }
+
+    #[test]
+    fn detection_result_serializes_snake_case() {
+        let detected = DetectionResult::Detected {
+            version: "4.8.0".to_string(),
+        };
+        let json = serde_json::to_string(&detected).unwrap();
+        assert!(json.contains("\"status\":\"detected\""));
+        assert!(json.contains("\"version\":\"4.8.0\""));
+        assert!(!json.contains("camelCase"));
+    }
+
+    #[test]
+    fn credential_status_serializes_snake_case() {
+        let status = CredentialStatus::DetectedFromEnv;
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("detected_from_env"));
+    }
+
+    #[test]
+    fn secrets_init_data_json_never_contains_secrets() {
+        let data = SecretsInitData {
+            podman: DetectionResult::Detected {
+                version: "4.8.0".to_string(),
+            },
+            git: DetectionResult::Detected {
+                version: "2.43.0".to_string(),
+            },
+            credentials: vec![
+                CredentialResult {
+                    name: "anthropic_api_key".to_string(),
+                    display_name: "Claude API key".to_string(),
+                    required: true,
+                    status: CredentialStatus::DetectedFromEnv,
+                },
+                CredentialResult {
+                    name: "telegram_bot_token".to_string(),
+                    display_name: "Telegram bot token".to_string(),
+                    required: false,
+                    status: CredentialStatus::Skipped,
+                },
+            ],
+            next_command: "wh deploy apply topology.wh".to_string(),
+        };
+
+        let envelope = OutputEnvelope::ok(data);
+        let json = serde_json::to_string_pretty(&envelope).unwrap();
+
+        // Must contain v:1 envelope
+        assert!(json.contains("\"v\": 1"));
+        assert!(json.contains("\"status\": \"ok\""));
+
+        // Must NOT contain any actual secret values (there are none in this struct by design)
+        // The struct intentionally has no field for secret values — only statuses.
+        assert!(!json.contains("sk-"));
+        assert!(!json.contains("password"));
+
+        // Must use snake_case
+        assert!(json.contains("next_command"));
+        assert!(json.contains("display_name"));
+        assert!(!json.contains("nextCommand"));
+        assert!(!json.contains("displayName"));
+    }
+
+    #[test]
+    fn output_envelope_json_has_v1() {
+        let envelope = OutputEnvelope::ok(serde_json::json!({"test": true}));
+        let json = serde_json::to_string(&envelope).unwrap();
+        assert!(json.contains("\"v\":1"));
+        assert!(json.contains("\"status\":\"ok\""));
+    }
+
+    #[test]
+    fn optional_credential_skip_produces_correct_status() {
+        let result = CredentialResult {
+            name: "telegram_bot_token".to_string(),
+            display_name: "Telegram bot token".to_string(),
+            required: false,
+            status: CredentialStatus::Skipped,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"skipped\""));
+        assert!(!json.contains("error"));
+    }
+}
