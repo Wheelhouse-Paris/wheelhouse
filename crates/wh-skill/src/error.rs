@@ -47,4 +47,17 @@ pub enum SkillError {
         /// The agent that attempted the invocation.
         agent_id: String,
     },
+
+    /// The skill could not be fetched from the git repository.
+    ///
+    /// This covers both "repository unreachable" and "skill not found in repo at
+    /// the resolved version" cases. Distinct from config-level issues which use
+    /// `SKILL_LOAD_FAILED`.
+    #[error("failed to fetch skill '{skill_name}' from git: {reason}")]
+    SkillFetchFailed {
+        /// The skill that could not be fetched.
+        skill_name: String,
+        /// Human-readable reason for the fetch failure.
+        reason: String,
+    },
 }

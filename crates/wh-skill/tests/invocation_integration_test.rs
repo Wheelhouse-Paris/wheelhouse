@@ -1,7 +1,7 @@
-//! Integration tests for skill invocation pipeline (Story 5-2).
+//! Integration tests for skill invocation pipeline (Stories 5-2, 5-3).
 //!
 //! Tests the complete flow: allowlist validation, version resolution,
-//! skill loading from git, and execution with event ordering.
+//! skill loading from git, execution with event ordering, and lazy caching.
 
 use std::collections::HashMap;
 use std::fs;
@@ -57,6 +57,56 @@ fn create_repo_with_skill(skill_name: &str, version: &str) -> (TempDir, git2::Oi
     (tmp, oid)
 }
 
+/// Helper: create a temp git repo with two skills.
+fn create_repo_with_two_skills(
+    skill1: &str,
+    skill2: &str,
+    version: &str,
+) -> (TempDir, git2::Oid) {
+    let tmp = TempDir::new().unwrap();
+    let repo = Repository::init(tmp.path()).unwrap();
+    let sig = Signature::now("test", "test@test.com").unwrap();
+
+    for skill_name in [skill1, skill2] {
+        let skill_dir = tmp.path().join(skill_name);
+        let steps_dir = skill_dir.join("steps");
+        fs::create_dir_all(&steps_dir).unwrap();
+
+        fs::write(
+            skill_dir.join("skill.md"),
+            format!(
+                "---\nname: {skill_name}\nversion: \"{version}\"\nsteps:\n  - steps/01-do.md\n---\n\n# {skill_name}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            steps_dir.join("01-do.md"),
+            format!("# Step 1\nContent for {skill_name}.\n"),
+        )
+        .unwrap();
+    }
+
+    let mut index = repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+    let oid = repo
+        .commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+        .unwrap();
+    let commit = repo.find_commit(oid).unwrap();
+    repo.tag_lightweight(&format!("v{version}"), commit.as_object(), false)
+        .unwrap();
+
+    (tmp, oid)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Story 5-2 Integration Tests (preserved)
+// ══════════════════════════════════════════════════════════════════════
+
 /// AC #1, #2, #3: Full pipeline — allowed skill produces ProgressUpdate then Completed(Success).
 #[tokio::test]
 async fn pipeline_processes_allowed_skill_end_to_end() {
@@ -71,7 +121,7 @@ async fn pipeline_processes_allowed_skill_end_to_end() {
         }],
     };
     let skill_repo = SkillRepository::open(tmp.path()).unwrap();
-    let pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
 
     let request = SkillInvocationRequest {
         skill_name: "summarize".into(),
@@ -114,7 +164,7 @@ async fn pipeline_processes_allowed_skill_end_to_end() {
 #[tokio::test]
 async fn pipeline_rejects_disallowed_skill() {
     let allowlist = SkillAllowlist::new(vec!["summarize".into()]);
-    let pipeline = InvocationPipeline::new(allowlist, None, None);
+    let mut pipeline = InvocationPipeline::new(allowlist, None, None);
 
     let request = SkillInvocationRequest {
         skill_name: "web-search".into(),
@@ -143,7 +193,7 @@ async fn pipeline_rejects_disallowed_skill() {
     }
 }
 
-/// AC #1: Nonexistent skill in repo emits error with code SKILL_LOAD_FAILED.
+/// AC #1: Nonexistent skill in repo emits error with code SKILL_FETCH_FAILED.
 #[tokio::test]
 async fn pipeline_rejects_nonexistent_skill_in_repo() {
     let (tmp, _oid) = create_repo_with_skill("summarize", "1.0.0");
@@ -157,7 +207,7 @@ async fn pipeline_rejects_nonexistent_skill_in_repo() {
         }],
     };
     let skill_repo = SkillRepository::open(tmp.path()).unwrap();
-    let pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
 
     let request = SkillInvocationRequest {
         skill_name: "ghost-skill".into(),
@@ -174,7 +224,7 @@ async fn pipeline_rejects_nonexistent_skill_in_repo() {
     match event {
         SkillExecutorEvent::Completed { outcome, .. } => match outcome {
             SkillInvocationOutcome::Error { error_code, .. } => {
-                assert_eq!(error_code, "SKILL_LOAD_FAILED");
+                assert_eq!(error_code, "SKILL_FETCH_FAILED");
             }
             _ => panic!("expected Error outcome"),
         },
@@ -196,7 +246,7 @@ async fn skill_progress_emitted_before_skill_result() {
         }],
     };
     let skill_repo = SkillRepository::open(tmp.path()).unwrap();
-    let pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
 
     let request = SkillInvocationRequest {
         skill_name: "ordered".into(),
@@ -223,4 +273,174 @@ async fn skill_progress_emitted_before_skill_result() {
         matches!(events[1], SkillExecutorEvent::Completed { .. }),
         "second event must be Completed"
     );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Story 5-3 Integration Tests — Lazy loading and caching
+// ══════════════════════════════════════════════════════════════════════
+
+/// Two different skills are cached independently, each with correct content.
+#[tokio::test]
+async fn two_skills_cached_independently() {
+    let (tmp, _oid) = create_repo_with_two_skills("summarize", "web-search", "1.0.0");
+
+    let allowlist = SkillAllowlist::new(vec!["summarize".into(), "web-search".into()]);
+    let config = SkillsConfig {
+        skills_repo: tmp.path().to_path_buf(),
+        skills: vec![
+            SkillRef {
+                name: "summarize".into(),
+                version: "1.0.0".into(),
+            },
+            SkillRef {
+                name: "web-search".into(),
+                version: "1.0.0".into(),
+            },
+        ],
+    };
+    let skill_repo = SkillRepository::open(tmp.path()).unwrap();
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
+
+    // Invoke first skill
+    let req1 = SkillInvocationRequest {
+        skill_name: "summarize".into(),
+        agent_id: "agent-1".into(),
+        invocation_id: "inv-s1".into(),
+        parameters: HashMap::new(),
+        timestamp_ms: 1710000000000,
+    };
+    let (tx1, mut rx1) = mpsc::channel(10);
+    pipeline.process(req1, tx1).await.unwrap();
+    let _ = rx1.recv().await.unwrap(); // progress
+    let c1 = rx1.recv().await.unwrap(); // completed
+    match c1 {
+        SkillExecutorEvent::Completed { outcome, .. } => match outcome {
+            SkillInvocationOutcome::Success { output } => {
+                assert!(output.contains("summarize"), "output should contain summarize content");
+            }
+            _ => panic!("expected Success"),
+        },
+        _ => panic!("expected Completed"),
+    }
+
+    // Invoke second skill
+    let req2 = SkillInvocationRequest {
+        skill_name: "web-search".into(),
+        agent_id: "agent-1".into(),
+        invocation_id: "inv-s2".into(),
+        parameters: HashMap::new(),
+        timestamp_ms: 1710000000001,
+    };
+    let (tx2, mut rx2) = mpsc::channel(10);
+    pipeline.process(req2, tx2).await.unwrap();
+    let _ = rx2.recv().await.unwrap(); // progress
+    let c2 = rx2.recv().await.unwrap(); // completed
+    match c2 {
+        SkillExecutorEvent::Completed { outcome, .. } => match outcome {
+            SkillInvocationOutcome::Success { output } => {
+                assert!(
+                    output.contains("web-search"),
+                    "output should contain web-search content"
+                );
+            }
+            _ => panic!("expected Success"),
+        },
+        _ => panic!("expected Completed"),
+    }
+
+    // Both cached independently
+    assert_eq!(pipeline.cache().len(), 2, "both skills should be cached");
+}
+
+/// Same skill at two different versions — cached independently.
+#[tokio::test]
+async fn same_skill_different_versions_cached_independently() {
+    let tmp = TempDir::new().unwrap();
+    let git_repo = Repository::init(tmp.path()).unwrap();
+    let sig = Signature::now("test", "test@test.com").unwrap();
+
+    // Create v1 of the skill
+    let skill_dir = tmp.path().join("summarize");
+    let steps_dir = skill_dir.join("steps");
+    fs::create_dir_all(&steps_dir).unwrap();
+    fs::write(
+        skill_dir.join("skill.md"),
+        "---\nname: summarize\nversion: \"1.0.0\"\nsteps:\n  - steps/01-do.md\n---\n\n# Summarize V1\n",
+    )
+    .unwrap();
+    fs::write(steps_dir.join("01-do.md"), "# Step V1\nVersion 1 content.\n").unwrap();
+
+    let mut index = git_repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = git_repo.find_tree(tree_oid).unwrap();
+    let oid_v1 = git_repo
+        .commit(Some("HEAD"), &sig, &sig, "v1", &tree, &[])
+        .unwrap();
+    let commit_v1 = git_repo.find_commit(oid_v1).unwrap();
+    git_repo
+        .tag_lightweight("v1.0.0", commit_v1.as_object(), false)
+        .unwrap();
+
+    // Create v2
+    fs::write(
+        skill_dir.join("skill.md"),
+        "---\nname: summarize\nversion: \"2.0.0\"\nsteps:\n  - steps/01-do.md\n---\n\n# Summarize V2\n",
+    )
+    .unwrap();
+    fs::write(steps_dir.join("01-do.md"), "# Step V2\nVersion 2 content.\n").unwrap();
+
+    let mut index = git_repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = git_repo.find_tree(tree_oid).unwrap();
+    let oid_v2 = git_repo
+        .commit(Some("HEAD"), &sig, &sig, "v2", &tree, &[&commit_v1])
+        .unwrap();
+    let commit_v2 = git_repo.find_commit(oid_v2).unwrap();
+    git_repo
+        .tag_lightweight("v2.0.0", commit_v2.as_object(), false)
+        .unwrap();
+
+    // Pipeline with v1 first
+    let allowlist = SkillAllowlist::new(vec!["summarize".into()]);
+    let config_v1 = SkillsConfig {
+        skills_repo: tmp.path().to_path_buf(),
+        skills: vec![SkillRef {
+            name: "summarize".into(),
+            version: "1.0.0".into(),
+        }],
+    };
+    let skill_repo = SkillRepository::open(tmp.path()).unwrap();
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config_v1), Some(skill_repo));
+
+    // Invoke v1
+    let req1 = SkillInvocationRequest {
+        skill_name: "summarize".into(),
+        agent_id: "agent-1".into(),
+        invocation_id: "inv-v1".into(),
+        parameters: HashMap::new(),
+        timestamp_ms: 1710000000000,
+    };
+    let (tx1, mut rx1) = mpsc::channel(10);
+    pipeline.process(req1, tx1).await.unwrap();
+    let _ = rx1.recv().await.unwrap(); // progress
+    let c1 = rx1.recv().await.unwrap();
+    match c1 {
+        SkillExecutorEvent::Completed { outcome, .. } => match outcome {
+            SkillInvocationOutcome::Success { output } => {
+                assert!(output.contains("Version 1"), "should get v1 content");
+            }
+            _ => panic!("expected Success"),
+        },
+        _ => panic!("expected Completed"),
+    }
+
+    assert_eq!(pipeline.cache().len(), 1, "one version cached");
 }

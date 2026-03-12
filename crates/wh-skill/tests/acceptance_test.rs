@@ -1,9 +1,13 @@
-//! Acceptance tests for Story 5-2: SkillInvocation — Agent Invokes a Skill via Stream
+//! Acceptance tests for Stories 5-2 and 5-3:
+//! - 5-2: SkillInvocation — Agent Invokes a Skill via Stream
+//! - 5-3: Lazy Skill Loading from Git
 //!
 //! These tests verify the complete skill invocation pipeline:
 //! - Allowlist validation (FM-05)
 //! - SkillProgress emission (CM-06)
 //! - SkillResult emission on success and failure
+//! - Lazy loading with session cache (5-3)
+//! - SKILL_FETCH_FAILED on unreachable repo (5-3)
 
 use std::collections::HashMap;
 use wh_skill::allowlist::SkillAllowlist;
@@ -15,7 +19,7 @@ use wh_skill::invocation::{
 };
 use wh_skill::pipeline::InvocationPipeline;
 
-// ── AC #1: Allowlist validation (FM-05) ─────────────────────────────
+// ── AC #1 (5-2): Allowlist validation (FM-05) ───────────────────────
 
 /// Given an agent publishes a SkillInvocation with a skill NOT in the allowlist,
 /// When the pipeline processes it,
@@ -34,7 +38,7 @@ async fn test_disallowed_skill_is_rejected_with_error() {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);
 
-    let pipeline = InvocationPipeline::new(allowlist, None, None);
+    let mut pipeline = InvocationPipeline::new(allowlist, None, None);
     pipeline.process(request, tx).await.unwrap();
 
     let event = rx.recv().await.expect("should receive event");
@@ -69,7 +73,7 @@ async fn test_allowed_skill_passes_allowlist_check() {
     assert!(!allowlist.is_allowed("web-search"));
 }
 
-// ── AC #2: SkillProgress emission (CM-06) ───────────────────────────
+// ── AC #2 (5-2): SkillProgress emission (CM-06) ─────────────────────
 
 /// Given a valid SkillInvocation is published,
 /// When the skill executor picks it up,
@@ -118,7 +122,7 @@ async fn test_skill_progress_emitted_before_result() {
         }],
     };
     let skill_repo = wh_skill::SkillRepository::open(tmp.path()).unwrap();
-    let pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
 
     let request = SkillInvocationRequest {
         skill_name: "summarize".to_string(),
@@ -152,7 +156,7 @@ async fn test_skill_progress_emitted_before_result() {
     }
 }
 
-// ── AC #3: SkillResult with success ─────────────────────────────────
+// ── AC #3 (5-2): SkillResult with success ───────────────────────────
 
 /// Given a skill completes successfully,
 /// When the result is ready,
@@ -195,4 +199,194 @@ fn test_skill_progress_builder() {
     assert!((progress.progress_percent - 0.0).abs() < f32::EPSILON);
     assert_eq!(progress.status_message, "Skill execution started");
     assert!(progress.timestamp_ms > 0);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Story 5-3: Lazy Skill Loading from Git — Acceptance Tests
+// ══════════════════════════════════════════════════════════════════════
+
+// ── AC #1 (5-3): No skills loaded at startup ─────────────────────────
+
+/// Given an InvocationPipeline is created with a skills repository,
+/// When construction completes,
+/// Then no skill files have been loaded (cache is empty).
+#[tokio::test]
+async fn test_no_skills_loaded_at_pipeline_construction() {
+    let allowlist = SkillAllowlist::new(vec!["summarize".to_string()]);
+    let pipeline = InvocationPipeline::new(allowlist, None, None);
+    assert!(
+        pipeline.cache().is_empty(),
+        "Cache must be empty at construction — no startup loading"
+    );
+}
+
+// ── AC #2 (5-3): On-demand fetch with session cache ──────────────────
+
+/// Given a SkillInvocation for "summarize" is published,
+/// When the skill executor processes it,
+/// Then the skill is fetched from git on demand,
+/// And a subsequent invocation of the same skill uses the local cache.
+#[tokio::test]
+async fn test_lazy_load_and_cache_hit() {
+    use git2::{Repository, Signature};
+    use std::fs;
+    use tempfile::TempDir;
+
+    // Set up a git repo with the "summarize" skill
+    let tmp = TempDir::new().unwrap();
+    let git_repo = Repository::init(tmp.path()).unwrap();
+    let sig = Signature::now("test", "test@test.com").unwrap();
+
+    let skill_dir = tmp.path().join("summarize");
+    let steps_dir = skill_dir.join("steps");
+    fs::create_dir_all(&steps_dir).unwrap();
+    fs::write(
+        skill_dir.join("skill.md"),
+        "---\nname: summarize\nversion: \"1.0.0\"\nsteps:\n  - steps/01-do.md\n---\n\n# Summarize\n",
+    )
+    .unwrap();
+    fs::write(steps_dir.join("01-do.md"), "# Step 1\nSummarize content.").unwrap();
+
+    let mut index = git_repo.index().unwrap();
+    index
+        .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = git_repo.find_tree(tree_oid).unwrap();
+    let oid = git_repo
+        .commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+        .unwrap();
+    let commit = git_repo.find_commit(oid).unwrap();
+    git_repo
+        .tag_lightweight("v1.0.0", commit.as_object(), false)
+        .unwrap();
+
+    let allowlist = SkillAllowlist::new(vec!["summarize".to_string()]);
+    let config = SkillsConfig {
+        skills_repo: tmp.path().to_path_buf(),
+        skills: vec![SkillRef {
+            name: "summarize".into(),
+            version: "1.0.0".into(),
+        }],
+    };
+    let skill_repo = wh_skill::SkillRepository::open(tmp.path()).unwrap();
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config), Some(skill_repo));
+
+    // Verify cache is empty before first invocation
+    assert!(pipeline.cache().is_empty(), "cache must be empty before first invocation");
+
+    // First invocation — should fetch from git and populate cache
+    let request1 = SkillInvocationRequest {
+        skill_name: "summarize".to_string(),
+        agent_id: "agent-1".to_string(),
+        invocation_id: "inv-first".to_string(),
+        parameters: HashMap::new(),
+        timestamp_ms: 1710000000000,
+    };
+    let (tx1, mut rx1) = tokio::sync::mpsc::channel(10);
+    pipeline.process(request1, tx1).await.unwrap();
+
+    // Drain events (progress + completed)
+    let _progress = rx1.recv().await.unwrap();
+    let completed = rx1.recv().await.unwrap();
+    assert!(
+        matches!(
+            completed,
+            SkillExecutorEvent::Completed {
+                outcome: SkillInvocationOutcome::Success { .. },
+                ..
+            }
+        ),
+        "First invocation should succeed"
+    );
+
+    // Cache should now have one entry
+    assert_eq!(pipeline.cache().len(), 1, "cache should have 1 entry after first invocation");
+
+    // Second invocation — should use cache (same skill, same version)
+    let request2 = SkillInvocationRequest {
+        skill_name: "summarize".to_string(),
+        agent_id: "agent-1".to_string(),
+        invocation_id: "inv-second".to_string(),
+        parameters: HashMap::new(),
+        timestamp_ms: 1710000000001,
+    };
+    let (tx2, mut rx2) = tokio::sync::mpsc::channel(10);
+    pipeline.process(request2, tx2).await.unwrap();
+
+    // Drain events
+    let _progress2 = rx2.recv().await.unwrap();
+    let completed2 = rx2.recv().await.unwrap();
+    assert!(
+        matches!(
+            completed2,
+            SkillExecutorEvent::Completed {
+                outcome: SkillInvocationOutcome::Success { .. },
+                ..
+            }
+        ),
+        "Second invocation should also succeed (from cache)"
+    );
+
+    // Cache should still have exactly one entry (no duplicate)
+    assert_eq!(
+        pipeline.cache().len(),
+        1,
+        "cache should still have 1 entry — same skill reused from cache"
+    );
+}
+
+// ── AC #3 (5-3): SKILL_FETCH_FAILED on unreachable repo ─────────────
+
+/// Given the skills git repository is unreachable (None),
+/// When a SkillInvocation is published,
+/// Then a SkillResult error is published immediately with code SKILL_FETCH_FAILED.
+#[tokio::test]
+async fn test_unreachable_repo_returns_skill_fetch_failed() {
+    let allowlist = SkillAllowlist::new(vec!["web-search".to_string()]);
+    let config = SkillsConfig {
+        skills_repo: "/nonexistent/path".into(),
+        skills: vec![SkillRef {
+            name: "web-search".into(),
+            version: "1.0.0".into(),
+        }],
+    };
+    // repo is None — simulates unreachable repository
+    let mut pipeline = InvocationPipeline::new(allowlist, Some(config), None);
+
+    let request = SkillInvocationRequest {
+        skill_name: "web-search".to_string(),
+        agent_id: "agent-1".to_string(),
+        invocation_id: "inv-fetch-fail".to_string(),
+        parameters: HashMap::new(),
+        timestamp_ms: 1710000000000,
+    };
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(10);
+    pipeline.process(request, tx).await.unwrap();
+
+    let event = rx.recv().await.expect("should receive error event");
+    match event {
+        SkillExecutorEvent::Completed {
+            invocation_id,
+            outcome,
+        } => {
+            assert_eq!(invocation_id, "inv-fetch-fail");
+            match outcome {
+                SkillInvocationOutcome::Error {
+                    error_code,
+                    error_message,
+                } => {
+                    assert_eq!(
+                        error_code, "SKILL_FETCH_FAILED",
+                        "Error code must be SKILL_FETCH_FAILED for unreachable repo"
+                    );
+                    assert!(error_message.contains("web-search"));
+                }
+                _ => panic!("Expected error outcome"),
+            }
+        }
+        _ => panic!("Expected Completed event"),
+    }
 }
