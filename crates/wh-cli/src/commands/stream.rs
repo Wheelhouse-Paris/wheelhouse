@@ -197,6 +197,8 @@ async fn execute_publish(
                 content: message.to_string(),
                 publisher_id: publisher.to_string(),
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                user_id: String::new(),
+                reply_to_user_id: String::new(),
             };
             (
                 "wheelhouse.v1.TextMessage".to_string(),
@@ -254,16 +256,21 @@ async fn execute_publish(
     Ok(())
 }
 
-// ── Subscribe helper (Story 1.4) ────────────────────────────────────────────
+// ── Subscribe helper (Story 1.4, updated Story 1.5 with auto-reconnect) ─────
 
 /// Subscribe to a stream and display messages in real time.
 ///
-/// Connects to the broker's PUB endpoint, subscribes to the stream topic prefix,
+/// Connects to Wheelhouse's PUB endpoint, subscribes to the stream topic prefix,
 /// and loops receiving and decoding StreamEnvelope messages.
+/// On connection loss, automatically reconnects with exponential backoff (ADR-011, CM-02).
+/// Ctrl+C terminates cleanly during both receive and reconnect phases.
 async fn execute_subscribe(
     stream_name: &str,
     format: &OutputFormat,
 ) -> Result<(), WhError> {
+    use crate::reconnect::{self, ConnectionEvent};
+    use tokio_util::sync::CancellationToken;
+
     let pub_endpoint = std::env::var("WH_PUB_ENDPOINT").unwrap_or_else(|_| {
         let port = std::env::var("WH_PUB_PORT")
             .ok()
@@ -272,20 +279,46 @@ async fn execute_subscribe(
         format!("tcp://127.0.0.1:{port}")
     });
 
+    let topic = format!("{stream_name}\0");
+    let cancel = CancellationToken::new();
+
+    // Initial connection
     let mut sub_socket = SubSocket::new();
     sub_socket
         .connect(&pub_endpoint)
         .await
         .map_err(|_| WhError::ConnectionError)?;
 
-    // Subscribe to stream topic prefix
-    let topic = format!("{stream_name}\0");
     sub_socket
         .subscribe(&topic)
         .await
         .map_err(|e| WhError::Other(format!("Failed to subscribe: {e}")))?;
 
     eprintln!("Subscribed to stream '{stream_name}' — waiting for messages...");
+
+    // Connection event callback — prints status to stderr (RT-B1: no "broker")
+    let stream_name_owned = stream_name.to_string();
+    let on_event: reconnect::ConnectionEventCallback = Box::new(move |event| {
+        match &event {
+            ConnectionEvent::Disconnected { reason } => {
+                eprintln!("\nConnection lost: {reason}");
+            }
+            ConnectionEvent::Reconnecting { attempt } => {
+                eprintln!("Reconnecting to Wheelhouse (attempt {attempt})...");
+            }
+            ConnectionEvent::Reconnected => {
+                eprintln!(
+                    "Reconnected — subscribed to stream '{}', waiting for messages...",
+                    stream_name_owned
+                );
+            }
+            ConnectionEvent::ReconnectFailed { attempts, last_error } => {
+                eprintln!(
+                    "Reconnect attempt {attempts} failed: {last_error}"
+                );
+            }
+        }
+    });
 
     loop {
         tokio::select! {
@@ -307,8 +340,31 @@ async fn execute_subscribe(
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(error = %e, "subscribe recv error");
-                        tokio::task::yield_now().await;
+                        tracing::warn!(error = %e, "subscribe recv error — attempting reconnect");
+
+                        // Fire disconnected event before reconnect
+                        on_event(ConnectionEvent::Disconnected {
+                            reason: format!("Receive error: {e}"),
+                        });
+
+                        // Reconnect with exponential backoff (ADR-011, NFR-R4)
+                        match reconnect::reconnect_subscribe(
+                            &pub_endpoint,
+                            &topic,
+                            &cancel,
+                            Some(&on_event),
+                        )
+                        .await
+                        {
+                            Ok(new_socket) => {
+                                sub_socket = new_socket;
+                                // Continue receive loop with new socket (AC #2)
+                            }
+                            Err(reconnect::ReconnectError::Cancelled) => {
+                                eprintln!("\nDisconnected");
+                                break;
+                            }
+                        }
                     }
                 }
             }

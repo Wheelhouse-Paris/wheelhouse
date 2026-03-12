@@ -39,7 +39,10 @@ __all__ = [
 
 
 async def connect(
-    endpoint: str | None = None, *, mock: bool = False
+    endpoint: str | None = None,
+    *,
+    mock: bool = False,
+    on_connection_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> Any:  # Returns Connection | MockConnection
     """Connect to Wheelhouse.
 
@@ -48,6 +51,9 @@ async def connect(
                   environment variable, or defaults to tcp://127.0.0.1:5555.
         mock: If True, returns a MockConnection for testing without a running
               Wheelhouse instance (NFR-D4).
+        on_connection_event: Optional callback for connection lifecycle events
+            (CM-02). Receives a dict with "type" key: "disconnected",
+            "reconnecting", "reconnected", or "reconnect_failed".
 
     Returns:
         A Connection (or MockConnection) for publishing and subscribing.
@@ -58,7 +64,7 @@ async def connect(
     if mock:
         from wheelhouse.testing import MockConnection
         return MockConnection()
-    return await _real_connect(endpoint)
+    return await _real_connect(endpoint, on_connection_event=on_connection_event)
 
 
 class Surface:

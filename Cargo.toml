@@ -45,6 +45,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 crc32fast = "1"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
 teloxide = { version = "0.13", features = ["macros"] }
 
 # Proto build
