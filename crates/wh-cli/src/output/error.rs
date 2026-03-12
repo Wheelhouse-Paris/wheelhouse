@@ -10,6 +10,16 @@
 
 use wh_broker::deploy::DeployError;
 
+/// Wrapper for error code strings to allow `.as_str()` calls.
+#[derive(Debug, Clone, Copy)]
+pub struct WhErrorCode(pub &'static str);
+
+impl WhErrorCode {
+    pub fn as_str(&self) -> &'static str {
+        self.0
+    }
+}
+
 /// CLI exit codes per ADR-014.
 pub const EXIT_SUCCESS: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
@@ -41,18 +51,28 @@ pub enum WhError {
     /// An internal error occurred.
     #[error("Internal error: {0}")]
     Internal(String),
+
+    /// An internal error occurred (alias for backward compatibility).
+    #[error("Internal error: {0}")]
+    InternalError(String),
 }
 
 impl WhError {
     /// Returns the machine-readable error code (SCREAMING_SNAKE_CASE per SCV-01).
     pub fn error_code(&self) -> &'static str {
+        self.code().as_str()
+    }
+
+    /// Returns the machine-readable error code as a `WhErrorCode`.
+    pub fn code(&self) -> WhErrorCode {
         match self {
-            WhError::ConnectionError => "CONNECTION_ERROR",
-            WhError::GitNotFound(_) => "GIT_NOT_FOUND",
-            WhError::KeychainError(_) => "KEYCHAIN_ERROR",
-            WhError::PromptFailed(_) => "PROMPT_FAILED",
-            WhError::NonInteractive => "NON_INTERACTIVE",
-            WhError::Internal(_) => "INTERNAL_ERROR",
+            WhError::ConnectionError => WhErrorCode("CONNECTION_ERROR"),
+            WhError::GitNotFound(_) => WhErrorCode("GIT_NOT_FOUND"),
+            WhError::KeychainError(_) => WhErrorCode("KEYCHAIN_ERROR"),
+            WhError::PromptFailed(_) => WhErrorCode("PROMPT_FAILED"),
+            WhError::NonInteractive => WhErrorCode("NON_INTERACTIVE"),
+            WhError::Internal(_) => WhErrorCode("INTERNAL_ERROR"),
+            WhError::InternalError(_) => WhErrorCode("INTERNAL_ERROR"),
         }
     }
 

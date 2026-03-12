@@ -6,7 +6,7 @@ use console::style;
 use serde::Serialize;
 
 use crate::output::error::WhError;
-use crate::output::{Format, OutputEnvelope};
+use crate::output::{OutputFormat, OutputEnvelope};
 
 /// Credential spec for a single secret that the wizard manages.
 #[derive(Debug, Clone)]
@@ -88,13 +88,13 @@ pub enum SecretsCmd {
     Init {
         /// Output format: human (default) or json.
         #[arg(long, default_value = "human")]
-        format: Format,
+        format: OutputFormat,
     },
 }
 
 impl SecretsCmd {
     /// Extract the output format from the command, without consuming self.
-    pub fn format(&self) -> Format {
+    pub fn format(&self) -> OutputFormat {
         match self {
             SecretsCmd::Init { format, .. } => *format,
         }
@@ -108,7 +108,7 @@ impl SecretsCmd {
 }
 
 /// Main entry point for `wh secrets init`.
-fn run_init(format: Format) -> Result<(), WhError> {
+fn run_init(format: OutputFormat) -> Result<(), WhError> {
     // Non-TTY guard: interactive prompting requires a terminal.
     // In JSON mode we still need to check — if all creds are already configured
     // via env vars we can proceed, but if prompting would be needed we must fail.
@@ -124,7 +124,7 @@ fn run_init(format: Format) -> Result<(), WhError> {
         return Err(WhError::GitNotFound(reason.clone()));
     }
 
-    if format == Format::Human {
+    if format == OutputFormat::Human {
         // Print detection results.
         match &podman {
             DetectionResult::Detected { version } => {
@@ -161,7 +161,7 @@ fn run_init(format: Format) -> Result<(), WhError> {
                 needs_prompt = true;
             }
             Some(status) => {
-                if format == Format::Human {
+                if format == OutputFormat::Human {
                     print_credential_status(spec, &status);
                 }
                 results.push(CredentialResult {
@@ -188,7 +188,7 @@ fn run_init(format: Format) -> Result<(), WhError> {
         }
 
         let status = prompt_credential(spec, format)?;
-        if format == Format::Human {
+        if format == OutputFormat::Human {
             print_credential_status(spec, &status);
         }
         results.push(CredentialResult {
@@ -202,7 +202,7 @@ fn run_init(format: Format) -> Result<(), WhError> {
     // --- Summary ---
     let next_command = "wh deploy apply topology.wh".to_string();
 
-    if format == Format::Human {
+    if format == OutputFormat::Human {
         println!(); // blank line before summary
         let configured = results
             .iter()
@@ -221,7 +221,7 @@ fn run_init(format: Format) -> Result<(), WhError> {
         println!("Run '{}' to start.", style(&next_command).bold());
     }
 
-    if format == Format::Json {
+    if format == OutputFormat::Json {
         let data = SecretsInitData {
             podman,
             git,
@@ -304,8 +304,8 @@ fn check_credential(spec: &CredentialSpec) -> Option<CredentialStatus> {
 }
 
 /// Prompt the user for a credential value and store it.
-fn prompt_credential(spec: &CredentialSpec, format: Format) -> Result<CredentialStatus, WhError> {
-    if format == Format::Human {
+fn prompt_credential(spec: &CredentialSpec, format: OutputFormat) -> Result<CredentialStatus, WhError> {
+    if format == OutputFormat::Human {
         // Print prompt header.
         if spec.required {
             println!(
@@ -329,7 +329,7 @@ fn prompt_credential(spec: &CredentialSpec, format: Format) -> Result<Credential
 
         if input.is_empty() {
             if spec.required {
-                if format == Format::Human {
+                if format == OutputFormat::Human {
                     println!(
                         "    {} is required. Please enter a value.",
                         spec.display_name,
