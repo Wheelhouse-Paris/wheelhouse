@@ -50,10 +50,9 @@ fn test_surface_cli_rejects_invalid_format() {
 
 #[test]
 fn test_human_output_format() {
-    use wh_cli::output::{format_message, OutputFormat};
-    use wh_proto::TextMessage;
+    use wh_cli::output::{format_message, OutputFormat, SurfaceMessage};
 
-    let msg = TextMessage {
+    let msg = SurfaceMessage {
         content: "hello world".to_string(),
         publisher: "agent-1".to_string(),
         timestamp: "2026-03-12T10:30:00Z".to_string(),
@@ -72,10 +71,9 @@ fn test_human_output_format() {
 
 #[test]
 fn test_json_output_format() {
-    use wh_cli::output::{format_message, OutputFormat};
-    use wh_proto::TextMessage;
+    use wh_cli::output::{format_message, OutputFormat, SurfaceMessage};
 
-    let msg = TextMessage {
+    let msg = SurfaceMessage {
         content: "test message".to_string(),
         publisher: "cli-surface".to_string(),
         timestamp: "2026-03-12T10:30:00Z".to_string(),
@@ -92,10 +90,9 @@ fn test_json_output_format() {
 
 #[test]
 fn test_json_fields_snake_case() {
-    use wh_cli::output::{format_message, OutputFormat};
-    use wh_proto::TextMessage;
+    use wh_cli::output::{format_message, OutputFormat, SurfaceMessage};
 
-    let msg = TextMessage {
+    let msg = SurfaceMessage {
         content: "test".to_string(),
         publisher: "agent".to_string(),
         timestamp: "2026-03-12T10:30:00Z".to_string(),
@@ -117,17 +114,16 @@ fn test_json_fields_snake_case() {
 fn test_wh_error_exit_codes() {
     use wh_cli::output::error::WhError;
 
-    assert_eq!(WhError::ConnectionError("test".into()).exit_code(), 1);
+    assert_eq!(WhError::ConnectionError.exit_code(), 1);
     assert_eq!(WhError::StreamError("test".into()).exit_code(), 1);
     assert_eq!(WhError::InternalError("test".into()).exit_code(), 1);
 }
 
 #[test]
 fn test_output_format_switch() {
-    use wh_cli::output::{format_message, OutputFormat};
-    use wh_proto::TextMessage;
+    use wh_cli::output::{format_message, OutputFormat, SurfaceMessage};
 
-    let msg = TextMessage {
+    let msg = SurfaceMessage {
         content: "hello".to_string(),
         publisher: "agent".to_string(),
         timestamp: "2026-03-12T10:30:00Z".to_string(),

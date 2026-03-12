@@ -139,29 +139,7 @@ async fn main() {
             }
         }
         Commands::Stream { command } => {
-            match command {
-                StreamCommand::Tail(ref args) => {
-                    let fmt = args.format;
-                    let result = stream::execute(args);
-                    if let Err(ref err) = result {
-                        match fmt {
-                            OutputFormat::Json => {
-                                let envelope =
-                                    OutputEnvelope::<()>::error(err.error_code(), err.to_string());
-                                if let Ok(json) = serde_json::to_string_pretty(&envelope) {
-                                    eprintln!("{json}");
-                                } else {
-                                    eprintln!("Error: {err}");
-                                }
-                            }
-                            OutputFormat::Human => {
-                                eprintln!("Error: {err}");
-                            }
-                        }
-                        std::process::exit(err.exit_code());
-                    }
-                }
-            }
+            stream::execute(&command).await;
         }
         Commands::Status { format } => {
             status::execute(format).await;

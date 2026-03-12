@@ -139,18 +139,20 @@ async fn handle_message(
     let request_bytes: Vec<u8> = msg.clone().try_into().unwrap_or_default();
     let request_str = String::from_utf8_lossy(&request_bytes);
 
-    let command = match serde_json::from_str::<Value>(&request_str) {
-        Ok(v) => v
-            .get("command")
-            .and_then(|c| c.as_str())
-            .unwrap_or("")
-            .to_string(),
+    let parsed_request = match serde_json::from_str::<Value>(&request_str) {
+        Ok(v) => v,
         Err(_) => {
             return handlers::error_response("INVALID_REQUEST", "Invalid JSON request");
         }
     };
 
-    match handlers::dispatch(&command, state).await {
+    let command = parsed_request
+        .get("command")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    match handlers::dispatch(&command, &parsed_request, state).await {
         Ok(response) => response,
         Err(crate::error::ControlError::UnknownCommand(cmd)) => {
             handlers::error_response("UNKNOWN_COMMAND", &format!("Unknown command: {cmd}"))
