@@ -211,6 +211,40 @@ impl WalWriter {
     pub fn stream_name(&self) -> &str {
         &self.stream_name
     }
+
+    /// Read all records created at or after the given timestamp.
+    ///
+    /// Used by compaction to gather records for summary generation.
+    /// All SQLite I/O happens inside `spawn_blocking` (PP-03).
+    pub async fn read_records_since(
+        &self,
+        since_timestamp_ms: i64,
+    ) -> Result<Vec<super::WalRecord>, WalError> {
+        let conn = Arc::clone(&self.conn);
+
+        let records = tokio::task::spawn_blocking(move || -> Result<Vec<super::WalRecord>, WalError> {
+            let conn = conn.blocking_lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, payload, crc32, created_at FROM wal_records WHERE created_at >= ?1 ORDER BY id ASC",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![since_timestamp_ms], |row| {
+                    Ok(super::WalRecord {
+                        id: row.get(0)?,
+                        payload: row.get(1)?,
+                        crc32: row.get::<_, i64>(2)? as u32,
+                        created_at: row.get(3)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| WalError::Database(format!("spawn_blocking join error: {e}")))?
+        ?;
+
+        Ok(records)
+    }
 }
 
 #[cfg(test)]

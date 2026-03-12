@@ -12,6 +12,7 @@ pub mod reconnect;
 
 use clap::{Parser, Subcommand};
 
+use commands::compact::CompactArgs;
 use commands::completion::CompletionArgs;
 use commands::deploy::DeployCommand;
 use commands::logs::LogsArgs;
@@ -70,6 +71,8 @@ pub enum Commands {
         #[command(subcommand)]
         command: MemoryCommand,
     },
+    /// Compact a stream — produce a daily summary and truncate WAL.
+    Compact(CompactArgs),
     /// Generate shell completion scripts.
     Completion(CompletionArgs),
 }

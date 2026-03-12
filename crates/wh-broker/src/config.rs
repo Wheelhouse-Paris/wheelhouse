@@ -14,6 +14,9 @@ const DEFAULT_PUB_PORT: u16 = 5555;
 const DEFAULT_SUB_PORT: u16 = 5556;
 const DEFAULT_CONTROL_PORT: u16 = 5557;
 
+/// Default compaction interval: 24 hours (86400 seconds).
+const DEFAULT_COMPACTION_INTERVAL_SECS: u64 = 86400;
+
 /// Broker configuration with localhost-only security invariant.
 #[derive(Debug, Clone)]
 pub struct BrokerConfig {
@@ -23,6 +26,9 @@ pub struct BrokerConfig {
     /// Data directory for WAL files and stream registry.
     /// Configured via `WH_DATA_DIR` env var, default `$HOME/.wh/`.
     data_dir: PathBuf,
+    /// Compaction interval in seconds.
+    /// Configured via `WH_COMPACTION_INTERVAL_SECS` env var, default 86400 (24h).
+    compaction_interval_secs: u64,
 }
 
 impl BrokerConfig {
@@ -39,11 +45,17 @@ impl BrokerConfig {
                     .join(".wh")
             });
 
+        let compaction_interval_secs = std::env::var("WH_COMPACTION_INTERVAL_SECS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_COMPACTION_INTERVAL_SECS);
+
         Self {
             pub_port: Self::read_port_env("WH_PUB_PORT", DEFAULT_PUB_PORT),
             sub_port: Self::read_port_env("WH_SUB_PORT", DEFAULT_SUB_PORT),
             control_port: Self::read_port_env("WH_CONTROL_PORT", DEFAULT_CONTROL_PORT),
             data_dir,
+            compaction_interval_secs,
         }
     }
 
@@ -60,6 +72,7 @@ impl BrokerConfig {
                         .unwrap_or_else(|| PathBuf::from("."))
                         .join(".wh")
                 }),
+            compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
         }
     }
 
@@ -75,6 +88,7 @@ impl BrokerConfig {
             sub_port,
             control_port,
             data_dir,
+            compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
         }
     }
 
@@ -118,6 +132,11 @@ impl BrokerConfig {
         &self.data_dir
     }
 
+    /// Compaction interval in seconds.
+    pub fn compaction_interval_secs(&self) -> u64 {
+        self.compaction_interval_secs
+    }
+
     fn read_port_env(var: &str, default: u16) -> u16 {
         std::env::var(var)
             .ok()
@@ -135,6 +154,7 @@ impl Default for BrokerConfig {
             data_dir: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".wh"),
+            compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
         }
     }
 }

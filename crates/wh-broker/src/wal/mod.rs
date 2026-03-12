@@ -10,6 +10,7 @@
 //! - CRC32 footer on every record for crash recovery (FM-02)
 //! - Tombstone column reserved for GDPR erasure (ADR-002)
 
+pub mod compaction;
 pub mod writer;
 
 pub use writer::WalWriter;
@@ -58,4 +59,17 @@ impl From<rusqlite::Error> for WalError {
     fn from(e: rusqlite::Error) -> Self {
         WalError::Database(e.to_string())
     }
+}
+
+/// A single WAL record, used by compaction to read stream history.
+#[derive(Debug, Clone)]
+pub struct WalRecord {
+    /// The WAL record ID.
+    pub id: i64,
+    /// The raw message payload.
+    pub payload: Vec<u8>,
+    /// CRC32 checksum of the payload.
+    pub crc32: u32,
+    /// Creation timestamp in milliseconds since epoch.
+    pub created_at: i64,
 }
