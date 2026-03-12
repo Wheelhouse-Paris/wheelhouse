@@ -25,4 +25,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 clap = { version = "4", features = ["derive"] }
 prost = "0.13"
+prost-types = "0.13"
+async-trait = "0.1"
+tokio-util = "0.7"
+uuid = { version = "1", features = ["v4"] }
 zeromq = "0.4"

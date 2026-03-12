@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package wheelhouse.v1;
+
+// TextMessage is a general-purpose text object published to a stream.
+message TextMessage {
+  string content = 1;
+  string author_id = 2;
+  int64 timestamp_ms = 3;
+  map<string, string> metadata = 4;
+}

@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package wheelhouse.v1;
+
+// SkillInvocation is published by an agent to request skill execution.
+// Broker validates skill is in agent's allowlist before routing (FM-05).
+message SkillInvocation {
+  string skill_name = 1;
+  string agent_id = 2;
+  string invocation_id = 3;
+  map<string, string> parameters = 4;
+  int64 timestamp_ms = 5;
+}
+
+// SkillProgress is published by the skill executor to indicate progress (CM-06).
+// 0..N SkillProgress objects per invocation.
+message SkillProgress {
+  string invocation_id = 1;
+  string skill_name = 2;
+  uint32 progress_percent = 3;
+  string status_message = 4;
+  int64 timestamp_ms = 5;
+}
+
+// SkillResult is the terminal message for a skill invocation.
+// Exactly 1 per invocation. success=false includes error_code and error_message.
+message SkillResult {
+  string invocation_id = 1;
+  string skill_name = 2;
+  bool success = 3;
+  string output = 4;
+  string error_code = 5;
+  string error_message = 6;
+  int64 timestamp_ms = 7;
+}
