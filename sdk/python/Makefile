@@ -1,7 +1,7 @@
 # Python SDK Makefile — no Rust toolchain required (FP-01)
 # Delegating pattern (WI-01)
 
-.PHONY: proto-python test clean
+.PHONY: proto-python test lint clean
 
 PROTO_DIR := ../../proto
 OUT_DIR := wheelhouse/_proto
@@ -18,13 +18,19 @@ proto-python:
 		python3 -m grpc_tools.protoc \
 		-I$(PROTO_DIR) \
 		--python_betterproto_out=$(OUT_DIR) \
-		$(PROTO_DIR)/wheelhouse/v1/*.proto 2>/dev/null || \
-	echo "NOTE: betterproto codegen requires grpcio-tools. Run: uv pip install grpcio-tools betterproto[compiler]"
+		$(PROTO_DIR)/wheelhouse/v1/*.proto
+	@echo "Python proto types generated in $(OUT_DIR)"
 
 ## Run Python SDK tests
 test:
-	uv run pytest
+	uv run pytest tests/ -v
+
+## Lint and type-check
+lint:
+	uv run pyright wheelhouse/
+	uv run pytest tests/ -v --tb=short
 
 ## Clean generated files
 clean:
 	find $(OUT_DIR) -name '*.py' ! -name '__init__.py' -delete
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

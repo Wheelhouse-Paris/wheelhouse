@@ -1,0 +1,20 @@
+# Generated proto files
+wheelhouse/_proto/*.py
+wheelhouse/_proto/*.pyi
+!wheelhouse/_proto/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+
+# IDE
+.mypy_cache/
+.pyright/
