@@ -98,6 +98,10 @@ async fn main() {
             let exit_code = command.execute();
             std::process::exit(exit_code);
         }
+        Commands::Compact(args) => {
+            let exit_code = args.execute().await;
+            std::process::exit(exit_code);
+        }
         Commands::Stream { command } => {
             stream::execute(&command).await;
         }

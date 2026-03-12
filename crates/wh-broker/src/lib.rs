@@ -99,7 +99,28 @@ pub async fn run_broker(config: BrokerConfig) -> Result<(), BrokerError> {
 
     tracing::info!(
         elapsed_ms = startup.elapsed().as_millis() as u64,
-        "retention task started — Wheelhouse ready"
+        "retention task started"
+    );
+
+    // Spawn compaction loop task (CM-08, SC-06)
+    let compaction_state = Arc::clone(&state);
+    let compaction_cancel = cancel.clone();
+    let compaction_interval = config.compaction_interval_secs();
+    let compaction_data_dir = config.data_dir().to_path_buf();
+    let compaction_handle = tokio::spawn(async move {
+        run_compaction_loop(
+            compaction_state,
+            compaction_cancel,
+            compaction_interval,
+            compaction_data_dir,
+        )
+        .await;
+    });
+
+    tracing::info!(
+        elapsed_ms = startup.elapsed().as_millis() as u64,
+        compaction_interval_secs = compaction_interval,
+        "compaction task started — Wheelhouse ready"
     );
 
     // Wait for shutdown signal (SIGINT/SIGTERM)
@@ -112,6 +133,7 @@ pub async fn run_broker(config: BrokerConfig) -> Result<(), BrokerError> {
     let _ = routing_handle.await;
     let _ = control_handle.await;
     let _ = retention_handle.await;
+    let _ = compaction_handle.await;
 
     tracing::info!(
         elapsed_ms = startup.elapsed().as_millis() as u64,
@@ -190,6 +212,93 @@ async fn enforce_retention(state: &Arc<BrokerState>) {
                         "retention: failed to enforce size limit"
                     );
                 }
+            }
+        }
+    }
+}
+
+/// Periodic compaction loop (CM-08, SC-06).
+///
+/// Fires compaction for all streams at the configured interval.
+/// Respects `CancellationToken` for clean shutdown.
+/// Per-stream mutex prevents concurrent compaction runs (CM-08).
+async fn run_compaction_loop(
+    state: Arc<BrokerState>,
+    cancel: CancellationToken,
+    interval_secs: u64,
+    workspace_root: std::path::PathBuf,
+) {
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+
+    // Skip the first immediate tick — don't compact on startup
+    interval.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+
+            _ = cancel.cancelled() => {
+                tracing::info!("compaction task shutting down");
+                break;
+            }
+
+            _ = interval.tick() => {
+                run_compaction_for_all_streams(&state, &workspace_root, interval_secs).await;
+            }
+        }
+    }
+}
+
+/// Run compaction for all registered streams.
+async fn run_compaction_for_all_streams(
+    state: &Arc<BrokerState>,
+    workspace_root: &std::path::Path,
+    interval_secs: u64,
+) {
+    let streams = state.streams.read().await;
+    let stream_names: Vec<String> = streams.keys().cloned().collect();
+    drop(streams);
+
+    for stream_name in stream_names {
+        let streams = state.streams.read().await;
+        let Some(info) = streams.get(&stream_name) else {
+            continue;
+        };
+
+        // Try to acquire per-stream compaction mutex (CM-08)
+        let Ok(_guard) = info.compaction_mutex.try_lock() else {
+            tracing::debug!(
+                stream = %stream_name,
+                "compaction: skipping — mutex busy (CM-08)"
+            );
+            continue;
+        };
+
+        // Compact records from one interval ago
+        let since = chrono::Utc::now().timestamp_millis() - (interval_secs as i64 * 1000);
+        match wal::compaction::compact_stream(
+            workspace_root,
+            &stream_name,
+            &info.wal_writer,
+            since,
+        )
+        .await
+        {
+            Ok(summary) => {
+                tracing::info!(
+                    stream = %stream_name,
+                    record_count = summary.record_count,
+                    commit_hash = %summary.commit_hash,
+                    "compaction: daily summary committed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    stream = %stream_name,
+                    error = %e,
+                    "compaction: failed"
+                );
             }
         }
     }

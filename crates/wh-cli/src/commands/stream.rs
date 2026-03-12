@@ -197,6 +197,8 @@ async fn execute_publish(
                 content: message.to_string(),
                 publisher_id: publisher.to_string(),
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
+                user_id: String::new(),
+                reply_to_user_id: String::new(),
             };
             (
                 "wheelhouse.v1.TextMessage".to_string(),

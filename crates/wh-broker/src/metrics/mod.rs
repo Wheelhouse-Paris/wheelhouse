@@ -63,6 +63,9 @@ pub struct StreamInfo {
     pub sequence_counter: AtomicU64,
     /// WAL writer for this stream.
     pub wal_writer: WalWriter,
+    /// Per-stream compaction mutex (CM-08).
+    /// `try_lock()` returns immediately — concurrent compaction runs are dropped.
+    pub compaction_mutex: tokio::sync::Mutex<()>,
 }
 
 /// Serializable stream metadata for persistence.
@@ -227,6 +230,7 @@ impl BrokerState {
             message_count: AtomicU64::new(0),
             sequence_counter: AtomicU64::new(record_count),
             wal_writer,
+            compaction_mutex: tokio::sync::Mutex::new(()),
         };
 
         streams.insert(name.to_string(), info);
@@ -353,6 +357,7 @@ impl BrokerState {
                 message_count: AtomicU64::new(message_count),
                 sequence_counter: AtomicU64::new(message_count),
                 wal_writer,
+                compaction_mutex: tokio::sync::Mutex::new(()),
             };
 
             streams.insert(meta.name, info);
