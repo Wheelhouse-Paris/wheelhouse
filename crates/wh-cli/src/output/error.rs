@@ -38,6 +38,10 @@ pub enum WhError {
     #[error("Interactive terminal required")]
     NonInteractive,
 
+    /// Specified agent was not found in the topology.
+    #[error("Agent not found: {0}")]
+    AgentNotFound(String),
+
     /// An internal error occurred.
     #[error("Internal error: {0}")]
     Internal(String),
@@ -52,6 +56,7 @@ impl WhError {
             WhError::KeychainError(_) => "KEYCHAIN_ERROR",
             WhError::PromptFailed(_) => "PROMPT_FAILED",
             WhError::NonInteractive => "NON_INTERACTIVE",
+            WhError::AgentNotFound(_) => "AGENT_NOT_FOUND",
             WhError::Internal(_) => "INTERNAL_ERROR",
         }
     }

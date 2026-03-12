@@ -6,6 +6,7 @@
 use clap::{Parser, Subcommand};
 
 use wh_cli::commands::deploy::DeployCommand;
+use wh_cli::commands::logs::{self, LogsArgs};
 use wh_cli::commands::ps::{self, PsArgs};
 use wh_cli::commands::secrets::SecretsCmd;
 use wh_cli::output::{OutputEnvelope, OutputFormat};
@@ -24,6 +25,8 @@ struct Cli {
 enum Commands {
     /// List all deployed components with their live status.
     Ps(PsArgs),
+    /// Tail structured logs from a specific agent.
+    Logs(LogsArgs),
     /// Manage Wheelhouse secrets and credentials.
     Secrets {
         #[command(subcommand)]
@@ -58,6 +61,26 @@ fn main() {
                     }
                 }
                 std::process::exit(1);
+            }
+        }
+        Commands::Logs(args) => {
+            let fmt = args.format;
+            let result = logs::execute(&args);
+            if let Err(ref err) = result {
+                match fmt {
+                    OutputFormat::Json => {
+                        let envelope = OutputEnvelope::<()>::error(err.error_code(), err.to_string());
+                        if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                            eprintln!("{json}");
+                        } else {
+                            eprintln!("Error: {err}");
+                        }
+                    }
+                    OutputFormat::Human => {
+                        eprintln!("Error: {err}");
+                    }
+                }
+                std::process::exit(err.exit_code());
             }
         }
         Commands::Secrets { cmd } => {
