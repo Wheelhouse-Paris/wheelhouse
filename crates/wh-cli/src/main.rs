@@ -30,15 +30,12 @@ async fn main() {
     match command {
         Commands::Ps(args) => {
             let fmt = args.format;
-            let result = ps::execute(&args)
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error>);
-            if let Err(e) = result {
+            if let Err(e) = ps::execute(&args).await {
                 match fmt {
                     OutputFormat::Json => {
-                        let envelope = OutputEnvelope::<()>::error("ERROR", e.to_string());
+                        let envelope = OutputEnvelope::<()>::error(e.error_code(), e.to_string());
                         if let Ok(json) = serde_json::to_string_pretty(&envelope) {
-                            eprintln!("{json}");
+                            println!("{json}");
                         } else {
                             eprintln!("Error: {e}");
                         }

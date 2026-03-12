@@ -93,8 +93,8 @@ pub enum WhError {
     #[error("Stream error: {0}")]
     StreamError(String),
 
-    /// Control socket request timed out.
-    #[error("Wheelhouse not responding")]
+    /// Control socket request timed out (treated as connection failure for user messaging).
+    #[error("Wheelhouse not running")]
     Timeout,
 
     /// Control socket returned an invalid response.
@@ -129,7 +129,7 @@ impl WhError {
             WhError::Internal(_) => WhErrorCode("INTERNAL_ERROR"),
             WhError::InternalError(_) => WhErrorCode("INTERNAL_ERROR"),
             WhError::StreamError(_) => WhErrorCode("STREAM_ERROR"),
-            WhError::Timeout => WhErrorCode("TIMEOUT"),
+            WhError::Timeout => WhErrorCode("CONNECTION_ERROR"),
             WhError::InvalidResponse(_) => WhErrorCode("INVALID_RESPONSE"),
             WhError::SecretNotFound(_) => WhErrorCode("SECRET_NOT_FOUND"),
             WhError::Other(_) => WhErrorCode("INTERNAL_ERROR"),

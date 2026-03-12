@@ -26,6 +26,7 @@ fn run_wh_ps(args: &[&str]) -> (String, String, i32) {
 // ── AC #1: Columnar table with component info ──
 
 #[test]
+#[ignore = "requires running Wheelhouse broker"]
 fn ac1_ps_shows_columnar_table_with_headers() {
     let (stdout, _stderr, _code) = run_wh_ps(&[]);
     // Table must have NAME, STATUS, STREAM, PROVIDER, UPTIME columns
@@ -52,6 +53,7 @@ fn ac1_ps_shows_columnar_table_with_headers() {
 }
 
 #[test]
+#[ignore = "requires running Wheelhouse broker"]
 fn ac1_ps_shows_summary_line() {
     let (stdout, _stderr, _code) = run_wh_ps(&[]);
     // Summary line must match pattern: "N agents · N running · N stopped"
@@ -66,6 +68,7 @@ fn ac1_ps_shows_summary_line() {
 // ── AC #2: JSON output with machine-readable fields ──
 
 #[test]
+#[ignore = "requires running Wheelhouse broker"]
 fn ac2_ps_json_format_is_valid_json() {
     let (stdout, _stderr, code) = run_wh_ps(&["--format", "json"]);
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
@@ -89,6 +92,7 @@ fn ac2_ps_json_includes_schema_version() {
 }
 
 #[test]
+#[ignore = "requires running Wheelhouse broker"]
 fn ac2_ps_json_components_have_status_enum() {
     let (stdout, _stderr, _code) = run_wh_ps(&["--format", "json"]);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("must be valid JSON");
