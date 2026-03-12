@@ -6,6 +6,7 @@ members = [
     "crates/wh-proto",
     "crates/wh-skill",
     "crates/wh-user",
+    "crates/wh-telegram",
 ]
 resolver = "2"
 
@@ -44,6 +45,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 crc32fast = "1"
 dirs = "5"
 uuid = { version = "1", features = ["v4"] }
+teloxide = { version = "0.13", features = ["macros"] }
 
 # Proto build
 prost-build = "0.13"
