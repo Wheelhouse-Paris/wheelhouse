@@ -9,6 +9,7 @@ use wh_cli::commands::deploy::DeployCommand;
 use wh_cli::commands::logs::{self, LogsArgs};
 use wh_cli::commands::ps::{self, PsArgs};
 use wh_cli::commands::secrets::SecretsCmd;
+use wh_cli::commands::surface::{self, SurfaceCommand};
 use wh_cli::output::{OutputEnvelope, OutputFormat};
 
 /// wh — the Wheelhouse CLI.
@@ -37,9 +38,16 @@ enum Commands {
         #[command(subcommand)]
         command: DeployCommand,
     },
+    /// Manage surfaces (CLI, Telegram, etc.).
+    Surface {
+        #[command(subcommand)]
+        command: SurfaceCommand,
+    },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt::init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -106,6 +114,16 @@ fn main() {
         Commands::Deploy { command } => {
             let exit_code = command.execute();
             std::process::exit(exit_code);
+        }
+        Commands::Surface { command } => {
+            match command {
+                SurfaceCommand::Cli { stream, format } => {
+                    if let Err(e) = surface::run_cli(&stream, &format).await {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
         }
     }
 }

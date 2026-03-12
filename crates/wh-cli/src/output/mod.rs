@@ -8,6 +8,47 @@ pub mod table;
 
 pub use error::LintError;
 
+/// A text message exchanged on a surface stream (CLI, Telegram, etc.).
+///
+/// This is a CLI-layer type for surface commands; it uses string fields
+/// for human-readable timestamps. The proto-layer `wh_proto::TextMessage`
+/// uses numeric `timestamp_ms` and is used for broker wire encoding.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SurfaceMessage {
+    pub content: String,
+    pub publisher: String,
+    pub timestamp: String,
+}
+
+/// Format a surface message for display.
+///
+/// Human: `[timestamp] publisher: content`
+/// JSON:  `{ "v": 1, "status": "ok", "data": { ... } }`
+pub fn format_message(msg: &SurfaceMessage, format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Human => {
+            format!("[{}] {}: {}", msg.timestamp, msg.publisher, msg.content)
+        }
+        OutputFormat::Json => {
+            #[derive(serde::Serialize)]
+            struct MsgData<'a> {
+                publisher: &'a str,
+                timestamp: &'a str,
+                content: &'a str,
+            }
+            let data = MsgData {
+                publisher: &msg.publisher,
+                timestamp: &msg.timestamp,
+                content: &msg.content,
+            };
+            let envelope = OutputEnvelope::ok(data);
+            serde_json::to_string(&envelope).unwrap_or_else(|_| {
+                format!("{{\"v\":1,\"status\":\"error\",\"code\":\"SERIALIZATION_ERROR\",\"message\":\"failed\"}}")
+            })
+        }
+    }
+}
+
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -19,6 +60,17 @@ pub enum OutputFormat {
     Human,
     /// Machine-readable JSON output with `"v": 1` schema version.
     Json,
+}
+
+impl OutputFormat {
+    /// Parse format string from a CLI string flag value.
+    pub fn from_str_value(s: &str) -> Result<Self, String> {
+        match s {
+            "human" => Ok(OutputFormat::Human),
+            "json" => Ok(OutputFormat::Json),
+            other => Err(format!("invalid format '{other}': expected 'human' or 'json'")),
+        }
+    }
 }
 
 /// Standard JSON response envelope per architecture spec (RT-B3, SCV-01).

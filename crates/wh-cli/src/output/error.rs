@@ -59,6 +59,10 @@ pub enum WhError {
     /// An internal error occurred (alias for backward compatibility).
     #[error("Internal error: {0}")]
     InternalError(String),
+
+    /// A stream operation failed.
+    #[error("Stream error: {0}")]
+    StreamError(String),
 }
 
 impl WhError {
@@ -78,6 +82,7 @@ impl WhError {
             WhError::AgentNotFound(_) => WhErrorCode("AGENT_NOT_FOUND"),
             WhError::Internal(_) => WhErrorCode("INTERNAL_ERROR"),
             WhError::InternalError(_) => WhErrorCode("INTERNAL_ERROR"),
+            WhError::StreamError(_) => WhErrorCode("STREAM_ERROR"),
         }
     }
 
