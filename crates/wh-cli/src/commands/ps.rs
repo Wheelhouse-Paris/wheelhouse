@@ -117,7 +117,7 @@ fn parse_components(response: &serde_json::Value) -> Result<Vec<ComponentInfo>, 
         .get("data")
         .and_then(|d| d.get("components"))
         .and_then(|c| c.as_array())
-        .ok_or_else(|| WhError::InternalError("Invalid response format".to_string()))?;
+        .ok_or_else(|| WhError::Internal("Invalid response format".to_string()))?;
 
     let mut components = Vec::new();
     for item in data {

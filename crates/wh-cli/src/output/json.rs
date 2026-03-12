@@ -46,7 +46,7 @@ impl JsonError {
         Self {
             v: SCHEMA_VERSION,
             status: "error",
-            code: err.code().as_str().to_string(),
+            code: err.error_code().to_string(),
             message: err.to_string(),
         }
     }
@@ -56,7 +56,7 @@ impl JsonError {
 pub fn print_json_success<T: Serialize>(data: &T) -> Result<(), WhError> {
     let response = JsonSuccess::new(data);
     let json = serde_json::to_string(&response)
-        .map_err(|e| WhError::InternalError(format!("JSON serialization failed: {e}")))?;
+        .map_err(|e| WhError::Internal(format!("JSON serialization failed: {e}")))?;
     println!("{json}");
     Ok(())
 }
