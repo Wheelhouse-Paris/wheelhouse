@@ -4,6 +4,8 @@
 //! This is NOT configurable -- the broker only accepts localhost connections.
 //! Ports are configurable via environment variables for development flexibility.
 
+use std::path::{Path, PathBuf};
+
 /// The localhost bind address -- security invariant, never changes.
 const BIND_ADDRESS: &str = "127.0.0.1";
 
@@ -18,6 +20,9 @@ pub struct BrokerConfig {
     pub_port: u16,
     sub_port: u16,
     control_port: u16,
+    /// Data directory for WAL files and stream registry.
+    /// Configured via `WH_DATA_DIR` env var, default `$HOME/.wh/`.
+    data_dir: PathBuf,
 }
 
 impl BrokerConfig {
@@ -26,10 +31,19 @@ impl BrokerConfig {
     /// Reads `WH_PUB_PORT`, `WH_SUB_PORT`, `WH_CONTROL_PORT` from the environment.
     /// The bind address is always `127.0.0.1` and cannot be overridden.
     pub fn from_env() -> Self {
+        let data_dir = std::env::var("WH_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".wh")
+            });
+
         Self {
             pub_port: Self::read_port_env("WH_PUB_PORT", DEFAULT_PUB_PORT),
             sub_port: Self::read_port_env("WH_SUB_PORT", DEFAULT_SUB_PORT),
             control_port: Self::read_port_env("WH_CONTROL_PORT", DEFAULT_CONTROL_PORT),
+            data_dir,
         }
     }
 
@@ -39,6 +53,28 @@ impl BrokerConfig {
             pub_port,
             sub_port,
             control_port,
+            data_dir: std::env::var("WH_DATA_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .unwrap_or_else(|| PathBuf::from("."))
+                        .join(".wh")
+                }),
+        }
+    }
+
+    /// Create a configuration with specific ports and data directory (for testing).
+    pub fn with_ports_and_data_dir(
+        pub_port: u16,
+        sub_port: u16,
+        control_port: u16,
+        data_dir: PathBuf,
+    ) -> Self {
+        Self {
+            pub_port,
+            sub_port,
+            control_port,
+            data_dir,
         }
     }
 
@@ -77,6 +113,11 @@ impl BrokerConfig {
         self.control_port
     }
 
+    /// Data directory for WAL files and stream registry.
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
     fn read_port_env(var: &str, default: u16) -> u16 {
         std::env::var(var)
             .ok()
@@ -91,6 +132,9 @@ impl Default for BrokerConfig {
             pub_port: DEFAULT_PUB_PORT,
             sub_port: DEFAULT_SUB_PORT,
             control_port: DEFAULT_CONTROL_PORT,
+            data_dir: dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".wh"),
         }
     }
 }

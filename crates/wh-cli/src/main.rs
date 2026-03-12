@@ -10,6 +10,7 @@ use wh_cli::commands::logs::{self, LogsArgs};
 use wh_cli::commands::ps::{self, PsArgs};
 use wh_cli::commands::secrets::SecretsCmd;
 use wh_cli::commands::status;
+use wh_cli::commands::stream::{self, StreamCommand};
 use wh_cli::commands::surface::{self, SurfaceCommand};
 use wh_cli::output::{OutputEnvelope, OutputFormat};
 
@@ -43,6 +44,11 @@ enum Commands {
     Surface {
         #[command(subcommand)]
         command: SurfaceCommand,
+    },
+    /// Manage streams.
+    Stream {
+        #[command(subcommand)]
+        command: StreamCommand,
     },
     /// Check Wheelhouse health and status.
     Status {
@@ -131,6 +137,9 @@ async fn main() {
                     }
                 }
             }
+        }
+        Commands::Stream { command } => {
+            stream::execute(&command).await;
         }
         Commands::Status { format } => {
             status::execute(format).await;

@@ -62,7 +62,7 @@ impl DeployCommand {
     }
 }
 
-fn execute_lint(file: &PathBuf, format: OutputFormat) -> i32 {
+fn execute_lint(file: &std::path::Path, format: OutputFormat) -> i32 {
     let (result, _linted) = match lint_engine::lint_file(file) {
         Ok(r) => r,
         Err(LintError::FileReadError(e)) => {
@@ -109,10 +109,19 @@ fn execute_lint(file: &PathBuf, format: OutputFormat) -> i32 {
                 warnings: result.warnings.clone(),
             };
             if result.has_errors() {
-                let envelope = output::OutputEnvelope::<()>::error("LINT_ERROR", "lint validation failed");
-                if let Ok(json) = serde_json::to_string_pretty(&envelope) {
-                    println!("{json}");
-                }
+                // Include lint diagnostics in data even for error status,
+                // so consumers can inspect specific errors.
+                let envelope = serde_json::json!({
+                    "v": 1,
+                    "status": "error",
+                    "code": "LINT_ERROR",
+                    "message": "lint validation failed",
+                    "data": {
+                        "errors": result.errors,
+                        "warnings": result.warnings,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&envelope).unwrap());
             } else {
                 let envelope = output::OutputEnvelope::ok(data);
                 if let Ok(json) = serde_json::to_string_pretty(&envelope) {

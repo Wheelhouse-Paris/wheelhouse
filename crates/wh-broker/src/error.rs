@@ -22,6 +22,12 @@ pub enum BrokerError {
 
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
+
+    #[error("WAL error: {0}")]
+    WalError(#[from] crate::wal::WalError),
+
+    #[error("Stream error: {0}")]
+    StreamError(#[from] crate::metrics::StreamError),
 }
 
 /// Typed error for control socket handlers.

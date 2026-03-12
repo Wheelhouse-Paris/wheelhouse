@@ -34,14 +34,22 @@ impl ControlClient {
     ///
     /// Returns the parsed JSON response or a `WhError`.
     pub async fn send_command(&self, command: &str) -> Result<Value, WhError> {
+        let request = json!({"command": command});
+        self.send_command_with_payload(request).await
+    }
+
+    /// Send a command with a full JSON payload and receive the response.
+    ///
+    /// The payload should include the "command" field plus any additional fields
+    /// needed by the handler (e.g., "name", "retention" for stream commands).
+    pub async fn send_command_with_payload(&self, payload: Value) -> Result<Value, WhError> {
         let mut socket = ReqSocket::new();
         socket
             .connect(&self.endpoint)
             .await
             .map_err(|_| WhError::ConnectionError)?;
 
-        let request = json!({"command": command});
-        let request_bytes = serde_json::to_vec(&request)
+        let request_bytes = serde_json::to_vec(&payload)
             .map_err(|e| WhError::Other(format!("Failed to serialize request: {e}")))?;
 
         let msg = ZmqMessage::from(request_bytes);

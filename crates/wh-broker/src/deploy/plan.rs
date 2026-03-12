@@ -159,7 +159,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
     }
 
     // Removed agents
-    for (name, _) in &current_agents {
+    for name in current_agents.keys() {
         if !desired_agents.contains_key(name) {
             changes.push(Change {
                 op: "-".to_string(),
@@ -201,7 +201,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
     let desired_streams: std::collections::BTreeMap<&str, &Stream> =
         desired.streams.iter().map(|s| (s.name.as_str(), s)).collect();
 
-    for (name, _) in &desired_streams {
+    for name in desired_streams.keys() {
         if !current_streams.contains_key(name) {
             changes.push(Change {
                 op: "+".to_string(),
@@ -213,7 +213,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
         }
     }
 
-    for (name, _) in &current_streams {
+    for name in current_streams.keys() {
         if !desired_streams.contains_key(name) {
             changes.push(Change {
                 op: "-".to_string(),
