@@ -1,0 +1,13 @@
+[project]
+name = "wheelhouse-mcp"
+version = "0.1.0"
+description = "Wheelhouse MCP server for Claude Code — SDK reference, Protobuf schemas, examples, and type validation"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0,<2.0",
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

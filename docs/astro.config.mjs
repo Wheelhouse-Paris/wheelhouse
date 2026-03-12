@@ -55,6 +55,7 @@ export default defineConfig({
 					label: 'SDK',
 					items: [
 						{ label: 'Python SDK', slug: 'sdk/python' },
+						{ label: 'Claude Code MCP', slug: 'sdk/mcp' },
 					],
 				},
 				{
