@@ -180,7 +180,7 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
 
     // Verify this is a git repository before attempting any git operations.
     let is_git_repo =
-        run_git(workspace_root, &["rev-parse", "--git-dir"]).map_or(false, |o| o.status.success());
+        run_git(workspace_root, &["rev-parse", "--git-dir"]).is_ok_and(|o| o.status.success());
     if !is_git_repo {
         return Err(DeployError::GitFailed(format!(
             "not a git repository — run 'git init' in '{}'",
