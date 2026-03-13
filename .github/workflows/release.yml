@@ -41,6 +41,11 @@ jobs:
           for bin in wh wh-broker; do
             cp target/${{ matrix.target }}/release/${bin} dist/${bin}-${{ matrix.target }}
           done
+          # Bundle both binaries in a tarball for Homebrew (named binaries at root)
+          mkdir -p /tmp/wh-bundle
+          cp target/${{ matrix.target }}/release/wh /tmp/wh-bundle/wh
+          cp target/${{ matrix.target }}/release/wh-broker /tmp/wh-bundle/wh-broker
+          tar -czf dist/wh-${{ matrix.target }}.tar.gz -C /tmp/wh-bundle wh wh-broker
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -73,7 +78,7 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION_BARE="${VERSION#v}"
-          SHA256=$(sha256sum dist/wh-aarch64-apple-darwin | awk '{print $1}')
+          SHA256=$(sha256sum dist/wh-aarch64-apple-darwin.tar.gz | awk '{print $1}')
 
           # Fetch current formula from tap repo
           API="https://api.github.com/repos/Wheelhouse-Paris/homebrew-tap/contents/Formula/wh.rb"
@@ -81,10 +86,10 @@ jobs:
           SHA_FILE=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
           CONTENT=$(echo "$RESPONSE" | python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())")
 
-          # Update version, url, and sha256
+          # Update version, url (.tar.gz), and sha256
           UPDATED=$(echo "$CONTENT" \
             | sed "s|version \".*\"|version \"$VERSION_BARE\"|" \
-            | sed "s|releases/download/v[^/]*/wh-aarch64-apple-darwin|releases/download/$VERSION/wh-aarch64-apple-darwin|" \
+            | sed "s|releases/download/v[^/]*/wh-aarch64-apple-darwin\.tar\.gz|releases/download/$VERSION/wh-aarch64-apple-darwin.tar.gz|" \
             | sed "s|sha256 \".*\"|sha256 \"$SHA256\"|")
 
           # Push updated formula
