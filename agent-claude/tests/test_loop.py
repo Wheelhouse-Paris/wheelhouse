@@ -1,8 +1,8 @@
-"""Acceptance tests for Story 8.2: Stream Subscription and Message Processing Loop.
+"""Acceptance tests for Stories 8.2 and 8.3: Message Processing Loop and Response Publishing.
 
-Tests verify all acceptance criteria for the message dispatch loop.
+Tests verify all acceptance criteria for the message dispatch loop and response publishing.
 
-Acceptance Criteria:
+Story 8.2 Acceptance Criteria:
   AC1: Agent subscribes to every stream in WH_STREAMS; info log lists them
   AC2: TextMessage content passed to Claude API with persona as system prompt
   AC3: CronEvent rendered as structured prompt and passed to Claude API
@@ -11,6 +11,15 @@ Acceptance Criteria:
   AC6: Self-echo filter drops TextMessage where publisher == agent_name
   AC7: SkillInvocation for other agent dropped silently
   AC8: MEMORY.md re-read before each Claude API call
+
+Story 8.3 Acceptance Criteria:
+  AC1: TextMessage response published to same stream with publisher=WH_AGENT_NAME
+  AC2: Response appears with agent name as publisher
+  AC3: CronEvent response published as TextMessage
+  AC4: SkillInvocation -> SkillResult(success=True) with invocation_id
+  AC5: API timeout -> no publish for TextMessage/CronEvent
+  AC6: SkillInvocation failure -> SkillResult(success=False) published
+  AC7: Publish failure -> warning logged, no crash
 """
 
 from __future__ import annotations
@@ -26,6 +35,7 @@ from wheelhouse.types import (
     CronEvent,
     SkillInvocation,
     SkillProgress,
+    SkillResult,
     TextMessage,
     TopologyShutdown,
 )
@@ -285,11 +295,11 @@ class TestSkillInvocationDispatch:
         )
         await handler(msg)
 
-        # SkillProgress should have been published
-        mock_connection.publish.assert_called_once()
-        pub_args = mock_connection.publish.call_args
-        assert pub_args.args[0] == "main"
-        progress = pub_args.args[1]
+        # SkillProgress should have been published first, then SkillResult
+        assert mock_connection.publish.call_count == 2
+        first_pub = mock_connection.publish.call_args_list[0]
+        assert first_pub.args[0] == "main"
+        progress = first_pub.args[1]
         assert isinstance(progress, SkillProgress)
         assert progress.invocation_id == "inv-001"
         assert progress.status == "IN_PROGRESS"
@@ -904,3 +914,432 @@ class TestTypeStubs:
         data = msg.SerializeToString()
         restored = TopologyShutdown.FromString(data)
         assert restored.reason == "operator request"
+
+
+# ===========================================================================
+# Story 8.3: Publish Claude API Responses
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 8.3 AC1: TextMessage response published to same stream
+# ---------------------------------------------------------------------------
+
+class TestTextMessageResponsePublishing:
+    """TextMessage response published to same stream with correct publisher."""
+
+    async def test_text_message_response_published(
+        self, mock_connection, config, persona, mock_claude_client, tmp_path
+    ):
+        """Given Claude API returns a completion for TextMessage,
+        When the response is received,
+        Then a TextMessage is published to the same stream with publisher=agent_name.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        await handler(TextMessage(content="Hello", publisher="user1"))
+
+        # connection.publish should have been called with the response
+        mock_connection.publish.assert_called_once()
+        pub_args = mock_connection.publish.call_args
+        assert pub_args.args[0] == "main"  # same stream
+        response = pub_args.args[1]
+        assert isinstance(response, TextMessage)
+        assert response.publisher == "donna"
+        assert response.content == "Hello from Claude"
+
+    async def test_text_message_response_content_matches_api(
+        self, mock_connection, config, persona, tmp_path
+    ):
+        """Response TextMessage content matches Claude API result text."""
+        from agent_claude.claude_client import CompletionResult
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        client = AsyncMock()
+        client.complete = AsyncMock(return_value=CompletionResult(
+            text="This is the API response text",
+            input_tokens=50,
+            output_tokens=30,
+        ))
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="events",
+            claude_client=client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        await handler(TextMessage(content="test", publisher="user1"))
+
+        response = mock_connection.publish.call_args.args[1]
+        assert response.content == "This is the API response text"
+
+
+# ---------------------------------------------------------------------------
+# 8.3 AC3: CronEvent response published as TextMessage
+# ---------------------------------------------------------------------------
+
+class TestCronEventResponsePublishing:
+    """CronEvent response published as TextMessage."""
+
+    async def test_cron_response_published_as_text_message(
+        self, mock_connection, config, persona, mock_claude_client, tmp_path
+    ):
+        """Given a CronEvent is processed and Claude API returns,
+        When the response is received,
+        Then a TextMessage is published with publisher=agent_name.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="events",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        await handler(CronEvent(
+            job_name="daily-report",
+            triggered_at="2026-03-13T10:00:00Z",
+            publisher="system",
+        ))
+
+        mock_connection.publish.assert_called_once()
+        pub_args = mock_connection.publish.call_args
+        assert pub_args.args[0] == "events"  # same stream
+        response = pub_args.args[1]
+        assert isinstance(response, TextMessage)
+        assert response.publisher == "donna"
+        assert response.content == "Hello from Claude"
+
+
+# ---------------------------------------------------------------------------
+# 8.3 AC4: SkillInvocation -> SkillResult(success=True)
+# ---------------------------------------------------------------------------
+
+class TestSkillResultPublishing:
+    """SkillInvocation -> SkillResult published with correct fields."""
+
+    async def test_skill_success_publishes_skill_result(
+        self, mock_connection, config, persona, mock_claude_client, tmp_path
+    ):
+        """Given a SkillInvocation is processed and Claude API succeeds,
+        When the response is received,
+        Then a SkillResult(success=True) is published with invocation_id.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        await handler(SkillInvocation(
+            invocation_id="inv-100",
+            skill_name="summarize",
+            input_payload="Summarize this.",
+            target_agent="donna",
+            publisher="operator",
+        ))
+
+        # Should have published SkillProgress AND SkillResult
+        assert mock_connection.publish.call_count == 2
+
+        # First call: SkillProgress (from 8.2)
+        first_pub = mock_connection.publish.call_args_list[0]
+        assert isinstance(first_pub.args[1], SkillProgress)
+
+        # Second call: SkillResult (from 8.3)
+        second_pub = mock_connection.publish.call_args_list[1]
+        assert second_pub.args[0] == "main"
+        result = second_pub.args[1]
+        assert isinstance(result, SkillResult)
+        assert result.invocation_id == "inv-100"
+        assert result.success is True
+        assert result.payload == "Hello from Claude"
+        assert result.publisher == "donna"
+
+    async def test_skill_failure_publishes_skill_result_false(
+        self, mock_connection, config, persona, tmp_path
+    ):
+        """Given a SkillInvocation is processed and Claude API fails (returns None),
+        When the handler processes the result,
+        Then a SkillResult(success=False) is published.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        client = AsyncMock()
+        client.complete = AsyncMock(return_value=None)  # API failure
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        await handler(SkillInvocation(
+            invocation_id="inv-200",
+            skill_name="translate",
+            input_payload="Translate this.",
+            target_agent="donna",
+            publisher="operator",
+        ))
+
+        # Should have published SkillProgress AND SkillResult(success=False)
+        assert mock_connection.publish.call_count == 2
+
+        second_pub = mock_connection.publish.call_args_list[1]
+        result = second_pub.args[1]
+        assert isinstance(result, SkillResult)
+        assert result.invocation_id == "inv-200"
+        assert result.success is False
+        assert "failed" in result.payload.lower()
+        assert result.publisher == "donna"
+
+
+# ---------------------------------------------------------------------------
+# 8.3 AC5: API timeout -> no publish for TextMessage/CronEvent
+# ---------------------------------------------------------------------------
+
+class TestNoPublishOnTimeout:
+    """No message published when Claude API returns None for TextMessage/CronEvent."""
+
+    async def test_text_message_timeout_no_publish(
+        self, mock_connection, config, persona, tmp_path
+    ):
+        """Given Claude API times out for a TextMessage,
+        When the handler processes the None result,
+        Then no message is published.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        client = AsyncMock()
+        client.complete = AsyncMock(return_value=None)
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        await handler(TextMessage(content="test", publisher="user1"))
+
+        mock_connection.publish.assert_not_called()
+
+    async def test_cron_event_timeout_no_publish(
+        self, mock_connection, config, persona, tmp_path
+    ):
+        """Given Claude API times out for a CronEvent,
+        When the handler processes the None result,
+        Then no message is published.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        client = AsyncMock()
+        client.complete = AsyncMock(return_value=None)
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="events",
+            claude_client=client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        await handler(CronEvent(
+            job_name="test-cron",
+            triggered_at="2026-03-13T10:00:00Z",
+        ))
+
+        mock_connection.publish.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 8.3 AC7: Publish failure -> warning logged, no crash
+# ---------------------------------------------------------------------------
+
+class TestPublishFailureHandling:
+    """Publish failure is caught, logged at warning, agent continues."""
+
+    async def test_publish_failure_logged_warning(
+        self, mock_connection, config, persona, mock_claude_client, tmp_path, caplog
+    ):
+        """Given connection.publish() raises an exception,
+        When the handler tries to publish the response,
+        Then a warning is logged and the handler completes without crash.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        # Make publish raise
+        mock_connection.publish = AsyncMock(
+            side_effect=RuntimeError("broker unreachable")
+        )
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="agent_claude"):
+            # Should NOT raise
+            await handler(TextMessage(content="test", publisher="user1"))
+
+        assert any(
+            "Failed to publish response" in r.message
+            for r in caplog.records
+        )
+
+    async def test_publish_failure_does_not_crash_loop(
+        self, mock_connection, config, persona, mock_claude_client, tmp_path
+    ):
+        """After a publish failure, subsequent messages can still be processed."""
+        from agent_claude.claude_client import CompletionResult
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        call_count = 0
+
+        async def publish_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("first publish fails")
+            # Second publish succeeds
+
+        mock_connection.publish = AsyncMock(side_effect=publish_side_effect)
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        # First message: publish fails but handler completes
+        await handler(TextMessage(content="msg1", publisher="user1"))
+        # Second message: publish succeeds
+        await handler(TextMessage(content="msg2", publisher="user1"))
+
+        assert mock_claude_client.complete.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# 8.3 Self-echo integration: published responses get filtered on re-receive
+# ---------------------------------------------------------------------------
+
+class TestSelfEchoIntegration:
+    """Published responses use agent_name as publisher; self-echo filter catches them."""
+
+    async def test_response_publisher_matches_agent_name(
+        self, mock_connection, config, persona, mock_claude_client, tmp_path
+    ):
+        """Published TextMessage has publisher == agent_name,
+        so if re-received it would be filtered by self-echo filter.
+        """
+        from agent_claude.loop import _make_handler
+
+        (tmp_path / "MEMORY.md").write_text("", encoding="utf-8")
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=str(tmp_path),
+        )
+
+        # Process incoming message -> response published
+        await handler(TextMessage(content="test", publisher="user1"))
+
+        response = mock_connection.publish.call_args.args[1]
+        assert response.publisher == "donna"
+
+        # Now simulate receiving that response back (self-echo)
+        mock_claude_client.complete.reset_mock()
+        await handler(response)
+
+        # Should be filtered -- no second API call
+        mock_claude_client.complete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 8.3 _publish_response helper unit test
+# ---------------------------------------------------------------------------
+
+class TestPublishResponseHelper:
+    """Unit tests for _publish_response helper."""
+
+    async def test_publish_response_success_logs_info(self, caplog):
+        """Successful publish logs at info level."""
+        from agent_claude.loop import _publish_response
+
+        conn = AsyncMock()
+        conn.publish = AsyncMock()
+        msg = TextMessage(content="test", publisher="donna")
+
+        with caplog.at_level(logging.INFO, logger="agent_claude"):
+            await _publish_response(conn, "main", msg, "type=TextMessage chars=4")
+
+        conn.publish.assert_called_once_with("main", msg)
+        assert any("Response published" in r.message for r in caplog.records)
+
+    async def test_publish_response_failure_logs_warning(self, caplog):
+        """Failed publish logs at warning level with exc_info."""
+        from agent_claude.loop import _publish_response
+
+        conn = AsyncMock()
+        conn.publish = AsyncMock(side_effect=RuntimeError("connection lost"))
+        msg = TextMessage(content="test", publisher="donna")
+
+        with caplog.at_level(logging.WARNING, logger="agent_claude"):
+            await _publish_response(conn, "main", msg, "type=TextMessage chars=4")
+
+        assert any("Failed to publish" in r.message for r in caplog.records)
