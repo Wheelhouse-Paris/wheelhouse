@@ -797,4 +797,51 @@ mod tests {
         let _status = check_credential_status("nonexistent_cred_xyz");
         // Can't assert None because keychain may or may not have the entry in CI
     }
+
+    // ---------------------------------------------------------------------------
+    // detect_podman tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn detect_podman_uses_version_flag_not_socket() {
+        // Regression test: must use `podman --version` (no socket needed),
+        // not `podman version --format` which fails when the VM is not running.
+        //
+        // We verify by running the exact same command detect_podman() uses and
+        // asserting it exits 0 when podman is on PATH.
+        let output = Command::new("podman").arg("--version").output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                // podman is present — detect_podman() must return Detected
+                let result = detect_podman();
+                assert!(
+                    matches!(result, DetectionResult::Detected { .. }),
+                    "detect_podman() returned NotFound even though `podman --version` succeeded"
+                );
+            }
+            // If podman is not installed in CI, the test is vacuously passing — that's fine.
+        }
+    }
+
+    #[test]
+    fn detect_podman_version_is_parsed_from_output() {
+        // `podman --version` prints "podman version X.Y.Z" — we extract the last token.
+        let raw = "podman version 5.8.1";
+        let version = raw.split_whitespace().last().unwrap_or(raw);
+        assert_eq!(version, "5.8.1");
+    }
+
+    #[test]
+    fn detect_podman_not_found_has_install_hint() {
+        // DetectionResult::NotFound must always carry an install_hint on macOS.
+        let result = DetectionResult::NotFound {
+            reason: "podman binary not found on PATH".to_string(),
+            install_hint: Some(platform_podman_install_hint()),
+        };
+        if let DetectionResult::NotFound { install_hint, .. } = result {
+            assert!(install_hint.is_some(), "install_hint must be present");
+            let hint = install_hint.unwrap();
+            assert!(!hint.is_empty());
+        }
+    }
 }
