@@ -8,6 +8,11 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Wheelhouse',
+			logo: {
+				src: './src/assets/logo.svg',
+				alt: 'Wheelhouse',
+				replacesTitle: false,
+			},
 			description: 'The operating infrastructure for autonomous agent factories',
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/Wheelhouse-Paris/wheelhouse' },

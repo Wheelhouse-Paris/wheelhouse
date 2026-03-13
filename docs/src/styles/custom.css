@@ -75,7 +75,7 @@
   border-bottom-color: rgba(178, 130, 100, 0.25);
 }
 
-/* Logo — uppercase, letter-spaced, 13px/600 + circular ⎈ icon */
+/* Logo — uppercase, letter-spaced, 13px/600 */
 .site-title {
   font-size: 13px;
   font-weight: 600;
@@ -83,22 +83,10 @@
   text-transform: uppercase;
   gap: 10px;
 }
-/* Circular copper icon before the title text */
-.site-title::before {
-  content: '⎈';
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 1.5px solid var(--wh-cuivre);
-  border-radius: 50%;
-  font-size: 13px;
-  color: var(--wh-cuivre);
-  flex-shrink: 0;
-  font-style: normal;
-  text-transform: none;
-  letter-spacing: 0;
+/* SVG logo image sizing */
+.site-title img {
+  height: 28px;
+  width: 28px;
 }
 
 /* Topbar nav active link — copper underline */
