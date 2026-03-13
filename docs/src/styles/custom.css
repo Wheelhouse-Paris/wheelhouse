@@ -2,8 +2,11 @@
 /* Palette from The Wheelhouse Paris brand book & ux-design-directions.html */
 /* Ardoise #2A323E · Pierre Calcaire #F2EDE4 · Cuivre #B28264 */
 
+/* ══════════════════════════════════════════
+   TOKENS & STARLIGHT OVERRIDES
+══════════════════════════════════════════ */
 :root {
-  /* CSS variables mirroring the mockup tokens */
+  /* Brand tokens */
   --wh-ardoise: #2A323E;
   --wh-ardoise-topbar: #1e2731;
   --wh-ardoise-sidebar: #222c38;
@@ -14,10 +17,15 @@
   --wh-text-dark: #302C28;
   --wh-text-muted: #78736C;
 
-  /* Starlight accent — copper */
+  /* Starlight accent — copper (light mode) */
   --sl-color-accent-low: #ead9cc;
   --sl-color-accent: var(--wh-cuivre-dark);  /* 4.6:1 on cream — WCAG AA */
   --sl-color-accent-high: #6b4930;
+
+  /* Layout */
+  --sl-nav-height: 3.25rem;        /* 52px — matches mockup --topbar-h */
+  --sl-sidebar-width: 15rem;       /* 240px — matches mockup --sidebar-w */
+  --sl-content-width: 51.25rem;    /* 820px — matches mockup max-width */
 }
 
 /* ── Dark mode (primary — Ardoise First) ── */
@@ -26,31 +34,175 @@
   --sl-color-accent: var(--wh-cuivre);
   --sl-color-accent-high: #d4a88a;
 
-  /* Page background */
+  /* Backgrounds */
   --sl-color-bg: var(--wh-ardoise);
   --sl-color-bg-nav: var(--wh-ardoise-topbar);
   --sl-color-bg-sidebar: var(--wh-ardoise-sidebar);
 
-  /* Body text — subdued white, not pure white (matches d1-prose rgba(255,255,255,0.55)) */
+  /* Body text — subdued white (matches d1-prose rgba(255,255,255,0.55)) */
   --sl-color-text: rgba(255, 255, 255, 0.78);
   --sl-color-text-accent: rgba(255, 255, 255, 0.45);
 
-  /* Nav border — subtle copper */
+  /* Borders */
   --sl-color-hairline: rgba(178, 130, 100, 0.22);
+
+  /* Gray scale — rebase on Ardoise so Starlight components stay on-brand */
+  --sl-color-gray-1: rgba(255, 255, 255, 0.85);
+  --sl-color-gray-2: rgba(255, 255, 255, 0.65);
+  --sl-color-gray-3: rgba(255, 255, 255, 0.45);
+  --sl-color-gray-4: rgba(255, 255, 255, 0.20);
+  --sl-color-gray-5: rgba(255, 255, 255, 0.10);
+  --sl-color-gray-6: rgba(255, 255, 255, 0.06);
+  --sl-color-black: var(--wh-ardoise-code);
+  --sl-color-white: #ffffff;
 }
 
 /* ── Light mode — warm cream ── */
 :root[data-theme='light'] {
   --sl-color-bg: var(--wh-pierre);
-  --sl-color-bg-nav: var(--wh-ardoise);  /* nav always Ardoise */
-  --sl-color-bg-sidebar: #fff;
+  --sl-color-bg-nav: var(--wh-ardoise);
+  --sl-color-bg-sidebar: #ffffff;
   --sl-color-text: var(--wh-text-dark);
 }
 
-/* ── H2 copper underline bar — short decorative bar, not full-width border ── */
-/* Matches .copper-bar { width: 36px; height: 2px; background: var(--cuivre) } in mockup */
+
+/* ══════════════════════════════════════════
+   TOPBAR / HEADER
+══════════════════════════════════════════ */
+
+/* Copper-tinted bottom border — matches border-bottom: 1px solid rgba(178,130,100,0.25) */
+:root[data-theme='dark'] header.header {
+  border-bottom-color: rgba(178, 130, 100, 0.25);
+}
+
+/* Logo — uppercase, letter-spaced, 13px/600 + circular ⎈ icon */
+.site-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  gap: 10px;
+}
+/* Circular copper icon before the title text */
+.site-title::before {
+  content: '⎈';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1.5px solid var(--wh-cuivre);
+  border-radius: 50%;
+  font-size: 13px;
+  color: var(--wh-cuivre);
+  flex-shrink: 0;
+  font-style: normal;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* Topbar nav active link — copper underline */
+:root[data-theme='dark'] header nav a[aria-current='page'] {
+  color: #ffffff;
+  border-bottom: 2px solid var(--wh-cuivre);
+}
+
+
+/* ══════════════════════════════════════════
+   SIDEBAR
+══════════════════════════════════════════ */
+
+/* Subtle border — matches border-right: 1px solid rgba(255,255,255,0.06) */
+:root[data-theme='dark'] .sidebar-pane {
+  border-inline-end-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Section labels — copper, uppercase, letter-spaced */
+.group-label span,
+.sidebar-group-label span {
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--wh-cuivre) !important;
+  font-weight: 600;
+}
+
+/* Links — muted white */
+:root[data-theme='dark'] .sidebar-content a {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 14px;
+}
+
+/* Active item — copper left border + bg tint */
+:root[data-theme='dark'] .sidebar-content a[aria-current='page'] {
+  background: rgba(178, 130, 100, 0.12);
+  border-inline-start: 2px solid var(--wh-cuivre);
+  padding-inline-start: calc(var(--sl-sidebar-item-padding-inline, 0.5rem) - 2px);
+  color: #ffffff !important;
+}
+
+/* Hover */
+:root[data-theme='dark'] .sidebar-content a:not([aria-current='page']):hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+
+/* ══════════════════════════════════════════
+   RIGHT SIDEBAR (TABLE OF CONTENTS)
+══════════════════════════════════════════ */
+
+:root[data-theme='dark'] .right-sidebar-panel {
+  border-inline-start-color: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme='dark'] .right-sidebar a {
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 12px;
+}
+:root[data-theme='dark'] .right-sidebar a:hover {
+  color: rgba(255, 255, 255, 0.75);
+}
+:root[data-theme='dark'] .right-sidebar a[aria-current='true'] {
+  color: var(--wh-cuivre);
+  border-inline-start-color: var(--wh-cuivre);
+}
+/* TOC heading label */
+:root[data-theme='dark'] .right-sidebar .isBold,
+:root[data-theme='dark'] starlight-toc .toc-wrapper summary,
+:root[data-theme='dark'] .right-sidebar summary {
+  color: var(--wh-cuivre);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+
+/* ══════════════════════════════════════════
+   PROSE / MAIN CONTENT
+══════════════════════════════════════════ */
+
+/* Body text — 15px / 1.75 matching d1-prose */
+.sl-markdown-content {
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+/* Page title H1 — light weight, tight tracking */
+.page-title {
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  font-size: 1.75rem;
+}
+:root[data-theme='dark'] .page-title {
+  color: #ffffff;
+}
+
+/* H2 — copper underline bar (36px × 2px, no full border) */
 .sl-markdown-content h2 {
-  padding-bottom: 0;    /* no border — use ::after instead */
+  font-size: 1.375rem;
+  font-weight: 400;
+  padding-bottom: 0;
   border-bottom: none;
 }
 .sl-markdown-content h2::after {
@@ -62,15 +214,58 @@
   margin-top: 8px;
 }
 
-/* ── Code blocks — darker than page bg, matching #141d27 in mockup ── */
-:root[data-theme='dark'] .sl-markdown-content pre,
-:root[data-theme='dark'] :not(pre) > code {
-  background-color: var(--wh-ardoise-code);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+/* H3 — copper left accent bar */
+.sl-markdown-content h3 {
+  font-size: 1rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.sl-markdown-content h3::before {
+  content: '';
+  display: block;
+  width: 3px;
+  height: 1em;
+  background: var(--wh-cuivre);
+  flex-shrink: 0;
 }
 
-/* ── Tables — copper headers (uppercase, letter-spaced) ── */
-/* Matches .d1-flag-table th in mockup */
+/* Links — copper */
+:root[data-theme='dark'] .sl-markdown-content a {
+  color: var(--wh-cuivre);
+  text-decoration: none;
+}
+:root[data-theme='dark'] .sl-markdown-content a:hover {
+  color: var(--wh-cuivre-dark);
+  text-decoration: underline;
+}
+
+/* Inline code — copper tinted, darker bg */
+:root[data-theme='dark'] .sl-markdown-content :not(pre) > code {
+  background-color: var(--wh-ardoise-code);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  color: var(--wh-cuivre);
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* Code blocks — #141d27, matching d1-code */
+:root[data-theme='dark'] .sl-markdown-content pre {
+  background-color: var(--wh-ardoise-code) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 4px;
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+
+
+/* ══════════════════════════════════════════
+   TABLES
+══════════════════════════════════════════ */
+
+/* Headers — copper, uppercase, letter-spaced */
 :root[data-theme='dark'] .sl-markdown-content table th {
   color: var(--wh-cuivre);
   font-size: 0.68rem;
@@ -83,15 +278,136 @@
   color: rgba(255, 255, 255, 0.55);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
-/* First column code values in copper — matches td:first-child in mockup */
+/* First column code values — copper */
 :root[data-theme='dark'] .sl-markdown-content table td:first-child code {
   color: var(--wh-cuivre);
 }
 
-/* ── Aside / callout notes — copper left border ── */
-/* Matches .d1-note in mockup: border-left + subtle copper bg */
+
+/* ══════════════════════════════════════════
+   ASIDES / CALLOUTS
+══════════════════════════════════════════ */
+
+/* Starlight aside component (::note, ::tip, etc.) */
+:root[data-theme='dark'] .starlight-aside {
+  border-inline-start: 2px solid var(--wh-cuivre);
+  background-color: rgba(178, 130, 100, 0.08);
+  border-radius: 0;
+}
+:root[data-theme='dark'] .starlight-aside .starlight-aside__title {
+  color: var(--wh-cuivre);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+:root[data-theme='dark'] .starlight-aside .starlight-aside__body {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 14px;
+  line-height: 1.6;
+}
+/* Starlight aside icon — copper */
+:root[data-theme='dark'] .starlight-aside .starlight-aside__title svg {
+  color: var(--wh-cuivre);
+}
+
+/* Blockquotes (raw markdown >) */
 :root[data-theme='dark'] .sl-markdown-content blockquote {
-  border-left: 2px solid var(--wh-cuivre);
+  border-inline-start: 2px solid var(--wh-cuivre);
   background: rgba(178, 130, 100, 0.08);
   color: rgba(255, 255, 255, 0.45);
+  margin-inline: 0;
+  padding: 0.75rem 1rem;
+}
+
+
+/* ══════════════════════════════════════════
+   HERO (Introduction page)
+══════════════════════════════════════════ */
+
+/* Eyebrow label above the H1 */
+.hero .copy::before {
+  content: 'Autonomous Agent Infrastructure';
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--wh-cuivre);
+  margin-bottom: 20px;
+  font-weight: 400;
+}
+
+/* Big light H1 */
+.hero h1 {
+  font-size: clamp(2rem, 5vw, 2.75rem);
+  font-weight: 300;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: #ffffff !important;
+  max-width: 600px;
+}
+
+/* Tagline */
+.hero .tagline {
+  font-size: 16px;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.5);
+  max-width: 480px;
+  margin-top: 4px;
+}
+
+/* Action buttons */
+.hero .actions {
+  margin-top: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Primary — copper fill, no radius */
+.hero .action.primary {
+  background: var(--wh-cuivre);
+  color: #ffffff;
+  border: none;
+  border-radius: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 11px 22px;
+  text-decoration: none;
+  box-shadow: none;
+}
+.hero .action.primary:hover {
+  background: var(--wh-cuivre-dark);
+}
+
+/* Secondary — outline, no radius */
+.hero .action.secondary {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 0;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  padding: 11px 22px;
+  text-decoration: none;
+  box-shadow: none;
+}
+.hero .action.secondary:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #ffffff;
+}
+
+/* ══════════════════════════════════════════
+   PAGINATION (prev / next)
+══════════════════════════════════════════ */
+
+:root[data-theme='dark'] .pagination-links a {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+:root[data-theme='dark'] .pagination-links a:hover {
+  border-color: var(--wh-cuivre);
+  background: rgba(178, 130, 100, 0.08);
+}
+:root[data-theme='dark'] .pagination-links .link-title {
+  color: rgba(255, 255, 255, 0.8);
 }

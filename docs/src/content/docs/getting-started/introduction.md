@@ -1,6 +1,16 @@
 ---
 title: Introduction
 description: What is Wheelhouse and why does it exist?
+hero:
+  title: Write a plan. Watch your agents come alive.
+  tagline: Declare your agent topology in a `.wh` file. Apply it. Wheelhouse handles wiring, process management, and restarts.
+  actions:
+    - text: Quick Start →
+      link: /getting-started/quick-start/
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/Wheelhouse-Paris/wheelhouse
+      variant: secondary
 ---
 
 Wheelhouse is the operating infrastructure for autonomous agent factories.
