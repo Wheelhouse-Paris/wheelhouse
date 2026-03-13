@@ -7,14 +7,22 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 ## Requirements
 
-- **Podman** — container runtime ([install guide](https://podman.io/getting-started/installation))
 - **Git** — version control
+- **Podman** — container runtime (included with `--with-podman`, or install separately)
 - macOS ARM or Linux amd64 (MVP); macOS Intel + Linux arm64 coming in Phase 2
 
 ## Install
 
 <Tabs>
   <TabItem label="macOS">
+    Install wh with Podman bundled:
+
+    ```sh
+    brew install wheelhouse-paris/tap/wh --with-podman
+    ```
+
+    Or install wh only (if Podman is already installed):
+
     ```sh
     brew install wheelhouse-paris/tap/wh
     ```
