@@ -17,12 +17,6 @@ export default defineConfig({
 				baseUrl: 'https://github.com/Wheelhouse-Paris/wheelhouse/edit/main/docs/',
 			},
 			customCss: ['./src/styles/custom.css'],
-			head: [
-				{
-					tag: 'script',
-					content: `(function(){var pwd='${process.env.DOCS_PASSWORD||''}';if(!pwd)return;var k=sessionStorage.getItem('wh_docs');if(k!==pwd){var p=prompt('Wheelhouse docs — password:');if(p!==pwd){document.documentElement.style.display='none';document.write('');location.replace('about:blank');}else{sessionStorage.setItem('wh_docs',p);}}})();`,
-				},
-			],
 			sidebar: [
 				{
 					label: 'Getting Started',
