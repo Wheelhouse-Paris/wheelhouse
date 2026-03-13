@@ -4,7 +4,8 @@
 //! for agents declared in a Wheelhouse topology.
 //! Podman is the only container provider for MVP (Docker explicitly excluded).
 
-use std::path::Path;
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -21,6 +22,15 @@ const PODMAN_MACHINE_START_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Default broker endpoint for agent containers.
 const DEFAULT_BROKER_URL: &str = "tcp://127.0.0.1:5555";
+
+/// TCP address used to probe whether the broker control socket is reachable.
+const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5555";
+
+/// Maximum time to wait for the broker to start after spawning it.
+const BROKER_START_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Polling interval while waiting for the broker to start.
+const BROKER_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Result of applying a set of changes to the container infrastructure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +117,82 @@ pub fn ensure_podman_running() -> Result<(), DeployError> {
 
     eprintln!("  Podman machine started.");
     Ok(())
+}
+
+/// Check if the broker control socket is reachable via a TCP connection.
+fn is_broker_reachable() -> bool {
+    let addr: std::net::SocketAddr = BROKER_CONTROL_ADDR
+        .parse()
+        .expect("hardcoded address is valid");
+    TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
+}
+
+/// Find the wh-broker binary: same directory as the current executable, or PATH.
+fn find_broker_binary() -> Option<PathBuf> {
+    // Check the same directory as the currently running wh binary first
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("wh-broker");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    // Fall back to PATH
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(':') {
+            let candidate = Path::new(dir).join("wh-broker");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Ensure the Wheelhouse broker is running, starting it automatically if not.
+///
+/// Probes the broker control socket via TCP. If unreachable, spawns `wh-broker`
+/// as a detached background process (stdin/stdout/stderr to /dev/null) and polls
+/// until it becomes reachable (up to 5 seconds).
+///
+/// This mirrors `ensure_podman_running()` — the broker is infrastructure, not a
+/// user-managed object, and must be running before agent containers start.
+pub fn ensure_broker_running() -> Result<(), DeployError> {
+    if is_broker_reachable() {
+        return Ok(());
+    }
+
+    let broker_bin = find_broker_binary().ok_or_else(|| {
+        DeployError::ApplyFailed(
+            "wh-broker not found. Ensure it is installed alongside the wh CLI.".to_string(),
+        )
+    })?;
+
+    tracing::info!(binary = %broker_bin.display(), "broker not running — spawning wh-broker");
+    eprintln!("  Starting Wheelhouse broker...");
+
+    Command::new(&broker_bin)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| DeployError::ApplyFailed(format!("failed to spawn wh-broker: {e}")))?;
+
+    // Poll until reachable or timeout
+    let start = std::time::Instant::now();
+    loop {
+        if is_broker_reachable() {
+            eprintln!("  Wheelhouse broker started.");
+            return Ok(());
+        }
+        if start.elapsed() > BROKER_START_TIMEOUT {
+            return Err(DeployError::ApplyFailed(
+                "wh-broker did not start in time. Run `wh broker logs` to debug.".to_string(),
+            ));
+        }
+        std::thread::sleep(BROKER_POLL_INTERVAL);
+    }
 }
 
 /// Sanitize a string for use in a container name.
@@ -386,6 +472,18 @@ pub fn provision_containers(
     // Starts the machine automatically if it is stopped.
     if let Err(e) = ensure_podman_running() {
         tracing::error!(error = %e, "Podman is not available");
+        eprintln!("Error: {e}");
+        return ApplyResult {
+            created: 0,
+            changed: 0,
+            destroyed: 0,
+        };
+    }
+
+    // Ensure the broker is running before starting agent containers.
+    // Agents connect to the broker at startup, so it must be available first.
+    if let Err(e) = ensure_broker_running() {
+        tracing::error!(error = %e, "broker is not available");
         eprintln!("Error: {e}");
         return ApplyResult {
             created: 0,
