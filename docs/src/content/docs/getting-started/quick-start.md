@@ -89,10 +89,7 @@ wh deploy apply topology.wh
 ```
   Applying...
 
-  ✓ stream main    created
-  ✓ agent donna    started
-
-  2 created · 0 changed · 0 destroyed  [state: a3f9c2]
+  1 created · 0 changed · 0 destroyed · 1 streams  [state: a3f9c2]
 ```
 
 ## 5. Verify
@@ -114,7 +111,7 @@ wh stream tail main
 ```
 
 ```
-[2026-03-12T10:00:01Z] [TextMessage] [donna] Hello — I'm ready.
+Tailing stream 'main' — press Ctrl+C to stop
 ```
 
-Your agent is running. See [Deploy your first agent](/guides/first-agent) for the complete walkthrough including Telegram setup.
+The stream starts empty. Messages appear here as donna publishes them — for example when she receives input via a surface or a skill fires. Your agent is running. See [Deploy your first agent](/guides/first-agent) for the complete walkthrough including Telegram setup.
