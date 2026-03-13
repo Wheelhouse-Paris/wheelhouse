@@ -498,6 +498,12 @@ pub fn provision_containers(
     workspace_root: Option<&std::path::Path>,
     extra_env: &[(String, String)],
 ) -> ApplyResult {
+    // Count stream additions upfront — streams require no container operation.
+    let streams_created = changes
+        .iter()
+        .filter(|c| parse_agent_name(&c.component).is_none() && c.op == "+")
+        .count();
+
     // Ensure Podman is running before attempting any container operations.
     // Starts the machine automatically if it is stopped.
     if let Err(e) = ensure_podman_running() {
@@ -507,7 +513,7 @@ pub fn provision_containers(
             created: 0,
             changed: 0,
             destroyed: 0,
-            streams_created: 0,
+            streams_created,
         };
     }
 
@@ -520,7 +526,7 @@ pub fn provision_containers(
             created: 0,
             changed: 0,
             destroyed: 0,
-            streams_created: 0,
+            streams_created,
         };
     }
 
@@ -528,15 +534,12 @@ pub fn provision_containers(
         created: 0,
         changed: 0,
         destroyed: 0,
-        streams_created: 0,
+        streams_created,
     };
 
     for change in changes {
-        // Stream additions are counted but require no container operation.
+        // Skip stream changes — already counted above.
         if parse_agent_name(&change.component).is_none() {
-            if change.op == "+" {
-                result.streams_created += 1;
-            }
             continue;
         }
         // Agent changes — handle container lifecycle.
