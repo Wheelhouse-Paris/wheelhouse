@@ -25,31 +25,20 @@ Follow the prompts to store your Claude API key and Telegram bot token securely.
 `my-first-agent.wh`:
 
 ```yaml
-apiVersion: wheelhouse.dev/v1
-kind: Topology
+api_version: wheelhouse.dev/v1
+name: my-first-agent
 
 streams:
   - name: main
-    provider: local
-    retention:
-      max_age: 30d
+    retention: "30d"
 
 agents:
   - name: donna
     image: ghcr.io/wheelhouse-paris/agent-claude:latest
     streams: [main]
-    max_replicas: 1
 
-surfaces:
-  - name: telegram
-    type: telegram
-    streams: [main]
-
-cron:
-  - name: daily-compaction
-    schedule: "0 3 * * *"
-    target: main
-    action: compact
+guardrails:
+  max_replicas: 2
 ```
 
 ## Step 3 — Plan and apply

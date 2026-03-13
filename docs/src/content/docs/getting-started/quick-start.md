@@ -32,7 +32,8 @@ Secrets are stored outside git, never in `.wh` files.
 Create `topology.wh`:
 
 ```yaml
-apiVersion: wheelhouse.dev/v1
+api_version: wheelhouse.dev/v1
+name: my-first-topology
 
 # Streams are the typed message bus connecting all components.
 # retention: how long objects are kept (omit to keep forever)

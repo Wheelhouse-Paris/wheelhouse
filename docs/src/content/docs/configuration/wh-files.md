@@ -9,7 +9,8 @@ A `.wh` file is a declarative YAML topology definition — the Dockerfile of age
 
 ```yaml
 # topology.wh — minimal working example
-apiVersion: wheelhouse.dev/v1
+api_version: wheelhouse.dev/v1
+name: my-topology
 
 # Streams are the typed message bus connecting all components.
 # Each stream is an append log; objects are retained for the specified duration.
