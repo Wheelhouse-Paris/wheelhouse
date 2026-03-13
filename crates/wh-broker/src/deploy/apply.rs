@@ -178,6 +178,16 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("topology.wh"));
 
+    // Verify this is a git repository before attempting any git operations.
+    let is_git_repo =
+        run_git(workspace_root, &["rev-parse", "--git-dir"]).map_or(false, |o| o.status.success());
+    if !is_git_repo {
+        return Err(DeployError::GitFailed(format!(
+            "not a git repository — run 'git init' in '{}'",
+            workspace_root.display()
+        )));
+    }
+
     // Ensure .wh/.gitignore exists BEFORE staging to prevent WAL/secrets/lock files
     // from being accidentally committed (NFR-S2, FR30).
     gitignore::ensure_gitignore(workspace_root)?;
