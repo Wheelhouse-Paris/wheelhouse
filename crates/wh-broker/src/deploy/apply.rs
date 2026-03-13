@@ -38,21 +38,30 @@ impl CommittedPlan {
     }
 }
 
-/// Find the git binary, checking common paths.
-pub(crate) fn find_git() -> &'static str {
-    // Try common paths for git
+/// Find the git binary, checking common paths then $PATH.
+pub(crate) fn find_git() -> String {
+    // Try common hardcoded paths first (fast path)
     for path in &[
         "/usr/bin/git",
         "/usr/local/bin/git",
         "/opt/homebrew/bin/git",
+        "/Library/Developer/CommandLineTools/usr/bin/git",
     ] {
         if std::path::Path::new(path).exists() {
-            // Leak to get 'static — only called a few times
-            return path;
+            return path.to_string();
         }
     }
-    // Fallback: rely on PATH
-    "git"
+    // Search $PATH at runtime
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in path_var.split(':') {
+            let candidate = std::path::Path::new(dir).join("git");
+            if candidate.exists() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    // Last resort: let the OS find it
+    "git".to_string()
 }
 
 /// Run a git command with a 30s timeout (CM-04).
