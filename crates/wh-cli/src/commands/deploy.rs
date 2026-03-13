@@ -357,7 +357,8 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
                         "applied": true,
                         "created": apply_result.created,
                         "changed": apply_result.changed,
-                        "destroyed": apply_result.destroyed
+                        "destroyed": apply_result.destroyed,
+                        "streams_created": apply_result.streams_created
                     }
                 })
             );

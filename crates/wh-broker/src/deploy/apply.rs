@@ -267,6 +267,7 @@ pub fn apply(
             created: 0,
             changed: 0,
             destroyed: 0,
+            streams_created: 0,
         });
     }
 
