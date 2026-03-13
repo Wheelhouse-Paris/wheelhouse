@@ -39,10 +39,12 @@ jobs:
       - name: Install musl tools (Linux)
         if: contains(matrix.target, 'musl')
         run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
+          sudo apt-get update && sudo apt-get install -y musl-tools cmake perl
           rustup target add x86_64-unknown-linux-musl
 
       - name: Build release binaries
+        env:
+          OPENSSL_VENDORED: ${{ contains(matrix.target, 'musl') && '1' || '' }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package binaries
