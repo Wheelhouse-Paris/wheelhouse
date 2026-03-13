@@ -8,8 +8,6 @@ on:
 permissions:
   contents: write
   packages: write
-  id-token: write
-  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -43,11 +41,6 @@ jobs:
           for bin in wh wh-broker; do
             cp target/${{ matrix.target }}/release/${bin} dist/${bin}-${{ matrix.target }}
           done
-
-      - name: Generate SLSA provenance attestation (SA-05)
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: dist/*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
