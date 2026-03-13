@@ -162,7 +162,7 @@ pub async fn execute(cmd: &StreamCommand) {
             }
         }
         StreamCommand::Tail(args) => {
-            if let Err(e) = execute_tail(args) {
+            if let Err(e) = execute_tail(args).await {
                 match args.format {
                     OutputFormat::Json => {
                         let envelope = OutputEnvelope::<()>::error(e.error_code(), e.to_string());
@@ -619,9 +619,101 @@ pub struct StreamTailEnd {
 }
 
 /// Execute `wh stream tail`.
-pub fn execute_tail(args: &StreamTailArgs) -> Result<(), WhError> {
-    let _filters = parse_filters(&args.filter)?;
-    Err(WhError::ConnectionError)
+///
+/// Connects to the broker PUB socket, subscribes to the stream topic,
+/// applies filters, and streams messages to stdout until Ctrl+C.
+pub async fn execute_tail(args: &StreamTailArgs) -> Result<(), WhError> {
+    let filters = parse_filters(&args.filter)?;
+
+    let pub_endpoint = std::env::var("WH_PUB_ENDPOINT").unwrap_or_else(|_| {
+        let port = std::env::var("WH_PUB_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(5555);
+        format!("tcp://127.0.0.1:{port}")
+    });
+
+    let topic = format!("{}\0", args.stream_name);
+
+    let mut sub_socket = SubSocket::new();
+    sub_socket
+        .connect(&pub_endpoint)
+        .await
+        .map_err(|_| WhError::ConnectionError)?;
+
+    sub_socket
+        .subscribe(&topic)
+        .await
+        .map_err(|e| WhError::Other(format!("Failed to subscribe: {e}")))?;
+
+    if args.format == OutputFormat::Human {
+        eprintln!(
+            "Tailing stream '{}' — press Ctrl+C to stop",
+            args.stream_name
+        );
+    } else {
+        println!("{}", render_stream_start(&args.stream_name)?);
+    }
+
+    loop {
+        tokio::select! {
+            biased;
+
+            _ = tokio::signal::ctrl_c() => {
+                if args.format == OutputFormat::Human {
+                    eprintln!("\nDisconnected");
+                } else {
+                    println!("{}", render_stream_end()?);
+                }
+                break;
+            }
+
+            result = sub_socket.recv() => {
+                let msg = result.map_err(|e| WhError::Other(format!("Receive error: {e}")))?;
+                let raw: Vec<u8> = msg.try_into().unwrap_or_default();
+
+                // Strip stream_name\0 prefix
+                let Some(null_pos) = raw.iter().position(|&b| b == 0) else {
+                    continue;
+                };
+                let payload = &raw[null_pos + 1..];
+
+                let envelope = match StreamEnvelope::decode(payload) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+
+                let timestamp = chrono::DateTime::from_timestamp_millis(envelope.published_at_ms)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let type_short = envelope
+                    .type_url
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or(&envelope.type_url)
+                    .to_string();
+                let content = decode_inner_content(&envelope);
+
+                let record = StreamRecord::new(
+                    timestamp,
+                    type_short,
+                    envelope.publisher_id.clone(),
+                    serde_json::json!({ "content": content }),
+                );
+
+                if !passes_filters(&record, &filters) {
+                    continue;
+                }
+
+                match args.format {
+                    OutputFormat::Human => println!("{}", render_human(&record, args.verbose)),
+                    OutputFormat::Json => println!("{}", render_stream_line_json(&record)?),
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Check if a stream record passes all active filters.
