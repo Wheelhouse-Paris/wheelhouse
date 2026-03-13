@@ -161,6 +161,7 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
     let workspace_root = plan
         .source_path()
         .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
     // Write the desired topology state to .wh/state.json
@@ -259,6 +260,7 @@ pub fn apply(committed: CommittedPlan) -> Result<ApplyResult, DeployError> {
     let workspace_root = committed
         .source_path
         .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
     let result = podman::provision_containers(
@@ -320,7 +322,10 @@ pub fn destroy(
     agent_name: Option<&str>,
 ) -> Result<DestroyResult, DeployError> {
     let wh_path = wh_file_path.as_ref();
-    let workspace_root = wh_path.parent().unwrap_or_else(|| Path::new("."));
+    let workspace_root = wh_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
 
     let current_state = load_state(workspace_root)?;
 
