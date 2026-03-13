@@ -224,32 +224,29 @@ fn register_stream_with_broker(name: &str, retention: Option<&str>) {
     let name_owned = name.to_string();
     let retention_owned = retention.map(|r| r.to_string());
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build();
-    let Ok(rt) = rt else {
-        tracing::warn!(stream = %name, "failed to build tokio runtime for stream registration");
-        return;
-    };
+    // provision_containers is sync but called from within a tokio runtime.
+    // block_in_place moves this work off the async thread pool, then
+    // Handle::current().block_on() runs the async ZMQ call synchronously.
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let mut req = ReqSocket::new();
+            req.connect(&endpoint).await?;
 
-    let result = rt.block_on(async move {
-        let mut req = ReqSocket::new();
-        req.connect(&endpoint).await?;
+            let mut payload = serde_json::json!({
+                "command": "stream_create",
+                "name": name_owned,
+            });
+            if let Some(r) = retention_owned {
+                payload["retention"] = serde_json::json!(r);
+            }
 
-        let mut payload = serde_json::json!({
-            "command": "stream_create",
-            "name": name_owned,
-        });
-        if let Some(r) = retention_owned {
-            payload["retention"] = serde_json::json!(r);
-        }
+            let bytes = serde_json::to_vec(&payload)?;
+            req.send(ZmqMessage::from(bytes)).await?;
 
-        let bytes = serde_json::to_vec(&payload)?;
-        req.send(ZmqMessage::from(bytes)).await?;
+            tokio::time::timeout(std::time::Duration::from_secs(2), req.recv()).await??;
 
-        tokio::time::timeout(std::time::Duration::from_secs(2), req.recv()).await??;
-
-        Ok::<(), Box<dyn std::error::Error>>(())
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
     });
 
     if let Err(e) = result {
