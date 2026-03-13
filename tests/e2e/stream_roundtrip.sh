@@ -21,10 +21,11 @@ fail() { echo "  ✗ $1" >&2; FAIL=$((FAIL + 1)); }
 "$WH_BROKER" &
 BROKER_PID=$!
 cleanup() {
-    kill "$BROKER_PID" 2>/dev/null || true
-    kill "$TAIL_PID"   2>/dev/null || true
-    wait "$BROKER_PID" 2>/dev/null || true
-    wait "$TAIL_PID"   2>/dev/null || true
+    # Guard against PID=0: kill 0 sends SIGTERM to the entire process group.
+    [[ $BROKER_PID -gt 0 ]] && kill "$BROKER_PID" 2>/dev/null || true
+    [[ $TAIL_PID   -gt 0 ]] && kill "$TAIL_PID"   2>/dev/null || true
+    [[ $BROKER_PID -gt 0 ]] && wait "$BROKER_PID" 2>/dev/null || true
+    [[ $TAIL_PID   -gt 0 ]] && wait "$TAIL_PID"   2>/dev/null || true
     rm -f /tmp/wh-e2e-tail.txt
 }
 TAIL_PID=0
