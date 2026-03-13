@@ -88,15 +88,74 @@ pub struct PsSummary {
 }
 
 /// Execute `wh ps`.
+///
+/// If `.wh/state.json` exists in the current directory, reads deployed state
+/// and checks each agent's Podman container status. Stream information is
+/// fetched from the broker (graceful degradation — omitted if unreachable).
+///
+/// If no state file exists, probes the broker connection. A missing broker
+/// returns `WhError::ConnectionError` ("Wheelhouse not running").
 pub async fn execute(args: &PsArgs) -> Result<(), WhError> {
-    // Attempt to connect to the control socket
+    let mut components: Vec<ComponentInfo> = Vec::new();
     let client = ControlClient::new();
 
-    // Send ps command and parse response
-    let response = client.send_command("ps").await?;
+    let state_path = std::path::Path::new(".wh/state.json");
+    if state_path.exists() {
+        let content = std::fs::read_to_string(state_path)
+            .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+        let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+            .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
 
-    // Parse components from response
-    let components = parse_components(&response)?;
+        // Check each agent's container status via Podman
+        for agent in &topology.agents {
+            let container =
+                wh_broker::deploy::podman::container_name(&topology.name, &agent.name);
+            let is_running =
+                wh_broker::deploy::podman::podman_is_running(&container).unwrap_or(false);
+            let status = if is_running {
+                ComponentStatus::Running
+            } else {
+                ComponentStatus::Stopped
+            };
+            let stream = agent.streams.first().cloned().unwrap_or_else(|| "-".to_string());
+            components.push(ComponentInfo {
+                name: agent.name.clone(),
+                kind: ComponentKind::Agent,
+                status,
+                stream,
+                provider: "podman".to_string(),
+                uptime: "-".to_string(),
+            });
+        }
+
+        // Query broker for stream list (graceful degradation if broker unreachable)
+        if let Ok(response) = client.send_command("stream_list").await {
+            if let Some(streams) = response
+                .get("data")
+                .and_then(|d| d.get("streams"))
+                .and_then(|s| s.as_array())
+            {
+                for stream in streams {
+                    let name = stream
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    components.push(ComponentInfo {
+                        name,
+                        kind: ComponentKind::Stream,
+                        status: ComponentStatus::Running,
+                        stream: "-".to_string(),
+                        provider: "local".to_string(),
+                        uptime: "-".to_string(),
+                    });
+                }
+            }
+        }
+    } else {
+        // No state file — probe the broker to get a meaningful error if it is down
+        client.send_command("stream_list").await?;
+    }
 
     match args.format {
         OutputFormat::Human => render_human(&components),
@@ -104,62 +163,6 @@ pub async fn execute(args: &PsArgs) -> Result<(), WhError> {
     }
 
     Ok(())
-}
-
-/// Parse components from the broker's JSON response.
-fn parse_components(response: &serde_json::Value) -> Result<Vec<ComponentInfo>, WhError> {
-    let data = response
-        .get("data")
-        .and_then(|d| d.get("components"))
-        .and_then(|c| c.as_array())
-        .ok_or_else(|| WhError::Internal("Invalid response format".to_string()))?;
-
-    let mut components = Vec::new();
-    for item in data {
-        let name = item
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let kind = match item.get("kind").and_then(|v| v.as_str()) {
-            Some("agent") => ComponentKind::Agent,
-            Some("stream") => ComponentKind::Stream,
-            Some("surface") => ComponentKind::Surface,
-            _ => ComponentKind::Agent,
-        };
-        let status = match item.get("status").and_then(|v| v.as_str()) {
-            Some("running") => ComponentStatus::Running,
-            Some("stopped") => ComponentStatus::Stopped,
-            Some("degraded") => ComponentStatus::Degraded,
-            _ => ComponentStatus::Unknown,
-        };
-        let stream = item
-            .get("stream")
-            .and_then(|v| v.as_str())
-            .unwrap_or("-")
-            .to_string();
-        let provider = item
-            .get("provider")
-            .and_then(|v| v.as_str())
-            .unwrap_or("-")
-            .to_string();
-        let uptime = item
-            .get("uptime")
-            .and_then(|v| v.as_str())
-            .unwrap_or("-")
-            .to_string();
-
-        components.push(ComponentInfo {
-            name,
-            kind,
-            status,
-            stream,
-            provider,
-            uptime,
-        });
-    }
-
-    Ok(components)
 }
 
 /// Render human-readable table output.

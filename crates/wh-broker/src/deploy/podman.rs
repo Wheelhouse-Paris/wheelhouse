@@ -24,7 +24,8 @@ const PODMAN_MACHINE_START_TIMEOUT: Duration = Duration::from_secs(90);
 const DEFAULT_BROKER_URL: &str = "tcp://127.0.0.1:5555";
 
 /// TCP address used to probe whether the broker control socket is reachable.
-const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5555";
+/// Port 5557 = control REP socket (matches DEFAULT_CONTROL_PORT in config.rs).
+const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5557";
 
 /// Maximum time to wait for the broker to start after spawning it.
 const BROKER_START_TIMEOUT: Duration = Duration::from_secs(5);
