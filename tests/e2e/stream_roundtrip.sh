@@ -107,6 +107,11 @@ fi
 
 # ── Result ────────────────────────────────────────────────────────────────────
 
+# Stop broker explicitly before printing results — prevents GitHub Actions from
+# sending SIGTERM to the process group after the script exits (exit code 143).
+trap - EXIT
+cleanup
+
 echo ""
 echo "  $PASS passed · $FAIL failed"
 [[ $FAIL -eq 0 ]]
