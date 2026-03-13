@@ -30,7 +30,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: sdk/python
-        run: uv pip install -e ".[dev]" --system
+        run: uv sync --extra dev
 
       - name: Run tests
         working-directory: sdk/python
@@ -43,7 +43,7 @@ jobs:
       - name: Verify import guard
         working-directory: sdk/python
         run: |
-          python -c "
+          uv run python -c "
           import sys
           import importlib
           # Remove zmq to test import guard
@@ -57,7 +57,7 @@ jobs:
       - name: Verify __init__.py exports
         working-directory: sdk/python
         run: |
-          python -c "
+          uv run python -c "
           import wheelhouse
           assert 'connect' in wheelhouse.__all__, 'connect not in __all__'
           assert 'Surface' in wheelhouse.__all__, 'Surface not in __all__'
