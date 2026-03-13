@@ -125,6 +125,7 @@ fn build_run_args_includes_persona_volume_when_set() {
         &["main".to_string()],
         None,
         Some("/workspace/agents/donna/"),
+        &[],
     );
     // Should include -v for persona mount
     let has_volume = args
@@ -154,6 +155,7 @@ fn build_run_args_excludes_persona_when_not_set() {
         &["main".to_string()],
         None,
         None,
+        &[],
     );
     // Should NOT include persona-related args
     let has_persona = args
