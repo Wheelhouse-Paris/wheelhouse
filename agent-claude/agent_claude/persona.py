@@ -31,6 +31,22 @@ class Persona:
         """
         return f"{self.soul}\n\n{self.identity}\n\n{self.memory}"
 
+    def reload_memory(self, persona_path: str) -> None:
+        """Re-read MEMORY.md from disk before each Claude API call (AC-04).
+
+        MEMORY.md may be updated by the agent via git commit (FR-62).
+        SOUL.md and IDENTITY.md are read once at startup and cached.
+        """
+        memory_file = Path(persona_path) / "MEMORY.md"
+        if memory_file.exists():
+            content = memory_file.read_text(encoding="utf-8")
+            byte_count = len(content.encode("utf-8"))
+            logger.debug("Reloaded MEMORY.md (%d bytes)", byte_count)
+            self.memory = content
+        else:
+            logger.debug("MEMORY.md not found during reload — using empty string")
+            self.memory = ""
+
 
 def load_persona(persona_path: str) -> Persona:
     """Load persona files from the given directory path.

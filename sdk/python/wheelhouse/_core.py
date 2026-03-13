@@ -20,7 +20,14 @@ from wheelhouse.errors import (
     PublishTimeout,
     ReservedNamespaceError,
 )
-from wheelhouse.types import TextMessage
+from wheelhouse.types import (
+    CronEvent,
+    SkillInvocation,
+    SkillProgress,
+    SkillResult,
+    TextMessage,
+    TopologyShutdown,
+)
 
 logger = logging.getLogger("wheelhouse")
 
@@ -374,9 +381,17 @@ class Connection:
         if type_name in _registered_types:
             return _registered_types[type_name].FromString(data)
 
-        # Fall back to known types
-        if type_name == "TextMessage":
-            return TextMessage.FromString(data)
+        # Fall back to known built-in types
+        _builtin_types = {
+            "TextMessage": TextMessage,
+            "CronEvent": CronEvent,
+            "SkillInvocation": SkillInvocation,
+            "SkillProgress": SkillProgress,
+            "SkillResult": SkillResult,
+            "TopologyShutdown": TopologyShutdown,
+        }
+        if type_name in _builtin_types:
+            return _builtin_types[type_name].FromString(data)
 
         # Return raw data if type unknown
         logger.warning("Unknown message type: %s", type_name)
