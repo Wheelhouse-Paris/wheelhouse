@@ -3,7 +3,7 @@
 # SHA-pinned per AC-12 / SA-01
 
 # Stage 1: dependency installer
-FROM python:3.12-slim@sha256:af4e85f1f51ddfad6b4e4fa04ceaa8c8915c5b1e0e6db5a73b807c09fa548e22 AS builder
+FROM python:3.12-slim AS builder
 
 ARG GIT_SHA=unknown
 ARG VERSION=0.1.0
@@ -23,7 +23,7 @@ COPY agent-claude/agent_claude/ ./agent-claude/agent_claude/
 RUN cd agent-claude && uv pip install --system --no-cache .
 
 # Stage 2: runtime image (no uv, no dev tools)
-FROM python:3.12-slim@sha256:af4e85f1f51ddfad6b4e4fa04ceaa8c8915c5b1e0e6db5a73b807c09fa548e22
+FROM python:3.12-slim
 
 ARG GIT_SHA=unknown
 ARG VERSION=0.1.0
