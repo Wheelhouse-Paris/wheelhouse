@@ -750,6 +750,7 @@ mod tests {
             &["main".to_string()],
             None,
             None,
+            &[],
         );
         assert!(
             !args

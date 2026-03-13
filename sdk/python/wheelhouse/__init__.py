@@ -31,10 +31,6 @@ from wheelhouse.errors import StreamNotFound as StreamNotFound  # noqa: F401
 __all__ = [
     "connect",
     "Surface",
-    "register_type",
-    "ConnectionError",
-    "PublishTimeout",
-    "StreamNotFound",
 ]
 
 
