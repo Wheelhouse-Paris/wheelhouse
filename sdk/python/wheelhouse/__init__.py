@@ -19,8 +19,8 @@ from typing import Any, Awaitable, Callable
 
 __version__ = "0.1.0"
 
-from wheelhouse._core import connect as _real_connect  # noqa: F401
-from wheelhouse._core import register_type as register_type  # noqa: F401
+# _core (and zmq) are NOT imported at module level so that wheelhouse.testing
+# can be imported without zmq installed (CF-07 import guard).
 
 # Re-export user-facing error types for convenient `except wheelhouse.PublishTimeout` (AC #4)
 from wheelhouse.errors import ConnectionError as ConnectionError  # noqa: A004, F401
@@ -64,7 +64,18 @@ async def connect(
     if mock:
         from wheelhouse.testing import MockConnection
         return MockConnection()
+    from wheelhouse._core import connect as _real_connect
     return await _real_connect(endpoint, on_connection_event=on_connection_event)
+
+
+def register_type(type_name: str) -> Any:
+    """Register a custom Protobuf type with a namespace.
+
+    Lazy wrapper — imports _core (and zmq) only when called (CF-07).
+    """
+    from wheelhouse._core import register_type as _register_type
+
+    return _register_type(type_name)
 
 
 class Surface:
