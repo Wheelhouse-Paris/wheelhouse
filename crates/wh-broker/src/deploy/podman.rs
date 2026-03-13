@@ -16,6 +16,9 @@ const PODMAN_RUN_TIMEOUT: Duration = Duration::from_secs(120);
 /// Timeout for `podman stop`, `podman rm`, `podman ps` commands.
 const PODMAN_CMD_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Timeout for `podman machine start`.
+const PODMAN_MACHINE_START_TIMEOUT: Duration = Duration::from_secs(90);
+
 /// Default broker endpoint for agent containers.
 const DEFAULT_BROKER_URL: &str = "tcp://127.0.0.1:5555";
 
@@ -65,6 +68,45 @@ pub fn find_podman() -> Result<&'static str, DeployError> {
     Err(DeployError::PodmanNotFound(
         "Podman is required but not found. Install from https://podman.io".to_string(),
     ))
+}
+
+/// Ensure the Podman machine is running, starting it if necessary.
+///
+/// Runs `podman info` to check connectivity. If it fails (machine not started),
+/// attempts `podman machine start` and waits for it to come up.
+/// Returns an error if the machine cannot be started (e.g., not initialized).
+pub fn ensure_podman_running() -> Result<(), DeployError> {
+    let podman = find_podman()?;
+
+    // Check if Podman is already reachable
+    let info = run_podman(podman, &["info"], PODMAN_CMD_TIMEOUT);
+    if info.is_ok_and(|o| o.status.success()) {
+        return Ok(());
+    }
+
+    // Not reachable — try to start the machine
+    tracing::info!("Podman machine not running — attempting `podman machine start`");
+    eprintln!("  Starting Podman machine...");
+
+    let start_output = run_podman(podman, &["machine", "start"], PODMAN_MACHINE_START_TIMEOUT)?;
+    if !start_output.status.success() {
+        let stderr = String::from_utf8_lossy(&start_output.stderr);
+        return Err(DeployError::PodmanFailed(format!(
+            "podman machine start failed: {stderr}\nRun `podman machine init` first if no machine exists."
+        )));
+    }
+
+    // Verify it's now reachable (give it a moment to initialize)
+    std::thread::sleep(Duration::from_secs(2));
+    let check = run_podman(podman, &["info"], PODMAN_CMD_TIMEOUT)?;
+    if !check.status.success() {
+        return Err(DeployError::PodmanFailed(
+            "Podman machine started but is still not reachable. Try running `podman info` manually.".to_string(),
+        ));
+    }
+
+    eprintln!("  Podman machine started.");
+    Ok(())
 }
 
 /// Sanitize a string for use in a container name.
@@ -340,6 +382,18 @@ pub fn provision_containers(
     agents: &[crate::deploy::Agent],
     workspace_root: Option<&std::path::Path>,
 ) -> ApplyResult {
+    // Ensure Podman is running before attempting any container operations.
+    // Starts the machine automatically if it is stopped.
+    if let Err(e) = ensure_podman_running() {
+        tracing::error!(error = %e, "Podman is not available");
+        eprintln!("Error: {e}");
+        return ApplyResult {
+            created: 0,
+            changed: 0,
+            destroyed: 0,
+        };
+    }
+
     let mut result = ApplyResult {
         created: 0,
         changed: 0,
