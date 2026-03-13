@@ -22,6 +22,7 @@ from wheelhouse.types import (
     CronEvent,
     SkillInvocation,
     SkillProgress,
+    SkillResult,
     TextMessage,
     TopologyShutdown,
 )
@@ -150,6 +151,36 @@ def _make_handler(
     return handler
 
 
+async def _publish_response(
+    connection: Any,
+    stream_name: str,
+    message: Any,
+    log_context: str,
+) -> None:
+    """Publish a response message, catching and logging publish failures.
+
+    Args:
+        connection: The SDK Connection object.
+        stream_name: The stream to publish to.
+        message: The message object to publish (TextMessage or SkillResult).
+        log_context: Description for logging (e.g. "type=TextMessage chars=42").
+    """
+    try:
+        await connection.publish(stream_name, message)
+        logger.info(
+            "Response published: %s stream=%s",
+            log_context,
+            stream_name,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to publish response: %s stream=%s",
+            log_context,
+            stream_name,
+            exc_info=True,
+        )
+
+
 async def _handle_text_message(
     message: TextMessage,
     connection: Any,
@@ -183,13 +214,17 @@ async def _handle_text_message(
     )
     _pending_tasks.add(task)
     task.add_done_callback(_pending_tasks.discard)
-    # Await the result (response publishing is Story 8.3 scope)
     result = await task
     if result is not None:
-        logger.debug(
-            "Response ready: type=TextMessage stream=%s chars=%d",
+        response_msg = TextMessage(
+            content=result.text,
+            publisher=agent_name,
+        )
+        await _publish_response(
+            connection,
             stream_name,
-            len(result.text),
+            response_msg,
+            f"type=TextMessage chars={len(result.text)}",
         )
 
 
@@ -224,10 +259,15 @@ async def _handle_cron_event(
     task.add_done_callback(_pending_tasks.discard)
     result = await task
     if result is not None:
-        logger.debug(
-            "Response ready: type=CronEvent stream=%s chars=%d",
+        response_msg = TextMessage(
+            content=result.text,
+            publisher=agent_name,
+        )
+        await _publish_response(
+            connection,
             stream_name,
-            len(result.text),
+            response_msg,
+            f"type=TextMessage chars={len(result.text)}",
         )
 
 
@@ -290,9 +330,29 @@ async def _handle_skill_invocation(
     task.add_done_callback(_pending_tasks.discard)
     result = await task
     if result is not None:
-        logger.debug(
-            "Response ready: type=SkillInvocation stream=%s invocation_id=%s chars=%d",
+        skill_result = SkillResult(
+            invocation_id=message.invocation_id,
+            success=True,
+            payload=result.text,
+            publisher=agent_name,
+        )
+        await _publish_response(
+            connection,
             stream_name,
-            message.invocation_id,
-            len(result.text),
+            skill_result,
+            f"type=SkillResult invocation_id={message.invocation_id} success=True",
+        )
+    else:
+        # Publish failure SkillResult so the caller is not left hanging
+        skill_result = SkillResult(
+            invocation_id=message.invocation_id,
+            success=False,
+            payload="Claude API call failed",
+            publisher=agent_name,
+        )
+        await _publish_response(
+            connection,
+            stream_name,
+            skill_result,
+            f"type=SkillResult invocation_id={message.invocation_id} success=False",
         )
