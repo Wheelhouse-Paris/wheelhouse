@@ -51,9 +51,11 @@ def _reset_loop_state():
     from agent_claude import loop
     loop._pending_tasks.clear()
     loop._shutdown_event = asyncio.Event()
+    loop._fatal_error = None
     yield
     loop._pending_tasks.clear()
     loop._shutdown_event = asyncio.Event()
+    loop._fatal_error = None
 
 
 @pytest.fixture
@@ -126,10 +128,15 @@ class TestStreamSubscription:
         When the message loop starts,
         Then connection.subscribe() is called for each stream.
         """
-        from agent_claude.loop import run_message_loop, _shutdown_event
+        from agent_claude.loop import run_message_loop
+        from agent_claude import loop
 
-        # Start the loop in background and stop it immediately
-        _shutdown_event.set()
+        # Schedule shutdown after loop starts (clear() runs first in run_message_loop)
+        async def _set_shutdown():
+            await asyncio.sleep(0)
+            loop._shutdown_event.set()
+
+        asyncio.get_event_loop().create_task(_set_shutdown())
         await run_message_loop(mock_connection, config, persona, mock_claude_client)
 
         assert mock_connection.subscribe.call_count == 2
@@ -144,9 +151,14 @@ class TestStreamSubscription:
         When subscriptions complete,
         Then an info log lists the streams.
         """
-        from agent_claude.loop import run_message_loop, _shutdown_event
+        from agent_claude.loop import run_message_loop
+        from agent_claude import loop
 
-        _shutdown_event.set()
+        async def _set_shutdown():
+            await asyncio.sleep(0)
+            loop._shutdown_event.set()
+
+        asyncio.get_event_loop().create_task(_set_shutdown())
         with caplog.at_level(logging.INFO, logger="agent_claude"):
             await run_message_loop(mock_connection, config, persona, mock_claude_client)
 
@@ -1343,3 +1355,472 @@ class TestPublishResponseHelper:
             await _publish_response(conn, "main", msg, "type=TextMessage chars=4")
 
         assert any("Failed to publish" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Story 8.4: Persona Load and Graceful Error Handling
+# ---------------------------------------------------------------------------
+
+class TestSystemPromptAssembly:
+    """AC-1: System prompt is SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY."""
+
+    def test_system_prompt_format(self):
+        """Given persona files are loaded,
+        When build_system_prompt() is called,
+        Then the result is SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY per ADR-017.
+        """
+        from agent_claude.persona import Persona
+
+        p = Persona(soul="soul content", identity="identity content", memory="memory content")
+        prompt = p.build_system_prompt()
+        assert prompt == "soul content\n\nidentity content\n\nmemory content"
+
+    def test_system_prompt_with_empty_components(self):
+        """Given some persona files are missing (empty strings),
+        When build_system_prompt() is called,
+        Then the format is preserved with empty sections separated by \\n\\n.
+        """
+        from agent_claude.persona import Persona
+
+        p = Persona(soul="", identity="identity", memory="")
+        prompt = p.build_system_prompt()
+        assert prompt == "\n\nidentity\n\n"
+
+    def test_system_prompt_passed_to_claude_api(
+        self, mock_connection, config, persona, mock_claude_client
+    ):
+        """Given a TextMessage arrives,
+        When the handler processes it,
+        Then the system_prompt passed to claude_client.complete() is the assembled persona.
+        """
+        from agent_claude.loop import _make_handler
+
+        handler = _make_handler(
+            mock_connection, "main", mock_claude_client, persona, "donna", config["persona_path"],
+        )
+
+        msg = TextMessage(content="hello", publisher="user1")
+        asyncio.get_event_loop().run_until_complete(handler(msg))
+
+        call_kwargs = mock_claude_client.complete.call_args
+        system_prompt_used = call_kwargs.kwargs.get("system_prompt") or call_kwargs.args[0]
+        expected = persona.build_system_prompt()
+        assert system_prompt_used == expected
+
+
+class TestMemoryReloadBeforeEachCall:
+    """AC-3: MEMORY.md is re-read from disk before each Claude API call."""
+
+    def test_memory_reload_updates_system_prompt(self, tmp_path):
+        """Given MEMORY.md changes between calls,
+        When reload_memory() is called,
+        Then the next build_system_prompt() reflects the new content.
+        """
+        from agent_claude.persona import Persona
+
+        memory_file = tmp_path / "MEMORY.md"
+        memory_file.write_text("original memory", encoding="utf-8")
+
+        p = Persona(soul="soul", identity="identity", memory="original memory")
+        assert "original memory" in p.build_system_prompt()
+
+        # Simulate external update
+        memory_file.write_text("updated memory", encoding="utf-8")
+        p.reload_memory(str(tmp_path))
+        assert "updated memory" in p.build_system_prompt()
+        assert "original memory" not in p.build_system_prompt()
+
+    async def test_reload_called_before_text_message_handler(
+        self, mock_connection, mock_claude_client, config
+    ):
+        """Given a TextMessage arrives,
+        When the handler runs,
+        Then persona.reload_memory() is called before claude_client.complete().
+        """
+        from agent_claude.loop import _make_handler
+        from agent_claude.persona import Persona
+
+        call_order = []
+        persona = MagicMock(spec=Persona)
+        persona.build_system_prompt.return_value = "system prompt"
+
+        def track_reload(path):
+            call_order.append("reload_memory")
+
+        persona.reload_memory.side_effect = track_reload
+
+        async def track_complete(**kwargs):
+            from agent_claude.claude_client import CompletionResult
+            call_order.append("complete")
+            return CompletionResult(text="reply", input_tokens=10, output_tokens=5)
+
+        mock_claude_client.complete = track_complete
+
+        handler = _make_handler(
+            mock_connection, "main", mock_claude_client, persona, "donna", config["persona_path"],
+        )
+
+        msg = TextMessage(content="hello", publisher="user1")
+        await handler(msg)
+
+        assert call_order == ["reload_memory", "complete"]
+
+    async def test_reload_called_before_cron_event_handler(
+        self, mock_connection, mock_claude_client, config
+    ):
+        """Given a CronEvent arrives,
+        When the handler runs,
+        Then persona.reload_memory() is called before claude_client.complete().
+        """
+        from agent_claude.loop import _make_handler
+        from agent_claude.persona import Persona
+
+        call_order = []
+        persona = MagicMock(spec=Persona)
+        persona.build_system_prompt.return_value = "system prompt"
+
+        def track_reload(path):
+            call_order.append("reload_memory")
+
+        persona.reload_memory.side_effect = track_reload
+
+        async def track_complete(**kwargs):
+            from agent_claude.claude_client import CompletionResult
+            call_order.append("complete")
+            return CompletionResult(text="reply", input_tokens=10, output_tokens=5)
+
+        mock_claude_client.complete = track_complete
+
+        handler = _make_handler(
+            mock_connection, "main", mock_claude_client, persona, "donna", config["persona_path"],
+        )
+
+        msg = CronEvent(job_name="daily-check", triggered_at="2026-03-13T00:00:00Z")
+        await handler(msg)
+
+        assert call_order == ["reload_memory", "complete"]
+
+    async def test_reload_called_before_skill_invocation_handler(
+        self, mock_connection, mock_claude_client, config
+    ):
+        """Given a SkillInvocation arrives addressed to this agent,
+        When the handler runs,
+        Then persona.reload_memory() is called before claude_client.complete().
+        """
+        from agent_claude.loop import _make_handler
+        from agent_claude.persona import Persona
+
+        call_order = []
+        persona = MagicMock(spec=Persona)
+        persona.build_system_prompt.return_value = "system prompt"
+
+        def track_reload(path):
+            call_order.append("reload_memory")
+
+        persona.reload_memory.side_effect = track_reload
+
+        async def track_complete(**kwargs):
+            from agent_claude.claude_client import CompletionResult
+            call_order.append("complete")
+            return CompletionResult(text="reply", input_tokens=10, output_tokens=5)
+
+        mock_claude_client.complete = track_complete
+
+        handler = _make_handler(
+            mock_connection, "main", mock_claude_client, persona, "donna", config["persona_path"],
+        )
+
+        msg = SkillInvocation(
+            invocation_id="inv-1",
+            skill_name="summarize",
+            input_payload="test input",
+            target_agent="donna",
+            publisher="orchestrator",
+        )
+        await handler(msg)
+
+        assert call_order == ["reload_memory", "complete"]
+
+
+class TestClaudeAuthErrorPropagation:
+    """AC-5: Invalid API key -> ClaudeAuthError propagates to exit(1)."""
+
+    async def test_auth_error_stored_as_fatal(
+        self, mock_connection, config, persona
+    ):
+        """Given the Claude API returns AuthenticationError,
+        When the handler processes a message,
+        Then ClaudeAuthError is stored in _fatal_error and shutdown_event is set.
+        """
+        from agent_claude.errors import ClaudeAuthError
+        from agent_claude.loop import _make_handler, _fatal_error, _shutdown_event
+
+        claude_client = AsyncMock()
+        claude_client.complete = AsyncMock(
+            side_effect=ClaudeAuthError(
+                "agent-claude: Claude API authentication failed -- check ANTHROPIC_API_KEY"
+            )
+        )
+
+        handler = _make_handler(
+            mock_connection, "main", claude_client, persona, "donna", config["persona_path"],
+        )
+
+        msg = TextMessage(content="hello", publisher="user1")
+        with pytest.raises(ClaudeAuthError):
+            await handler(msg)
+
+        from agent_claude import loop
+        assert loop._fatal_error is not None
+        assert loop._shutdown_event.is_set()
+
+    async def test_auth_error_propagates_from_message_loop(
+        self, mock_connection, config, persona
+    ):
+        """Given ClaudeAuthError occurs during message processing,
+        When run_message_loop() completes,
+        Then it re-raises ClaudeAuthError.
+        """
+        from agent_claude.errors import ClaudeAuthError
+        from agent_claude.loop import run_message_loop
+        from agent_claude import loop
+
+        claude_client = AsyncMock()
+        claude_client.complete = AsyncMock(
+            side_effect=ClaudeAuthError(
+                "agent-claude: Claude API authentication failed -- check ANTHROPIC_API_KEY"
+            )
+        )
+
+        # Simulate: subscribe stores the handler, then we call it manually
+        handlers_stored = []
+
+        async def fake_subscribe(stream, handler):
+            handlers_stored.append(handler)
+
+        mock_connection.subscribe = fake_subscribe
+
+        # Start loop in background
+        async def start_and_trigger():
+            # Give loop time to subscribe
+            await asyncio.sleep(0.01)
+            # Trigger a message through the stored handler
+            msg = TextMessage(content="hello", publisher="user1")
+            try:
+                await handlers_stored[0](msg)
+            except ClaudeAuthError:
+                pass  # SDK would catch this, but _fatal_error is already set
+
+        trigger_task = asyncio.create_task(start_and_trigger())
+
+        with pytest.raises(ClaudeAuthError):
+            await run_message_loop(mock_connection, config, persona, claude_client)
+
+        await trigger_task
+
+    async def test_auth_error_message_content(self):
+        """Given the API key is invalid,
+        When ClaudeAuthError is raised,
+        Then the message matches the expected format from AC-5.
+        """
+        from agent_claude.errors import ClaudeAuthError
+
+        err = ClaudeAuthError(
+            "agent-claude: Claude API authentication failed -- check ANTHROPIC_API_KEY"
+        )
+        assert "Claude API authentication failed" in str(err)
+        assert "ANTHROPIC_API_KEY" in str(err)
+
+    async def test_claude_client_raises_auth_error_on_authentication_error(self):
+        """Given anthropic.AuthenticationError is raised,
+        When ClaudeClient.complete() is called,
+        Then it raises ClaudeAuthError.
+        """
+        import anthropic
+        from agent_claude.claude_client import ClaudeClient
+        from agent_claude.errors import ClaudeAuthError
+
+        client = ClaudeClient(api_key="invalid-key")
+
+        # Mock the internal _client to raise AuthenticationError
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_response.headers = {}
+        auth_error = anthropic.AuthenticationError(
+            message="Invalid API Key",
+            response=mock_response,
+            body={"error": {"message": "Invalid API Key"}},
+        )
+
+        with patch.object(client._client.messages, "create", side_effect=auth_error):
+            with pytest.raises(ClaudeAuthError) as exc_info:
+                await client.complete(
+                    system_prompt="test",
+                    user_message="hello",
+                )
+            assert "authentication failed" in str(exc_info.value)
+
+
+class TestMissingApiKeyGracefulExit:
+    """AC-4: Missing ANTHROPIC_API_KEY -> exit(1) with human-readable error."""
+
+    def test_missing_api_key_exact_message(self):
+        """Given ANTHROPIC_API_KEY is not set,
+        When validate_env() is called,
+        Then the error message matches the format from AC-4.
+        """
+        import os
+        from agent_claude.errors import AgentConfigError
+        from agent_claude.main import validate_env
+
+        env = {
+            "WH_URL": "tcp://127.0.0.1:5555",
+            "WH_AGENT_NAME": "donna",
+            "WH_STREAMS": "main",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(AgentConfigError) as exc_info:
+                validate_env()
+            msg = str(exc_info.value)
+            assert "ANTHROPIC_API_KEY is not set" in msg
+            assert "wh secrets init" in msg
+            assert "ANTHROPIC_API_KEY environment variable" in msg
+
+    def test_empty_api_key_same_as_missing(self):
+        """Given ANTHROPIC_API_KEY is set to empty string,
+        When validate_env() is called,
+        Then it raises AgentConfigError just like missing.
+        """
+        import os
+        from agent_claude.errors import AgentConfigError
+        from agent_claude.main import validate_env
+
+        env = {
+            "ANTHROPIC_API_KEY": "",
+            "WH_URL": "tcp://127.0.0.1:5555",
+            "WH_AGENT_NAME": "donna",
+            "WH_STREAMS": "main",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(AgentConfigError) as exc_info:
+                validate_env()
+            assert "ANTHROPIC_API_KEY" in str(exc_info.value)
+
+    def test_whitespace_only_api_key_same_as_missing(self):
+        """Given ANTHROPIC_API_KEY is set to whitespace only,
+        When validate_env() is called,
+        Then it raises AgentConfigError.
+        """
+        import os
+        from agent_claude.errors import AgentConfigError
+        from agent_claude.main import validate_env
+
+        env = {
+            "ANTHROPIC_API_KEY": "   ",
+            "WH_URL": "tcp://127.0.0.1:5555",
+            "WH_AGENT_NAME": "donna",
+            "WH_STREAMS": "main",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            with pytest.raises(AgentConfigError) as exc_info:
+                validate_env()
+            assert "ANTHROPIC_API_KEY" in str(exc_info.value)
+
+
+class TestEntryPointErrorHandling:
+    """AC-4, AC-5: __main__.py catches errors and calls sys.exit(1)."""
+
+    def test_main_catches_agent_config_error(self):
+        """Given AgentConfigError is raised during startup,
+        When main() runs,
+        Then sys.exit(1) is called.
+        """
+        from agent_claude.errors import AgentConfigError
+
+        with patch("agent_claude.__main__._run", side_effect=AgentConfigError("test error")):
+            with patch("agent_claude.__main__.asyncio.run", side_effect=AgentConfigError("test error")):
+                with pytest.raises(SystemExit) as exc_info:
+                    from agent_claude.__main__ import main
+                    main()
+                assert exc_info.value.code == 1
+
+    def test_main_catches_claude_auth_error(self):
+        """Given ClaudeAuthError is raised during message processing,
+        When main() runs,
+        Then sys.exit(1) is called.
+        """
+        from agent_claude.errors import ClaudeAuthError
+
+        with patch("agent_claude.__main__.asyncio.run", side_effect=ClaudeAuthError("auth failed")):
+            with pytest.raises(SystemExit) as exc_info:
+                from agent_claude.__main__ import main
+                main()
+            assert exc_info.value.code == 1
+
+
+class TestMissingPersonaFilesGraceful:
+    """AC-6: Missing persona files handled gracefully -- no exit."""
+
+    def test_all_persona_files_missing_no_exit(self, tmp_path):
+        """Given all three persona files are missing,
+        When load_persona() is called,
+        Then it returns a Persona with empty strings and does NOT raise.
+        """
+        from agent_claude.persona import load_persona
+
+        persona = load_persona(str(tmp_path))
+        assert persona.soul == ""
+        assert persona.identity == ""
+        assert persona.memory == ""
+        # Verify MEMORY.md was created
+        assert (tmp_path / "MEMORY.md").exists()
+
+    def test_missing_soul_warns_and_continues(self, tmp_path, caplog):
+        """Given SOUL.md is absent,
+        When load_persona() is called,
+        Then a warning is logged and soul is empty.
+        """
+        from agent_claude.persona import load_persona
+
+        (tmp_path / "IDENTITY.md").write_text("identity", encoding="utf-8")
+        (tmp_path / "MEMORY.md").write_text("memory", encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="agent_claude"):
+            persona = load_persona(str(tmp_path))
+
+        assert persona.soul == ""
+        assert any(r.levelno == logging.WARNING and "SOUL.md" in r.message for r in caplog.records)
+
+    def test_missing_identity_warns_and_continues(self, tmp_path, caplog):
+        """Given IDENTITY.md is absent,
+        When load_persona() is called,
+        Then a warning is logged and identity is empty.
+        """
+        from agent_claude.persona import load_persona
+
+        (tmp_path / "SOUL.md").write_text("soul", encoding="utf-8")
+        (tmp_path / "MEMORY.md").write_text("memory", encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="agent_claude"):
+            persona = load_persona(str(tmp_path))
+
+        assert persona.identity == ""
+        assert any(r.levelno == logging.WARNING and "IDENTITY.md" in r.message for r in caplog.records)
+
+    def test_missing_memory_creates_empty_file(self, tmp_path, caplog):
+        """Given MEMORY.md is absent,
+        When load_persona() is called,
+        Then an empty MEMORY.md file is created and a warning is logged.
+        """
+        from agent_claude.persona import load_persona
+
+        (tmp_path / "SOUL.md").write_text("soul", encoding="utf-8")
+        (tmp_path / "IDENTITY.md").write_text("identity", encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING, logger="agent_claude"):
+            persona = load_persona(str(tmp_path))
+
+        assert persona.memory == ""
+        assert (tmp_path / "MEMORY.md").exists()
+        assert (tmp_path / "MEMORY.md").read_text() == ""
+        assert any(r.levelno == logging.WARNING and "MEMORY.md" in r.message for r in caplog.records)
