@@ -13,8 +13,8 @@ WH_BROKER="${WH_BROKER:-wh-broker}"
 PASS=0
 FAIL=0
 
-pass() { echo "  ✓ $1"; ((PASS++)); }
-fail() { echo "  ✗ $1" >&2; ((FAIL++)); }
+pass() { echo "  ✓ $1"; PASS=$((PASS + 1)); }
+fail() { echo "  ✗ $1" >&2; FAIL=$((FAIL + 1)); }
 
 # ── Broker setup ──────────────────────────────────────────────────────────────
 
