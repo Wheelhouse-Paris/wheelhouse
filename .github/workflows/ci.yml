@@ -58,6 +58,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.filter.outputs.python }}
       proto: ${{ steps.filter.outputs.proto }}
+      agent_claude: ${{ steps.filter.outputs.agent_claude }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -76,6 +77,9 @@ jobs:
             proto:
               - 'proto/**'
               - '.proto.sha256'
+            agent_claude:
+              - 'agent-claude/**'
+              - 'sdk/python/**'
 
   # ──────────────────────────────────────────────
   # Rust: cargo test + clippy + fmt
@@ -148,3 +152,30 @@ jobs:
       - uses: actions/checkout@v4
       - name: E2E placeholder
         run: echo "E2E tests will be configured in Story 1.2+"
+
+  # ──────────────────────────────────────────────
+  # agent-claude: Docker build verification (no push)
+  # Skips when agent-claude/ is untouched (SR-03)
+  # ──────────────────────────────────────────────
+  build-agent-claude-image:
+    name: Build agent-claude Image (CI)
+    needs: [changes]
+    if: needs.changes.outputs.agent_claude == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: agent-claude/Dockerfile
+          push: false
+          load: true
+          tags: agent-claude:ci
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=ci-${{ github.sha }}
