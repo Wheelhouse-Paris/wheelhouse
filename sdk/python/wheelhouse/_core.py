@@ -66,6 +66,26 @@ def _resolve_endpoint(endpoint: str | None) -> str:
     return os.environ.get("WH_URL", DEFAULT_ENDPOINT)
 
 
+def _endpoint_with_port_offset(endpoint: str, offset: int) -> str:
+    """Return endpoint with port incremented by offset.
+
+    The broker uses three consecutive ports starting from WH_URL:
+      +0 (WH_URL)  : broker PUB socket  — agents subscribe here
+      +1           : broker SUB socket  — agents publish here
+      +2           : broker control REP — health checks / commands
+
+    Examples:
+      tcp://127.0.0.1:5555 + 1 → tcp://127.0.0.1:5556
+      tcp://host.containers.internal:5555 + 2 → tcp://host.containers.internal:5557
+    """
+    import re
+    match = re.search(r":(\d+)$", endpoint)
+    if match:
+        port = int(match.group(1))
+        return endpoint[: match.start()] + f":{port + offset}"
+    return endpoint
+
+
 def _validate_type_name(type_name: str) -> tuple[str, str]:
     """Validate and parse a fully-qualified type name.
 
@@ -199,12 +219,19 @@ class Connection:
 
         Uses a REQ socket health-check to verify Wheelhouse is actually
         reachable before declaring the connection successful.
+
+        The broker uses three consecutive ports relative to WH_URL:
+          WH_URL+0: broker PUB socket  (agents subscribe here)
+          WH_URL+1: broker SUB socket  (agents publish here)
+          WH_URL+2: broker control REP (health checks)
         """
         try:
             self._ctx = zmq.asyncio.Context()
 
             # Health check: use a REQ socket with short timeout to verify
             # Wheelhouse is actually running before setting up PUB/SUB.
+            # The control socket is at WH_URL+2 (e.g. 5555+2=5557).
+            control_endpoint = _endpoint_with_port_offset(self._endpoint, 2)
             health_socket = self._ctx.socket(zmq.REQ)
             health_socket.setsockopt(zmq.LINGER, 0)
             health_socket.setsockopt(zmq.CONNECT_TIMEOUT, 2000)
@@ -212,7 +239,7 @@ class Connection:
             health_socket.setsockopt(zmq.SNDTIMEO, 2000)
 
             try:
-                health_socket.connect(self._endpoint)
+                health_socket.connect(control_endpoint)
                 await health_socket.send(b'{"v":1,"command":"health"}')
                 await health_socket.recv()
             except zmq.ZMQError:
@@ -224,9 +251,12 @@ class Connection:
                 if not health_socket.closed:
                     health_socket.close(linger=0)
 
+            # Agent PUB socket connects to broker SUB (WH_URL+1, e.g. 5556).
+            pub_endpoint = _endpoint_with_port_offset(self._endpoint, 1)
             self._pub_socket = self._ctx.socket(zmq.PUB)
-            self._pub_socket.connect(self._endpoint)
+            self._pub_socket.connect(pub_endpoint)
 
+            # Agent SUB socket connects to broker PUB (WH_URL+0, e.g. 5555).
             self._sub_socket = self._ctx.socket(zmq.SUB)
             self._sub_socket.connect(self._endpoint)
 

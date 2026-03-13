@@ -1,12 +1,19 @@
 //! Broker configuration.
 //!
-//! The bind address is hardcoded to `127.0.0.1` as a security invariant (ADR-001, NFR-S1).
-//! This is NOT configurable -- the broker only accepts localhost connections.
+//! On Linux the bind address is `127.0.0.1` (loopback-only, ADR-001 / NFR-S1).
+//! On macOS, Podman runs containers inside a Linux VM and cannot reach the macOS
+//! loopback. The broker must bind to `0.0.0.0` so the Podman VM network can
+//! reach it via `host.containers.internal`. The macOS application firewall
+//! provides host-level protection.
 //! Ports are configurable via environment variables for development flexibility.
 
 use std::path::{Path, PathBuf};
 
-/// The localhost bind address -- security invariant, never changes.
+/// Bind address: loopback on Linux (security invariant), all-interfaces on macOS
+/// to allow Podman containers to connect via the VM gateway.
+#[cfg(target_os = "macos")]
+const BIND_ADDRESS: &str = "0.0.0.0";
+#[cfg(not(target_os = "macos"))]
 const BIND_ADDRESS: &str = "127.0.0.1";
 
 /// Default ports for the broker sockets.

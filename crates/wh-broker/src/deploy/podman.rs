@@ -20,11 +20,23 @@ const PODMAN_CMD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for `podman machine start`.
 const PODMAN_MACHINE_START_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Default broker endpoint for agent containers.
+/// Default broker endpoint for agent containers on Linux.
 const DEFAULT_BROKER_URL: &str = "tcp://127.0.0.1:5555";
 
+/// Broker endpoint for agent containers on macOS + Podman.
+///
+/// On macOS, Podman runs containers in a Linux VM. `127.0.0.1` inside the
+/// container is the VM loopback, not the macOS host. `host.containers.internal`
+/// is a special hostname Podman resolves to the macOS host gateway (192.168.127.254),
+/// which reaches the broker bound on `0.0.0.0` on the macOS host.
+#[cfg(target_os = "macos")]
+const CONTAINER_BROKER_URL: &str = "tcp://host.containers.internal:5555";
+#[cfg(not(target_os = "macos"))]
+const CONTAINER_BROKER_URL: &str = DEFAULT_BROKER_URL;
+
 /// TCP address used to probe whether the broker control socket is reachable.
-const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5555";
+/// Port 5557 = control REP socket (matches DEFAULT_CONTROL_PORT in config.rs).
+const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5557";
 
 /// Maximum time to wait for the broker to start after spawning it.
 const BROKER_START_TIMEOUT: Duration = Duration::from_secs(5);
@@ -289,6 +301,8 @@ fn run_podman_checked(
 /// Returns the argument list (without the "podman" binary itself).
 /// When `persona_path` is provided, adds a read-only volume mount and
 /// `WH_PERSONA_PATH` environment variable for persona files.
+/// `extra_env` is a list of additional `(KEY, VALUE)` pairs injected as `-e` flags
+/// (used to pass secrets like `ANTHROPIC_API_KEY` from the CLI keychain).
 pub fn build_run_args(
     topology_name: &str,
     agent_name: &str,
@@ -296,6 +310,7 @@ pub fn build_run_args(
     streams: &[String],
     broker_url: Option<&str>,
     persona_path: Option<&str>,
+    extra_env: &[(String, String)],
 ) -> Vec<String> {
     let name = container_name(topology_name, agent_name);
     let url = broker_url.unwrap_or(DEFAULT_BROKER_URL);
@@ -314,6 +329,12 @@ pub fn build_run_args(
         format!("WH_STREAMS={streams_csv}"),
     ];
 
+    // Inject caller-provided secrets/env vars (e.g. ANTHROPIC_API_KEY)
+    for (key, value) in extra_env {
+        args.push("-e".to_string());
+        args.push(format!("{key}={value}"));
+    }
+
     // Add persona volume mount and env var when configured
     if let Some(path) = persona_path {
         args.push("-v".to_string());
@@ -330,6 +351,7 @@ pub fn build_run_args(
 ///
 /// Uses `podman run -d` with the appropriate environment variables.
 /// When `persona_path` is provided, mounts persona files read-only.
+/// `extra_env` is forwarded to `build_run_args` for secret injection.
 /// Timeout: 120s (image pull may be slow on first run).
 #[tracing::instrument(skip_all, fields(agent = agent_name, topology = topology_name))]
 pub fn podman_run(
@@ -339,6 +361,7 @@ pub fn podman_run(
     streams: &[String],
     broker_url: Option<&str>,
     persona_path: Option<&str>,
+    extra_env: &[(String, String)],
 ) -> Result<(), DeployError> {
     let podman = find_podman()?;
     let args = build_run_args(
@@ -348,6 +371,7 @@ pub fn podman_run(
         streams,
         broker_url,
         persona_path,
+        extra_env,
     );
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
@@ -455,6 +479,9 @@ fn resolve_persona_path(
 /// Stream changes are no-ops (local provider, handled by broker).
 /// Returns an `ApplyResult` with change counts.
 ///
+/// `extra_env` is injected into every container as additional `-e` flags.
+/// Used to pass secrets (e.g. `ANTHROPIC_API_KEY`) read from the CLI keychain.
+///
 /// When an agent has a `persona` path configured, persona files are
 /// validated before container startup and MEMORY.md is initialized
 /// if missing (FR61). The persona directory is volume-mounted read-only.
@@ -467,6 +494,7 @@ pub fn provision_containers(
     changes: &[Change],
     agents: &[crate::deploy::Agent],
     workspace_root: Option<&std::path::Path>,
+    extra_env: &[(String, String)],
 ) -> ApplyResult {
     // Ensure Podman is running before attempting any container operations.
     // Starts the machine automatically if it is stopped.
@@ -539,8 +567,9 @@ pub fn provision_containers(
                     &agent.name,
                     &agent.image,
                     &agent.streams,
-                    None,
+                    Some(CONTAINER_BROKER_URL),
                     persona_abs.as_deref(),
+                    extra_env,
                 ) {
                     Ok(()) => result.created += 1,
                     Err(e) => {
@@ -601,8 +630,9 @@ pub fn provision_containers(
                     &agent.name,
                     &agent.image,
                     &agent.streams,
-                    None,
+                    Some(CONTAINER_BROKER_URL),
                     persona_abs.as_deref(),
+                    extra_env,
                 ) {
                     Ok(()) => result.changed += 1,
                     Err(e) => {
@@ -654,6 +684,7 @@ mod tests {
             &["main".to_string()],
             None,
             None,
+            &[],
         );
         assert_eq!(args[0], "run");
         assert_eq!(args[1], "-d");
@@ -677,6 +708,7 @@ mod tests {
             &["events".to_string(), "logs".to_string()],
             Some("tcp://10.0.0.1:5555"),
             None,
+            &[],
         );
         assert_eq!(args[5], "WH_URL=tcp://10.0.0.1:5555");
         assert_eq!(args[9], "WH_STREAMS=events,logs");
@@ -691,6 +723,7 @@ mod tests {
             &["main".to_string()],
             None,
             Some("/workspace/agents/donna"),
+            &[],
         );
         // Should contain volume mount
         let v_idx = args
@@ -743,7 +776,7 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], None);
+        let result = provision_containers("dev", &changes, &[], None, &[]);
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
         assert_eq!(result.destroyed, 0);
@@ -794,7 +827,7 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], None);
+        let result = provision_containers("dev", &changes, &[], None, &[]);
         // Should skip gracefully, not panic, and not increment created
         assert_eq!(result.created, 0);
     }
