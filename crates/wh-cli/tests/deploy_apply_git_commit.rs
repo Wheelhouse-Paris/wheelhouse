@@ -81,7 +81,7 @@ fn apply_creates_git_commit_with_plan_hash() {
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
 
-    wh_broker::deploy::apply::apply(committed).expect("apply should succeed");
+    wh_broker::deploy::apply::apply(committed, &[]).expect("apply should succeed");
 
     // Verify git commit
     let git_log_output = git_cmd()
@@ -114,7 +114,7 @@ fn apply_commit_contains_operator_name_and_change_summary() {
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
 
-    wh_broker::deploy::apply::apply(committed).expect("apply should succeed");
+    wh_broker::deploy::apply::apply(committed, &[]).expect("apply should succeed");
 
     let git_log_output = git_cmd()
         .args(["log", "--format=%B", "-1"])
@@ -144,7 +144,7 @@ fn apply_commit_uses_custom_agent_name() {
     let committed = wh_broker::deploy::apply::commit(plan_output, Some("donna"))
         .expect("commit should succeed");
 
-    wh_broker::deploy::apply::apply(committed).expect("apply should succeed");
+    wh_broker::deploy::apply::apply(committed, &[]).expect("apply should succeed");
 
     let git_log_output = git_cmd()
         .args(["log", "--format=%B", "-1"])
@@ -172,7 +172,7 @@ fn apply_is_idempotent() {
     assert!(plan_output.has_changes());
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("first commit should succeed");
-    wh_broker::deploy::apply::apply(committed).expect("first apply should succeed");
+    wh_broker::deploy::apply::apply(committed, &[]).expect("first apply should succeed");
 
     // Second apply — should detect no changes
     let linted2 = wh_broker::deploy::lint::lint(&wh_path).expect("lint should succeed");
