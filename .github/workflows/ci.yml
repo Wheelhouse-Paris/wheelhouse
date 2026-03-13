@@ -150,8 +150,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: E2E placeholder
-        run: echo "E2E tests will be configured in Story 1.2+"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.1"
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build binaries
+        run: cargo build --release -p wh-cli -p wh-broker
+
+      - name: Run stream E2E tests
+        run: |
+          export WH=./target/release/wh
+          export WH_BROKER=./target/release/wh-broker
+          bash tests/e2e/stream_roundtrip.sh
 
   # ──────────────────────────────────────────────
   # agent-claude: Docker build verification (no push)
