@@ -308,14 +308,15 @@ fn run_init(format: OutputFormat, update: bool) -> Result<(), WhError> {
 // ---------------------------------------------------------------------------
 
 fn detect_podman() -> DetectionResult {
-    match Command::new("podman")
-        .arg("version")
-        .arg("--format")
-        .arg("{{.Client.Version}}")
-        .output()
-    {
+    match Command::new("podman").arg("--version").output() {
         Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // Output: "podman version X.Y.Z"
+            let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let version = raw
+                .split_whitespace()
+                .last()
+                .unwrap_or(&raw)
+                .to_string();
             DetectionResult::Detected { version }
         }
         Ok(output) => {
