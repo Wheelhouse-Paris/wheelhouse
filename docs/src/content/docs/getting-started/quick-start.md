@@ -5,6 +5,15 @@ description: Deploy your first agent in under 5 minutes
 
 This guide gets you from zero to a running agent in under 5 minutes.
 
+## 0. Create a project directory
+
+Wheelhouse uses git to track topology state. Start from a git repository:
+
+```sh
+mkdir my-agents && cd my-agents
+git init
+```
+
 ## 1. Initialize secrets
 
 ```sh
