@@ -38,6 +38,9 @@ const CONTAINER_BROKER_URL: &str = DEFAULT_BROKER_URL;
 /// Port 5557 = control REP socket (matches DEFAULT_CONTROL_PORT in config.rs).
 const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5557";
 
+/// ZMQ endpoint for the broker control socket.
+const BROKER_CONTROL_ENDPOINT: &str = "tcp://127.0.0.1:5557";
+
 /// Maximum time to wait for the broker to start after spawning it.
 const BROKER_START_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -206,6 +209,53 @@ pub fn ensure_broker_running() -> Result<(), DeployError> {
             ));
         }
         std::thread::sleep(BROKER_POLL_INTERVAL);
+    }
+}
+
+/// Register a stream with the running broker via the control socket.
+///
+/// Sends a `stream_create` command over ZMQ REQ/REP. Errors are logged but not
+/// propagated — stream registration is best-effort during deploy (the operator
+/// can always run `wh stream create` manually if needed).
+fn register_stream_with_broker(name: &str, retention: Option<&str>) {
+    use zeromq::{ReqSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
+
+    let endpoint = BROKER_CONTROL_ENDPOINT.to_string();
+    let name_owned = name.to_string();
+    let retention_owned = retention.map(|r| r.to_string());
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build();
+    let Ok(rt) = rt else {
+        tracing::warn!(stream = %name, "failed to build tokio runtime for stream registration");
+        return;
+    };
+
+    let result = rt.block_on(async move {
+        let mut req = ReqSocket::new();
+        req.connect(&endpoint).await?;
+
+        let mut payload = serde_json::json!({
+            "command": "stream_create",
+            "name": name_owned,
+        });
+        if let Some(r) = retention_owned {
+            payload["retention"] = serde_json::json!(r);
+        }
+
+        let bytes = serde_json::to_vec(&payload)?;
+        req.send(ZmqMessage::from(bytes)).await?;
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), req.recv()).await??;
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    });
+
+    if let Err(e) = result {
+        tracing::warn!(stream = %name, error = %e, "stream registration with broker failed");
+    } else {
+        tracing::info!(stream = %name, "stream registered with broker");
     }
 }
 
@@ -495,6 +545,7 @@ pub fn provision_containers(
     topology_name: &str,
     changes: &[Change],
     agents: &[crate::deploy::Agent],
+    streams: &[crate::deploy::Stream],
     workspace_root: Option<&std::path::Path>,
     extra_env: &[(String, String)],
 ) -> ApplyResult {
@@ -538,8 +589,17 @@ pub fn provision_containers(
     };
 
     for change in changes {
-        // Skip stream changes — already counted above.
+        // Stream changes — register with broker (no container operation).
         if parse_agent_name(&change.component).is_none() {
+            if change.op == "+" {
+                // Component format: "stream <name>"
+                let stream_name = change.component.trim_start_matches("stream ").to_string();
+                let retention = streams
+                    .iter()
+                    .find(|s| s.name == stream_name)
+                    .and_then(|s| s.retention.as_deref());
+                register_stream_with_broker(&stream_name, retention);
+            }
             continue;
         }
         // Agent changes — handle container lifecycle.
@@ -792,7 +852,7 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], None, &[]);
+        let result = provision_containers("dev", &changes, &[], &[], None, &[]);
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
         assert_eq!(result.destroyed, 0);
@@ -845,7 +905,7 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], None, &[]);
+        let result = provision_containers("dev", &changes, &[], &[], None, &[]);
         // Should skip gracefully, not panic, and not increment created
         assert_eq!(result.created, 0);
     }

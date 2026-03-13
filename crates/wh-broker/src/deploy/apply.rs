@@ -281,6 +281,7 @@ pub fn apply(
         &committed.desired_topology.name,
         &committed.changes,
         &committed.desired_topology.agents,
+        &committed.desired_topology.streams,
         Some(workspace_root),
         extra_env,
     );
