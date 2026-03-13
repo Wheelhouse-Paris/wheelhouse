@@ -633,6 +633,30 @@ pub async fn execute_tail(args: &StreamTailArgs) -> Result<(), WhError> {
         format!("tcp://127.0.0.1:{port}")
     });
 
+    // Probe broker liveness via TCP before subscribing.
+    // ZMQ connect() is async and always succeeds — recv() would block forever
+    // if the broker isn't running. A TCP probe to the control port gives us an
+    // immediate ECONNREFUSED on localhost, or a 1-second timeout otherwise.
+    let control_addr = std::env::var("WH_CONTROL_ENDPOINT")
+        .unwrap_or_else(|_| {
+            let port = std::env::var("WH_CONTROL_PORT")
+                .ok()
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(5557);
+            format!("tcp://127.0.0.1:{port}")
+        });
+    let tcp_addr = control_addr
+        .strip_prefix("tcp://")
+        .unwrap_or(&control_addr)
+        .to_string();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tokio::net::TcpStream::connect(&tcp_addr),
+    )
+    .await
+    .map_err(|_| WhError::ConnectionError)?
+    .map_err(|_| WhError::ConnectionError)?;
+
     let topic = format!("{}\0", args.stream_name);
 
     let mut sub_socket = SubSocket::new();
