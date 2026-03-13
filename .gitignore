@@ -15,6 +15,8 @@ docs/.astro/
 # Python SDK generated proto files (FP-02)
 sdk/python/wheelhouse/_proto/
 sdk/python/.venv/
+agent-claude/.venv/
+.venv/
 sdk/python/.pytest_cache/
 __pycache__/
 *.pyc
