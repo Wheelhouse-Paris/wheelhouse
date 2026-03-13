@@ -413,7 +413,9 @@ fn apply_autonomous_change_inner(
         let committed = apply::commit(plan_output, Some(agent_name))?;
 
         // Apply the committed plan
-        let _apply_result = apply::apply(committed)?;
+        // Note: autonomous apply has no CLI context to read secrets from.
+        // Agents deployed autonomously must have secrets pre-configured in their env.
+        let _apply_result = apply::apply(committed, &[])?;
 
         Ok((plan_hash, changes))
     })();

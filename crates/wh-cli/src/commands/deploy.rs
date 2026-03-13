@@ -321,9 +321,17 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
     };
     progress_done("Topology changes committed.", tty);
 
+    // Collect secrets to inject into agent containers
+    let mut extra_env: Vec<(String, String)> = Vec::new();
+    for cred in crate::commands::secrets::CREDENTIALS {
+        if let Ok(value) = crate::commands::secrets::read_secret(cred.name) {
+            extra_env.push((cred.env_var.to_string(), value));
+        }
+    }
+
     // AC #1: Spinner during provisioning
     progress_step("Provisioning containers...", tty);
-    let apply_result = match apply::apply(committed) {
+    let apply_result = match apply::apply(committed, &extra_env) {
         Ok(r) => r,
         Err(e) => {
             progress_done("", tty);

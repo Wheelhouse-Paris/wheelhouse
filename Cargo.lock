@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "wh-broker"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2738,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "wh-cli"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2767,7 +2767,7 @@ dependencies = [
 
 [[package]]
 name = "wh-proto"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "prost",
  "prost-build",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "wh-skill"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "futures",
  "git2",
@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "wh-stream"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "prost",
  "wh-proto",
@@ -2802,7 +2802,7 @@ dependencies = [
 
 [[package]]
 name = "wh-telegram"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "chrono",
  "serde",
@@ -2819,7 +2819,7 @@ dependencies = [
 
 [[package]]
 name = "wh-user"
-version = "0.1.0-alpha.7"
+version = "0.1.0-alpha.8"
 dependencies = [
  "chrono",
  "serde",

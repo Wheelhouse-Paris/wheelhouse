@@ -258,7 +258,7 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
 /// Stream changes are no-ops (local provider, handled by broker).
 /// FM-04: Idempotent — applying same .wh twice = same result (no changes on second run).
 #[tracing::instrument(skip_all)]
-pub fn apply(committed: CommittedPlan) -> Result<ApplyResult, DeployError> {
+pub fn apply(committed: CommittedPlan, extra_env: &[(String, String)]) -> Result<ApplyResult, DeployError> {
     if committed.changes.is_empty() {
         return Ok(ApplyResult {
             created: 0,
@@ -278,6 +278,7 @@ pub fn apply(committed: CommittedPlan) -> Result<ApplyResult, DeployError> {
         &committed.changes,
         &committed.desired_topology.agents,
         Some(workspace_root),
+        extra_env,
     );
 
     Ok(result)
