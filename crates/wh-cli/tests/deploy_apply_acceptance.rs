@@ -95,7 +95,7 @@ fn apply_yes_runs_without_prompting() {
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
 
     // apply() should succeed and return an ApplyResult
-    let result = wh_broker::deploy::apply::apply(committed).expect("apply should succeed");
+    let result = wh_broker::deploy::apply::apply(committed, &[]).expect("apply should succeed");
     // On a machine without podman, created will be 0 (container start fails silently)
     // but the function must not error out — it logs and continues
     // ApplyResult is returned — on machines without podman, created may be 0
@@ -132,7 +132,7 @@ fn apply_returns_change_counts() {
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
 
-    let result = wh_broker::deploy::apply::apply(committed).expect("apply should succeed");
+    let result = wh_broker::deploy::apply::apply(committed, &[]).expect("apply should succeed");
 
     // Verify the ApplyResult Display format uses Unicode middle dot separator
     let display = result.to_string();
@@ -171,7 +171,7 @@ fn apply_is_idempotent_no_extra_containers() {
     assert!(plan_output.has_changes());
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("first commit should succeed");
-    wh_broker::deploy::apply::apply(committed).expect("first apply should succeed");
+    wh_broker::deploy::apply::apply(committed, &[]).expect("first apply should succeed");
 
     // Second apply — should detect no changes
     let linted2 = wh_broker::deploy::lint::lint(&wh_path).expect("lint should succeed");
@@ -197,7 +197,7 @@ fn apply_git_commit_includes_agent_attribution() {
     let plan_output = wh_broker::deploy::plan::plan(linted).expect("plan should succeed");
     let committed = wh_broker::deploy::apply::commit(plan_output, Some("donna"))
         .expect("commit should succeed");
-    wh_broker::deploy::apply::apply(committed).expect("apply should succeed");
+    wh_broker::deploy::apply::apply(committed, &[]).expect("apply should succeed");
 
     let log = git_cmd()
         .args(["log", "--format=%B", "-1"])
@@ -266,7 +266,7 @@ fn apply_without_yes_in_non_tty_errors() {
     // Library API succeeds (equivalent to --yes mode)
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
-    let result = wh_broker::deploy::apply::apply(committed);
+    let result = wh_broker::deploy::apply::apply(committed, &[]);
     assert!(result.is_ok(), "library API (implicit --yes) must succeed");
 }
 
@@ -290,7 +290,8 @@ fn full_onboarding_sequence_lint_plan_apply() {
     // Step 3: Commit + Apply
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
-    let apply_result = wh_broker::deploy::apply::apply(committed).expect("apply should succeed");
+    let apply_result =
+        wh_broker::deploy::apply::apply(committed, &[]).expect("apply should succeed");
 
     // Verify ApplyResult is returned with counts
     let summary = apply_result.to_string();

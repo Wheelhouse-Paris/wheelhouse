@@ -77,7 +77,7 @@ fn deploy_apply_commits_state_json() {
 
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
-    let _ = wh_broker::deploy::apply::apply(committed);
+    let _ = wh_broker::deploy::apply::apply(committed, &[]);
 
     // Verify .wh/state.json is in the commit
     let output = git_cmd()
@@ -103,7 +103,7 @@ fn deploy_apply_creates_gitignore() {
     let plan_output = wh_broker::deploy::plan::plan(linted).expect("plan should succeed");
     let committed =
         wh_broker::deploy::apply::commit(plan_output, None).expect("commit should succeed");
-    let _ = wh_broker::deploy::apply::apply(committed);
+    let _ = wh_broker::deploy::apply::apply(committed, &[]);
 
     // Verify .wh/.gitignore exists and is committed
     let gitignore_path = temp_path.join(".wh").join(".gitignore");
@@ -296,7 +296,7 @@ fn recovery_plan_detects_all_as_additions() {
     let plan = wh_broker::deploy::plan::plan(linted).expect("plan");
     assert!(plan.has_changes());
     let committed = wh_broker::deploy::apply::commit(plan, None).expect("commit");
-    let _ = wh_broker::deploy::apply::apply(committed);
+    let _ = wh_broker::deploy::apply::apply(committed, &[]);
 
     // Simulate fresh clone: remove .wh/state.json
     let state_path = temp_path.join(".wh/state.json");
