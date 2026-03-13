@@ -108,8 +108,7 @@ pub async fn execute(args: &PsArgs) -> Result<(), WhError> {
 
         // Check each agent's container status via Podman
         for agent in &topology.agents {
-            let container =
-                wh_broker::deploy::podman::container_name(&topology.name, &agent.name);
+            let container = wh_broker::deploy::podman::container_name(&topology.name, &agent.name);
             let is_running =
                 wh_broker::deploy::podman::podman_is_running(&container).unwrap_or(false);
             let status = if is_running {
@@ -117,7 +116,11 @@ pub async fn execute(args: &PsArgs) -> Result<(), WhError> {
             } else {
                 ComponentStatus::Stopped
             };
-            let stream = agent.streams.first().cloned().unwrap_or_else(|| "-".to_string());
+            let stream = agent
+                .streams
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "-".to_string());
             components.push(ComponentInfo {
                 name: agent.name.clone(),
                 kind: ComponentKind::Agent,
