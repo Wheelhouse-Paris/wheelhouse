@@ -53,14 +53,16 @@ pub struct ApplyResult {
     pub changed: usize,
     /// Number of containers destroyed.
     pub destroyed: usize,
+    /// Number of streams registered (broker-managed, no container operation).
+    pub streams_created: usize,
 }
 
 impl std::fmt::Display for ApplyResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} created \u{00B7} {} changed \u{00B7} {} destroyed",
-            self.created, self.changed, self.destroyed
+            "{} created \u{00B7} {} changed \u{00B7} {} destroyed \u{00B7} {} streams",
+            self.created, self.changed, self.destroyed, self.streams_created
         )
     }
 }
@@ -505,6 +507,7 @@ pub fn provision_containers(
             created: 0,
             changed: 0,
             destroyed: 0,
+            streams_created: 0,
         };
     }
 
@@ -517,6 +520,7 @@ pub fn provision_containers(
             created: 0,
             changed: 0,
             destroyed: 0,
+            streams_created: 0,
         };
     }
 
@@ -524,13 +528,21 @@ pub fn provision_containers(
         created: 0,
         changed: 0,
         destroyed: 0,
+        streams_created: 0,
     };
 
     for change in changes {
-        // Only handle agent changes — stream changes are no-ops
+        // Stream additions are counted but require no container operation.
+        if parse_agent_name(&change.component).is_none() {
+            if change.op == "+" {
+                result.streams_created += 1;
+            }
+            continue;
+        }
+        // Agent changes — handle container lifecycle.
         let agent_name = match parse_agent_name(&change.component) {
             Some(name) => name,
-            None => continue, // skip stream changes
+            None => continue,
         };
 
         match change.op.as_str() {
@@ -781,6 +793,7 @@ mod tests {
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
         assert_eq!(result.destroyed, 0);
+        assert_eq!(result.streams_created, 1);
     }
 
     #[test]
@@ -789,10 +802,11 @@ mod tests {
             created: 1,
             changed: 0,
             destroyed: 2,
+            streams_created: 1,
         };
         assert_eq!(
             result.to_string(),
-            "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed"
+            "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed \u{00B7} 1 streams"
         );
     }
 
