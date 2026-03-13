@@ -20,7 +20,7 @@ export default defineConfig({
 			head: [
 				{
 					tag: 'script',
-					content: `(function(){var k=sessionStorage.getItem('wh_docs');if(k!=='mHJ2uaD9'){var p=prompt('Wheelhouse docs — password:');if(p!=='mHJ2uaD9'){document.documentElement.style.display='none';document.write('');location.replace('about:blank');}else{sessionStorage.setItem('wh_docs',p);}}})();`,
+					content: `(function(){var pwd='${process.env.DOCS_PASSWORD||''}';if(!pwd)return;var k=sessionStorage.getItem('wh_docs');if(k!==pwd){var p=prompt('Wheelhouse docs — password:');if(p!==pwd){document.documentElement.style.display='none';document.write('');location.replace('about:blank');}else{sessionStorage.setItem('wh_docs',p);}}})();`,
 				},
 			],
 			sidebar: [

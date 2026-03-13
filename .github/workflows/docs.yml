@@ -35,6 +35,8 @@ jobs:
 
       - name: Build Starlight
         working-directory: docs
+        env:
+          DOCS_PASSWORD: ${{ secrets.DOCS_PASSWORD }}
         run: npm run build
 
       - name: Upload artifact
