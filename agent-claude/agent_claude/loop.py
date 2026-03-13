@@ -28,6 +28,7 @@ from wheelhouse.types import (
 )
 
 from agent_claude.claude_client import ClaudeClient
+from agent_claude.errors import ClaudeAuthError
 from agent_claude.persona import Persona
 
 logger = logging.getLogger("agent_claude")
@@ -49,6 +50,11 @@ SKILL_PROMPT_TEMPLATE = (
 _pending_tasks: set[asyncio.Task[Any]] = set()
 _shutdown_event = asyncio.Event()
 
+# Fatal error storage: when a ClaudeAuthError is raised inside a handler,
+# the SDK's _listen() loop catches all exceptions. We store the error here
+# and set _shutdown_event so run_message_loop() can re-raise it (AC-02).
+_fatal_error: ClaudeAuthError | None = None
+
 
 async def run_message_loop(
     connection: Any,
@@ -60,12 +66,23 @@ async def run_message_loop(
 
     This is the main message loop that blocks until shutdown (AC #1).
 
+    If a ClaudeAuthError occurs during message processing, the handler stores
+    it in _fatal_error and sets the shutdown event. After draining, this
+    function re-raises the error so __main__.py can catch it and exit(1).
+
     Args:
         connection: The SDK Connection object.
         config: Configuration dict from validate_env().
         persona: Loaded Persona dataclass.
         claude_client: Initialized ClaudeClient.
+
+    Raises:
+        ClaudeAuthError: If the API key is invalid (AC-02, FR-AC6).
     """
+    global _fatal_error
+    _fatal_error = None
+    _shutdown_event.clear()
+
     agent_name = config["agent_name"]
     persona_path = config["persona_path"]
     streams = config["streams"]
@@ -99,6 +116,10 @@ async def run_message_loop(
                 task.cancel()
         await connection.close()
 
+    # Re-raise fatal error after cleanup (AC-02)
+    if _fatal_error is not None:
+        raise _fatal_error
+
 
 def _make_handler(
     connection: Any,
@@ -114,6 +135,7 @@ def _make_handler(
     """
 
     async def handler(message: Any) -> None:
+        global _fatal_error
         logger.debug(
             "Message received: type=%s stream=%s publisher=%s",
             type(message).__name__,
@@ -126,27 +148,34 @@ def _make_handler(
             _shutdown_event.set()
             return
 
-        if isinstance(message, TextMessage):
-            await _handle_text_message(
-                message, connection, stream_name, claude_client, persona,
-                agent_name, persona_path,
-            )
-        elif isinstance(message, CronEvent):
-            await _handle_cron_event(
-                message, connection, stream_name, claude_client, persona,
-                agent_name, persona_path,
-            )
-        elif isinstance(message, SkillInvocation):
-            await _handle_skill_invocation(
-                message, connection, stream_name, claude_client, persona,
-                agent_name, persona_path,
-            )
-        else:
-            logger.debug(
-                "Unknown type skipped: type=%s stream=%s",
-                type(message).__name__,
-                stream_name,
-            )
+        try:
+            if isinstance(message, TextMessage):
+                await _handle_text_message(
+                    message, connection, stream_name, claude_client, persona,
+                    agent_name, persona_path,
+                )
+            elif isinstance(message, CronEvent):
+                await _handle_cron_event(
+                    message, connection, stream_name, claude_client, persona,
+                    agent_name, persona_path,
+                )
+            elif isinstance(message, SkillInvocation):
+                await _handle_skill_invocation(
+                    message, connection, stream_name, claude_client, persona,
+                    agent_name, persona_path,
+                )
+            else:
+                logger.debug(
+                    "Unknown type skipped: type=%s stream=%s",
+                    type(message).__name__,
+                    stream_name,
+                )
+        except ClaudeAuthError as exc:
+            # Fatal: invalid API key. Store error and signal shutdown so
+            # run_message_loop() can re-raise after cleanup (AC-02).
+            _fatal_error = exc
+            _shutdown_event.set()
+            raise  # Re-raise so SDK also logs it
 
     return handler
 
