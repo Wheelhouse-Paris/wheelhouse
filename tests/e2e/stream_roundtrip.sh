@@ -23,6 +23,8 @@ BROKER_PID=$!
 cleanup() {
     kill "$BROKER_PID" 2>/dev/null || true
     kill "$TAIL_PID"   2>/dev/null || true
+    wait "$BROKER_PID" 2>/dev/null || true
+    wait "$TAIL_PID"   2>/dev/null || true
     rm -f /tmp/wh-e2e-tail.txt
 }
 TAIL_PID=0
