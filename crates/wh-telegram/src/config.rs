@@ -31,20 +31,20 @@ pub struct TelegramConfig {
 impl TelegramConfig {
     /// Reads configuration from environment variables.
     ///
-    /// - `WH_TELEGRAM_BOT_TOKEN` (required): Telegram bot token from BotFather.
+    /// - `TELEGRAM_BOT_TOKEN` (required): Telegram bot token from BotFather.
     /// - `WH_URL` (required): Broker ZMQ PUB endpoint.
     /// - `WH_STREAM` (optional): Stream name from provisioning layer. Falls back to
     ///   `WH_TELEGRAM_STREAM`, then default "main".
     /// - `WH_SURFACE_NAME` (optional, default "telegram"): Surface name for identification.
     #[instrument]
     pub fn from_env() -> Result<Self, TelegramError> {
-        let bot_token = std::env::var("WH_TELEGRAM_BOT_TOKEN").map_err(|_| {
-            TelegramError::ConfigError("WH_TELEGRAM_BOT_TOKEN environment variable not set".into())
+        let bot_token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| {
+            TelegramError::ConfigError("TELEGRAM_BOT_TOKEN environment variable not set".into())
         })?;
 
         if bot_token.is_empty() {
             return Err(TelegramError::ConfigError(
-                "WH_TELEGRAM_BOT_TOKEN cannot be empty".into(),
+                "TELEGRAM_BOT_TOKEN cannot be empty".into(),
             ));
         }
 

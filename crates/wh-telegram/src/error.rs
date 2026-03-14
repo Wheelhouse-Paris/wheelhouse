@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn sanitize_returns_same_message_for_all_variants() {
         let errors = vec![
-            TelegramError::ConfigError("missing WH_TELEGRAM_BOT_TOKEN".into()),
+            TelegramError::ConfigError("missing TELEGRAM_BOT_TOKEN".into()),
             TelegramError::BotError("API rate limit exceeded".into()),
             TelegramError::StreamError("broker:5555 connection refused on zmq socket".into()),
             TelegramError::SendFailed("network timeout after 30s".into()),
