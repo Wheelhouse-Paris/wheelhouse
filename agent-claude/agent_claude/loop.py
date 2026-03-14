@@ -240,6 +240,7 @@ async def _handle_text_message(
             user_message=message.content,
             msg_type="TextMessage",
             stream_name=stream_name,
+            conversation_id=message.user_id or stream_name,
         )
     )
     _pending_tasks.add(task)

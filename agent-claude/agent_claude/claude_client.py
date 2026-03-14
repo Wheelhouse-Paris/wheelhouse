@@ -5,7 +5,10 @@ uses the user's Claude Max subscription via OAuth, without requiring
 a direct Anthropic API key.
 
 Authentication: set CLAUDE_CODE_OAUTH_TOKEN in the container environment
-(via `wh secrets set CLAUDE_CODE_OAUTH_TOKEN <token>`).
+(via `wh secrets init`).
+
+Session continuity: each conversation_id (typically user_id) gets its own
+persistent Claude Code session, resumed via --resume <session_id>.
 """
 
 from __future__ import annotations
@@ -35,16 +38,17 @@ class CompletionResult:
 class ClaudeClient:
     """Calls `claude -p --output-format json` as a subprocess.
 
-    Each call spawns a fresh `claude` process. The system prompt (persona)
-    is injected via --append-system-prompt. No session is persisted between
-    calls so the persona is always applied fresh.
+    Maintains per-conversation sessions via --resume <session_id> so each
+    user gets persistent conversation history. The persona (system prompt)
+    is injected via --append-system-prompt on the first turn only; resumed
+    sessions inherit the conversation context from Claude Code's session store.
 
-    Authentication uses CLAUDE_CODE_OAUTH_TOKEN env var or the credentials
-    stored in ~/.claude/ inside the container.
+    Authentication uses CLAUDE_CODE_OAUTH_TOKEN env var.
     """
 
     def __init__(self) -> None:
-        pass  # auth is handled by the claude CLI itself
+        # conversation_id (e.g. user_id) -> claude session_id
+        self._sessions: dict[str, str] = {}
 
     async def complete(
         self,
@@ -54,33 +58,39 @@ class ClaudeClient:
         timeout: float = 60.0,
         msg_type: str = "unknown",
         stream_name: str = "unknown",
+        conversation_id: str = "default",
     ) -> CompletionResult | None:
         """Run `claude -p --output-format json` and return the result.
 
+        On the first call for a conversation_id, injects the system prompt via
+        --append-system-prompt and starts a new session. Subsequent calls use
+        --resume <session_id> to continue the same conversation.
+
         Args:
-            system_prompt: Persona content appended to Claude's system prompt.
+            system_prompt: Persona content — injected only on first turn.
             user_message: The user turn content.
             timeout: Maximum seconds to wait for the subprocess.
-            msg_type: Message type for logging (TextMessage, CronEvent, etc.).
+            msg_type: Message type for logging.
             stream_name: Stream name for logging.
+            conversation_id: Key for session continuity (typically user_id).
 
         Returns:
             CompletionResult with the response text, or None on timeout/error.
-            Token counts are 0 — not reported by the CLI.
 
         Raises:
             ClaudeAuthError: If the CLI reports an authentication failure.
         """
         start_time = time.monotonic()
+        session_id = self._sessions.get(conversation_id)
 
-        cmd = [
-            "claude", "-p",
-            "--output-format", "json",
-            "--dangerously-skip-permissions",
-            "--no-session-persistence",
-            "--append-system-prompt", system_prompt,
-            user_message,
-        ]
+        cmd = ["claude", "-p", "--output-format", "json", "--dangerously-skip-permissions"]
+
+        if session_id:
+            cmd += ["--resume", session_id]
+        else:
+            cmd += ["--append-system-prompt", system_prompt]
+
+        cmd.append(user_message)
 
         def _call() -> Any:
             import os
@@ -89,11 +99,11 @@ class ClaudeClient:
             return subprocess.run(
                 cmd,
                 capture_output=True,
-                stdin=subprocess.DEVNULL,  # prevent blocking on interactive prompts
+                stdin=subprocess.DEVNULL,
                 text=True,
                 timeout=timeout,
                 env=env,
-                cwd="/tmp",  # neutral cwd — avoids workspace trust/analysis delays
+                cwd="/tmp",
             )
 
         try:
@@ -104,8 +114,8 @@ class ClaudeClient:
         except (asyncio.TimeoutError, subprocess.TimeoutExpired):
             elapsed = time.monotonic() - start_time
             logger.error(
-                "claude -p timed out: type=%s stream=%s elapsed=%.1fs",
-                msg_type, stream_name, elapsed,
+                "claude -p timed out: type=%s stream=%s conv=%s elapsed=%.1fs",
+                msg_type, stream_name, conversation_id, elapsed,
             )
             return None
 
@@ -119,8 +129,8 @@ class ClaudeClient:
                     "-- check CLAUDE_CODE_OAUTH_TOKEN"
                 )
             logger.warning(
-                "claude -p failed: type=%s stream=%s elapsed=%.1fs rc=%d stderr=%s",
-                msg_type, stream_name, elapsed, proc.returncode, stderr[:200],
+                "claude -p failed: type=%s stream=%s conv=%s elapsed=%.1fs rc=%d stderr=%s",
+                msg_type, stream_name, conversation_id, elapsed, proc.returncode, stderr[:200],
             )
             return None
 
@@ -141,14 +151,25 @@ class ClaudeClient:
                     "-- check CLAUDE_CODE_OAUTH_TOKEN"
                 )
             logger.warning(
-                "claude -p error result: type=%s stream=%s error=%s",
-                msg_type, stream_name, error_msg[:200],
+                "claude -p error result: type=%s stream=%s conv=%s error=%s",
+                msg_type, stream_name, conversation_id, error_msg[:200],
             )
             return None
 
+        # Store session_id for conversation continuity
+        new_session_id = data.get("session_id")
+        if new_session_id and new_session_id != session_id:
+            self._sessions[conversation_id] = new_session_id
+            logger.debug(
+                "claude -p session %s: conv=%s",
+                "started" if not session_id else "rotated",
+                conversation_id,
+            )
+
         text = data.get("result", "")
         logger.debug(
-            "claude -p completed: type=%s stream=%s elapsed=%.1fs chars=%d",
-            msg_type, stream_name, elapsed, len(text),
+            "claude -p completed: type=%s stream=%s conv=%s elapsed=%.1fs chars=%d session=%s",
+            msg_type, stream_name, conversation_id, elapsed, len(text),
+            "resumed" if session_id else "new",
         )
         return CompletionResult(text=text, input_tokens=0, output_tokens=0)
