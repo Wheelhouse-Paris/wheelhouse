@@ -396,20 +396,19 @@ pub fn destroy(
         }
     }
 
-    // Stop and remove all surface containers
+    // Stop all surface native processes
     let mut surfaces_destroyed_count: usize = 0;
     for surface_def in &topology.surfaces {
-        let name = podman::surface_container_name(&topology.name, &surface_def.name);
-        match podman::podman_stop(&name) {
+        match podman::kill_surface_process(&topology.name, &surface_def.name) {
             Ok(()) => {
                 surfaces_destroyed_count += 1;
-                tracing::info!(surface = %surface_def.name, "surface container destroyed");
+                tracing::info!(surface = %surface_def.name, "surface process stopped");
             }
             Err(e) => {
                 tracing::error!(
                     surface = %surface_def.name,
                     error = %e,
-                    "failed to stop surface container during destroy — continuing"
+                    "failed to stop surface process during destroy — continuing"
                 );
                 surfaces_destroyed_count += 1;
             }

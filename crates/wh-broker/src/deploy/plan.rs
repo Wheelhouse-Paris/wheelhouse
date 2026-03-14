@@ -316,7 +316,6 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                 from: None,
                 to: Some(serde_json::json!({
                     "kind": surface.kind,
-                    "image": surface.image,
                     "stream": surface.stream,
                 })),
             });
@@ -346,15 +345,6 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("stream".to_string()),
                     from: Some(serde_json::json!(current_surface.stream)),
                     to: Some(serde_json::json!(desired_surface.stream)),
-                });
-            }
-            if current_surface.image != desired_surface.image {
-                changes.push(Change {
-                    op: "~".to_string(),
-                    component: format!("surface {name}"),
-                    field: Some("image".to_string()),
-                    from: Some(serde_json::json!(current_surface.image)),
-                    to: Some(serde_json::json!(desired_surface.image)),
                 });
             }
             if current_surface.kind != desired_surface.kind {
@@ -1022,7 +1012,7 @@ mod tests {
         let wh_path = dir.path().join("topology.wh");
         std::fs::write(
             &wh_path,
-            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\nsurfaces:\n  - name: telegram\n    kind: telegram\n    image: wh-telegram:latest\n    stream: main\n",
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\nsurfaces:\n  - name: telegram\n    kind: telegram\n    stream: main\n",
         )
         .unwrap();
 
@@ -1063,7 +1053,6 @@ mod tests {
             surfaces: vec![Surface {
                 name: "telegram".to_string(),
                 kind: "telegram".to_string(),
-                image: "wh-telegram:latest".to_string(),
                 stream: "main".to_string(),
                 env: None,
             }],
@@ -1123,7 +1112,6 @@ mod tests {
             surfaces: vec![Surface {
                 name: "telegram".to_string(),
                 kind: "telegram".to_string(),
-                image: "wh-telegram:latest".to_string(),
                 stream: "main".to_string(),
                 env: None,
             }],
@@ -1135,11 +1123,11 @@ mod tests {
         )
         .unwrap();
 
-        // Desired state: surface connected to stream "alt" with new image
+        // Desired state: surface connected to stream "alt"
         let wh_path = dir.path().join("topology.wh");
         std::fs::write(
             &wh_path,
-            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\n  - name: alt\nsurfaces:\n  - name: telegram\n    kind: telegram\n    image: wh-telegram:v2\n    stream: alt\n",
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\n  - name: alt\nsurfaces:\n  - name: telegram\n    kind: telegram\n    stream: alt\n",
         )
         .unwrap();
 
@@ -1152,15 +1140,13 @@ mod tests {
             .iter()
             .filter(|c| c.component == "surface telegram")
             .collect();
-        // Should have both stream and image modifications
         assert!(
-            surface_changes.len() >= 2,
-            "expected at least 2 surface changes (stream + image), got: {:?}",
+            !surface_changes.is_empty(),
+            "expected surface change, got: {:?}",
             surface_changes
         );
         let fields: Vec<_> = surface_changes.iter().filter_map(|c| c.field.as_deref()).collect();
         assert!(fields.contains(&"stream"), "should detect stream change");
-        assert!(fields.contains(&"image"), "should detect image change");
     }
 
     #[test]
@@ -1189,7 +1175,6 @@ mod tests {
             surfaces: vec![Surface {
                 name: "telegram".to_string(),
                 kind: "telegram".to_string(),
-                image: "wh-telegram:latest".to_string(),
                 stream: "main".to_string(),
                 env: Some(std::collections::BTreeMap::from([
                     ("TELEGRAM_BOT_TOKEN".to_string(), "old-token".to_string()),
@@ -1207,7 +1192,7 @@ mod tests {
         let wh_path = dir.path().join("topology.wh");
         std::fs::write(
             &wh_path,
-            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\nsurfaces:\n  - name: telegram\n    kind: telegram\n    image: wh-telegram:latest\n    stream: main\n    env:\n      TELEGRAM_BOT_TOKEN: new-token\n",
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\nsurfaces:\n  - name: telegram\n    kind: telegram\n    stream: main\n    env:\n      TELEGRAM_BOT_TOKEN: new-token\n",
         )
         .unwrap();
 

@@ -118,17 +118,16 @@ pub struct Stream {
 /// A surface declaration within a topology.
 ///
 /// Surfaces connect external channels (Telegram, CLI, etc.) to streams.
-/// Each surface is provisioned as a Podman container alongside agents.
+/// Each surface is provisioned as a native process (not a container).
+/// The binary is resolved from `kind`: `kind: telegram` → `wh-telegram`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Surface {
     pub name: String,
     /// Surface type: "telegram" or "cli".
     pub kind: String,
-    /// Container image reference (e.g., `ghcr.io/wheelhouse-paris/wh-telegram:latest`).
-    pub image: String,
     /// Stream name this surface connects to.
     pub stream: String,
-    /// Optional environment variables passed to the surface container.
+    /// Optional environment variables passed to the surface process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::BTreeMap<String, String>>,
 }
@@ -488,18 +487,15 @@ streams:
 surfaces:
   - name: telegram
     kind: telegram
-    image: wh-telegram:latest
     stream: main
   - name: cli
     kind: cli
-    image: wh-cli:latest
     stream: main
 "#;
         let topo = parse_topology(yaml).unwrap();
         assert_eq!(topo.surfaces.len(), 2);
         assert_eq!(topo.surfaces[0].name, "telegram");
         assert_eq!(topo.surfaces[0].kind, "telegram");
-        assert_eq!(topo.surfaces[0].image, "wh-telegram:latest");
         assert_eq!(topo.surfaces[0].stream, "main");
         assert_eq!(topo.surfaces[1].name, "cli");
     }
@@ -512,7 +508,6 @@ name: dev
 surfaces:
   - name: telegram
     kind: telegram
-    image: wh-telegram:latest
     stream: main
     env:
       TELEGRAM_BOT_TOKEN: "tok123"
@@ -548,14 +543,12 @@ agents:
                 Surface {
                     name: "zeta-surface".to_string(),
                     kind: "cli".to_string(),
-                    image: "cli:latest".to_string(),
                     stream: "main".to_string(),
                     env: None,
                 },
                 Surface {
                     name: "alpha-surface".to_string(),
                     kind: "telegram".to_string(),
-                    image: "tg:latest".to_string(),
                     stream: "main".to_string(),
                     env: None,
                 },

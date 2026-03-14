@@ -294,13 +294,91 @@ pub fn container_name(topology_name: &str, agent_name: &str) -> String {
     format!("wh-{topo}-{agent}")
 }
 
-/// Build the deterministic container name for a surface.
+/// Path to the PID file for a surface process.
 ///
-/// Format: `wh-<topology>-surface-<name>`
-pub fn surface_container_name(topology_name: &str, surface_name: &str) -> String {
+/// Format: `~/.wh/pids/<topology>-<surface>.pid`
+fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let topo = sanitize_name(topology_name);
-    let surface = sanitize_name(surface_name);
-    format!("wh-{topo}-surface-{surface}")
+    let surf = sanitize_name(surface_name);
+    home.join(".wh").join("pids").join(format!("{topo}-{surf}.pid"))
+}
+
+/// Resolve the binary name for a surface kind.
+///
+/// `kind: telegram` → `wh-telegram`, etc.
+fn binary_for_surface_kind(kind: &str) -> String {
+    format!("wh-{kind}")
+}
+
+/// Spawn a surface as a native process and record its PID.
+#[tracing::instrument(skip_all, fields(surface = surface_name, kind = kind))]
+pub fn spawn_surface_process(
+    topology_name: &str,
+    surface_name: &str,
+    kind: &str,
+    surface_env: &[(String, String)],
+) -> Result<(), DeployError> {
+    let binary = binary_for_surface_kind(kind);
+    let pid_path = surface_pid_path(topology_name, surface_name);
+
+    if let Some(parent) = pid_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| DeployError::ApplyFailed(format!("failed to create pids dir: {e}")))?;
+    }
+
+    let log_path = pid_path.with_extension("log");
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| DeployError::ApplyFailed(format!("failed to create log file: {e}")))?;
+    let log_stderr = log_file
+        .try_clone()
+        .map_err(|e| DeployError::ApplyFailed(format!("failed to clone log fd: {e}")))?;
+
+    let mut cmd = Command::new(&binary);
+    cmd.env("WH_URL", DEFAULT_BROKER_URL);
+    for (key, value) in surface_env {
+        cmd.env(key, value);
+    }
+    cmd.stdout(log_file).stderr(log_stderr);
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| DeployError::PodmanFailed(format!("failed to spawn {binary}: {e}")))?;
+
+    let pid = child.id();
+    std::fs::write(&pid_path, pid.to_string())
+        .map_err(|e| DeployError::ApplyFailed(format!("failed to write pid file: {e}")))?;
+
+    tracing::info!(pid, binary = %binary, "surface process started");
+    Ok(())
+}
+
+/// Stop a surface native process using its PID file.
+///
+/// Sends SIGTERM; removes the PID file regardless of outcome.
+/// No-op if no PID file exists.
+pub fn kill_surface_process(
+    topology_name: &str,
+    surface_name: &str,
+) -> Result<(), DeployError> {
+    let pid_path = surface_pid_path(topology_name, surface_name);
+
+    if !pid_path.exists() {
+        return Ok(());
+    }
+
+    let pid_str = std::fs::read_to_string(&pid_path)
+        .map_err(|e| DeployError::ApplyFailed(format!("failed to read pid file: {e}")))?;
+    let pid: u32 = pid_str
+        .trim()
+        .parse()
+        .map_err(|e| DeployError::ApplyFailed(format!("invalid pid: {e}")))?;
+
+    let _ = Command::new("kill").arg(pid.to_string()).output();
+    std::fs::remove_file(&pid_path).ok();
+
+    tracing::info!(pid, surface = %surface_name, "surface process stopped");
+    Ok(())
 }
 
 /// Run a podman command with the given timeout.
@@ -443,67 +521,6 @@ pub fn podman_run(
     tracing::info!("starting agent container");
     run_podman_checked(podman, &args_ref, PODMAN_RUN_TIMEOUT)?;
     tracing::info!("agent container started");
-    Ok(())
-}
-
-/// Build command arguments for `podman run` for a **surface** container.
-///
-/// Uses `surface_container_name()` for the `--name` argument, ensuring
-/// naming symmetry between start and stop paths (code review fix H3).
-pub fn build_surface_run_args(
-    topology_name: &str,
-    surface_name: &str,
-    image: &str,
-    broker_url: Option<&str>,
-    extra_env: &[(String, String)],
-) -> Vec<String> {
-    let name = surface_container_name(topology_name, surface_name);
-    let url = broker_url.unwrap_or(DEFAULT_BROKER_URL);
-
-    let mut args = vec![
-        "run".to_string(),
-        "-d".to_string(),
-        "--name".to_string(),
-        name,
-        "-e".to_string(),
-        format!("WH_URL={url}"),
-    ];
-
-    // Inject caller-provided env vars (WH_SURFACE_NAME, WH_STREAM, secrets, surface env)
-    for (key, value) in extra_env {
-        args.push("-e".to_string());
-        args.push(format!("{key}={value}"));
-    }
-
-    args.push(image.to_string());
-    args
-}
-
-/// Start a surface container via Podman.
-///
-/// Uses `surface_container_name()` for naming symmetry with `podman_stop()`.
-/// Timeout: 120s (image pull may be slow on first run).
-#[tracing::instrument(skip_all, fields(surface = surface_name, topology = topology_name))]
-pub fn podman_run_surface(
-    topology_name: &str,
-    surface_name: &str,
-    image: &str,
-    broker_url: Option<&str>,
-    extra_env: &[(String, String)],
-) -> Result<(), DeployError> {
-    let podman = find_podman()?;
-    let args = build_surface_run_args(
-        topology_name,
-        surface_name,
-        image,
-        broker_url,
-        extra_env,
-    );
-    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-
-    tracing::info!("starting surface container");
-    run_podman_checked(podman, &args_ref, PODMAN_RUN_TIMEOUT)?;
-    tracing::info!("surface container started");
     Ok(())
 }
 
@@ -680,33 +697,26 @@ pub fn provision_containers(
     };
 
     for change in changes {
-        // Surface changes — handle container lifecycle for surfaces.
+        // Surface changes — spawn/stop native process.
         if let Some(surface_name) = parse_surface_name(&change.component) {
-            let Some(surface) = surfaces.iter().find(|s| s.name == surface_name) else {
-                if change.op != "-" {
-                    tracing::warn!(
+            if change.op == "-" {
+                match kill_surface_process(topology_name, surface_name) {
+                    Ok(()) => result.surfaces_destroyed += 1,
+                    Err(e) => tracing::error!(
                         surface = %surface_name,
-                        "surface not found in topology — skipping"
-                    );
+                        error = %e,
+                        "failed to stop surface process — retry with `wh deploy apply`"
+                    ),
                 }
-                if change.op == "-" {
-                    // For removals, stop the surface container
-                    let name = surface_container_name(topology_name, surface_name);
-                    match podman_stop(&name) {
-                        Ok(()) => result.surfaces_destroyed += 1,
-                        Err(e) => {
-                            tracing::error!(
-                                surface = %surface_name,
-                                error = %e,
-                                "failed to stop surface container — retry with `wh deploy apply`"
-                            );
-                        }
-                    }
-                }
+                continue;
+            }
+
+            let Some(surface) = surfaces.iter().find(|s| s.name == surface_name) else {
+                tracing::warn!(surface = %surface_name, "surface not found in topology — skipping");
                 continue;
             };
 
-            // Merge surface env with extra_env (surface env takes precedence)
+            // Build env: extra_env + WH_SURFACE_NAME + WH_STREAM + surface-specific env
             let mut surface_env = extra_env.to_vec();
             surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
             surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
@@ -718,54 +728,24 @@ pub fn provision_containers(
 
             match change.op.as_str() {
                 "+" => {
-                    match podman_run_surface(
-                        topology_name,
-                        &surface.name,
-                        &surface.image,
-                        Some(CONTAINER_BROKER_URL),
-                        &surface_env,
-                    ) {
+                    match spawn_surface_process(topology_name, &surface.name, &surface.kind, &surface_env) {
                         Ok(()) => result.surfaces_created += 1,
-                        Err(e) => {
-                            tracing::error!(
-                                surface = %surface.name,
-                                error = %e,
-                                "failed to start surface container — retry with `wh deploy apply`"
-                            );
-                        }
-                    }
-                }
-                "-" => {
-                    let name = surface_container_name(topology_name, &surface.name);
-                    match podman_stop(&name) {
-                        Ok(()) => result.surfaces_destroyed += 1,
-                        Err(e) => {
-                            tracing::error!(
-                                surface = %surface.name,
-                                error = %e,
-                                "failed to stop surface container — retry with `wh deploy apply`"
-                            );
-                        }
+                        Err(e) => tracing::error!(
+                            surface = %surface.name,
+                            error = %e,
+                            "failed to start surface process — retry with `wh deploy apply`"
+                        ),
                     }
                 }
                 "~" => {
-                    let name = surface_container_name(topology_name, &surface.name);
-                    let _ = podman_stop(&name);
-                    match podman_run_surface(
-                        topology_name,
-                        &surface.name,
-                        &surface.image,
-                        Some(CONTAINER_BROKER_URL),
-                        &surface_env,
-                    ) {
+                    let _ = kill_surface_process(topology_name, &surface.name);
+                    match spawn_surface_process(topology_name, &surface.name, &surface.kind, &surface_env) {
                         Ok(()) => result.surfaces_changed += 1,
-                        Err(e) => {
-                            tracing::error!(
-                                surface = %surface.name,
-                                error = %e,
-                                "failed to restart surface container — retry with `wh deploy apply`"
-                            );
-                        }
+                        Err(e) => tracing::error!(
+                            surface = %surface.name,
+                            error = %e,
+                            "failed to restart surface process — retry with `wh deploy apply`"
+                        ),
                     }
                 }
                 _ => {}
@@ -1027,8 +1007,8 @@ mod tests {
         assert_eq!(parse_agent_name("something else"), None);
     }
 
-    #[test]
-    fn provision_containers_skips_stream_changes() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn provision_containers_skips_stream_changes() {
         let changes = vec![Change {
             op: "+".to_string(),
             component: "stream main".to_string(),
@@ -1098,23 +1078,16 @@ mod tests {
     }
 
     #[test]
-    fn surface_container_name_formats_correctly() {
-        assert_eq!(
-            surface_container_name("dev", "telegram"),
-            "wh-dev-surface-telegram"
-        );
-        assert_eq!(
-            surface_container_name("my-app", "cli"),
-            "wh-my-app-surface-cli"
-        );
+    fn surface_pid_path_formats_correctly() {
+        let path = surface_pid_path("dev", "telegram");
+        assert!(path.to_string_lossy().contains("dev-telegram.pid"));
+        assert!(path.to_string_lossy().contains(".wh/pids"));
     }
 
     #[test]
-    fn surface_container_name_sanitizes_special_chars() {
-        assert_eq!(
-            surface_container_name("my app", "tg.bot"),
-            "wh-my-app-surface-tg-bot"
-        );
+    fn binary_for_surface_kind_returns_wh_prefix() {
+        assert_eq!(binary_for_surface_kind("telegram"), "wh-telegram");
+        assert_eq!(binary_for_surface_kind("cli"), "wh-cli");
     }
 
     #[test]
@@ -1152,44 +1125,6 @@ mod tests {
     }
 
     #[test]
-    fn build_surface_run_args_uses_surface_container_name() {
-        let args = build_surface_run_args(
-            "dev",
-            "telegram",
-            "wh-telegram:latest",
-            None,
-            &[
-                ("WH_SURFACE_NAME".to_string(), "telegram".to_string()),
-                ("WH_STREAM".to_string(), "main".to_string()),
-                ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
-            ],
-        );
-        // --name must use surface_container_name format
-        assert_eq!(args[3], "wh-dev-surface-telegram");
-        // Should contain WH_URL
-        assert_eq!(args[5], "WH_URL=tcp://127.0.0.1:5555");
-        // Should contain all env vars including surface-specific ones
-        let env_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        assert!(
-            env_args.contains(&"WH_SURFACE_NAME=telegram"),
-            "should pass WH_SURFACE_NAME: {:?}",
-            args
-        );
-        assert!(
-            env_args.contains(&"WH_STREAM=main"),
-            "should pass WH_STREAM: {:?}",
-            args
-        );
-        assert!(
-            env_args.contains(&"TELEGRAM_BOT_TOKEN=tok123"),
-            "should pass surface-specific env: {:?}",
-            args
-        );
-        // Image should be the last arg
-        assert_eq!(args.last().unwrap(), "wh-telegram:latest");
-    }
-
-    #[test]
     fn surface_env_merge_includes_spec_entries() {
         // Simulate the env merge logic from provision_containers
         let extra_env: Vec<(String, String)> = vec![
@@ -1198,7 +1133,6 @@ mod tests {
         let surface = crate::deploy::Surface {
             name: "telegram".to_string(),
             kind: "telegram".to_string(),
-            image: "wh-telegram:latest".to_string(),
             stream: "main".to_string(),
             env: Some(std::collections::BTreeMap::from([
                 ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
