@@ -17,14 +17,14 @@ fn ac1_rerun_shows_already_configured_status() {
     // Given: I run `wh secrets init` when credentials are already configured (via env var)
     // When: the wizard starts
     // Then: already-configured secrets show CredentialStatus::DetectedFromEnv
-    std::env::set_var("ANTHROPIC_API_KEY", "test-key-ac1");
-    let status = wh_cli::commands::secrets::check_credential_status("anthropic_api_key");
+    std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-ac1");
+    let status = wh_cli::commands::secrets::check_credential_status("claude_code_oauth_token");
     assert!(
         matches!(status, Some(CredentialStatus::DetectedFromEnv)),
         "Expected DetectedFromEnv status, got {:?}",
         status
     );
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn ac1_all_configured_message_in_json() {
         },
         credentials: vec![
             CredentialResult {
-                name: "anthropic_api_key".to_string(),
+                name: "claude_code_oauth_token".to_string(),
                 display_name: "Claude API key".to_string(),
                 required: true,
                 status: CredentialStatus::DetectedFromEnv,
@@ -134,14 +134,14 @@ fn ac2_podman_detected_has_no_install_hint() {
 
 #[test]
 fn ac3_read_secret_returns_env_var_value() {
-    // Given: ANTHROPIC_API_KEY is set as an environment variable
-    // When: read_secret("anthropic_api_key") is called
+    // Given: CLAUDE_CODE_OAUTH_TOKEN is set as an environment variable
+    // When: read_secret("claude_code_oauth_token") is called
     // Then: it returns the env var value
-    std::env::set_var("ANTHROPIC_API_KEY", "test-key-ac3");
-    let result = wh_cli::commands::secrets::read_secret("anthropic_api_key");
+    std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-ac3");
+    let result = wh_cli::commands::secrets::read_secret("claude_code_oauth_token");
     assert!(result.is_ok(), "Expected Ok, got {:?}", result);
-    assert_eq!(result.unwrap(), "test-key-ac3");
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    assert_eq!(result.unwrap(), "oauth-token-ac3");
+    std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
 }
 
 #[test]
@@ -181,13 +181,13 @@ fn ac3_read_secret_error_suggests_secrets_init() {
 
 #[test]
 fn secrets_status_reports_env_detected() {
-    // Given: ANTHROPIC_API_KEY is set
+    // Given: CLAUDE_CODE_OAUTH_TOKEN is set
     // When: credential status is checked
     // Then: it reports the credential as detected from env
-    std::env::set_var("ANTHROPIC_API_KEY", "test-key-status");
-    let status = wh_cli::commands::secrets::check_credential_status("anthropic_api_key");
+    std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-status");
+    let status = wh_cli::commands::secrets::check_credential_status("claude_code_oauth_token");
     assert!(matches!(status, Some(CredentialStatus::DetectedFromEnv)));
-    std::env::remove_var("ANTHROPIC_API_KEY");
+    std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn secrets_status_json_never_contains_secret_values() {
     // When: status JSON is generated
     // Then: the actual secret values never appear
     let result = CredentialResult {
-        name: "anthropic_api_key".to_string(),
+        name: "claude_code_oauth_token".to_string(),
         display_name: "Claude API key".to_string(),
         required: true,
         status: CredentialStatus::DetectedFromEnv,
@@ -242,6 +242,6 @@ fn json_output_snake_case_for_new_fields() {
 fn credential_registry_unchanged() {
     // The MVP credential registry still has exactly 2 entries
     assert_eq!(CREDENTIALS.len(), 2);
-    assert_eq!(CREDENTIALS[0].env_var, "ANTHROPIC_API_KEY");
+    assert_eq!(CREDENTIALS[0].env_var, "CLAUDE_CODE_OAUTH_TOKEN");
     assert_eq!(CREDENTIALS[1].env_var, "TELEGRAM_BOT_TOKEN");
 }

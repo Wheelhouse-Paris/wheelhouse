@@ -367,7 +367,7 @@ fn run_podman_checked(
 /// When `persona_path` is provided, adds a read-only volume mount and
 /// `WH_PERSONA_PATH` environment variable for persona files.
 /// `extra_env` is a list of additional `(KEY, VALUE)` pairs injected as `-e` flags
-/// (used to pass secrets like `ANTHROPIC_API_KEY` from the CLI keychain).
+/// (used to pass secrets like `CLAUDE_CODE_OAUTH_TOKEN` from the CLI keychain).
 pub fn build_run_args(
     topology_name: &str,
     agent_name: &str,
@@ -394,7 +394,7 @@ pub fn build_run_args(
         format!("WH_STREAMS={streams_csv}"),
     ];
 
-    // Inject caller-provided secrets/env vars (e.g. ANTHROPIC_API_KEY)
+    // Inject caller-provided secrets/env vars (e.g. CLAUDE_CODE_OAUTH_TOKEN)
     for (key, value) in extra_env {
         args.push("-e".to_string());
         args.push(format!("{key}={value}"));
@@ -611,7 +611,7 @@ fn resolve_persona_path(
 /// Returns an `ApplyResult` with change counts.
 ///
 /// `extra_env` is injected into every container as additional `-e` flags.
-/// Used to pass secrets (e.g. `ANTHROPIC_API_KEY`) read from the CLI keychain.
+/// Used to pass secrets (e.g. `CLAUDE_CODE_OAUTH_TOKEN`) read from the CLI keychain.
 ///
 /// When an agent has a `persona` path configured, persona files are
 /// validated before container startup and MEMORY.md is initialized
@@ -1193,7 +1193,7 @@ mod tests {
     fn surface_env_merge_includes_spec_entries() {
         // Simulate the env merge logic from provision_containers
         let extra_env: Vec<(String, String)> = vec![
-            ("ANTHROPIC_API_KEY".to_string(), "sk-ant-xxx".to_string()),
+            ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "oauth-token-xxx".to_string()),
         ];
         let surface = crate::deploy::Surface {
             name: "telegram".to_string(),
@@ -1218,7 +1218,7 @@ mod tests {
 
         // Verify all expected env vars are present
         let keys: Vec<&str> = surface_env.iter().map(|(k, _)| k.as_str()).collect();
-        assert!(keys.contains(&"ANTHROPIC_API_KEY"), "should carry over extra_env");
+        assert!(keys.contains(&"CLAUDE_CODE_OAUTH_TOKEN"), "should carry over extra_env");
         assert!(keys.contains(&"WH_SURFACE_NAME"), "should inject WH_SURFACE_NAME");
         assert!(keys.contains(&"WH_STREAM"), "should inject WH_STREAM");
         assert!(keys.contains(&"TELEGRAM_BOT_TOKEN"), "should include surface spec env");

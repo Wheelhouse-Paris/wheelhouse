@@ -1,6 +1,5 @@
 # agent-claude Dockerfile — Two-stage build per ADR-016
 # Base image: python:3.12-slim (Debian Bookworm) per ADR-015
-# SHA-pinned per AC-12 / SA-01
 
 # Stage 1: dependency installer
 FROM python:3.12-slim AS builder
@@ -22,13 +21,34 @@ COPY agent-claude/agent_claude/ ./agent-claude/agent_claude/
 # Install dependencies via uv (no cache in builder)
 RUN cd agent-claude && uv pip install --system --no-cache .
 
-# Stage 2: runtime image (no uv, no dev tools)
+# Stage 2: runtime image
 FROM python:3.12-slim
 
 ARG GIT_SHA=unknown
 ARG VERSION=0.1.0
 
-# Copy installed packages from builder
+# Install Node.js (required for Claude Code CLI)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        ca-certificates \
+        gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get purge -y gnupg \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (uses Max subscription via CLAUDE_CODE_OAUTH_TOKEN)
+RUN npm install -g @anthropic-ai/claude-code
+ENV CLAUDE_DISABLE_AUTO_UPDATES=1
+
+# Copy installed Python packages from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
 # Copy application code

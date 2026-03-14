@@ -22,21 +22,21 @@ logger = logging.getLogger("agent_claude")
 
 # Default values per ADR-018
 DEFAULT_PERSONA_PATH = "/persona"
-DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
 
 
 def validate_env() -> dict[str, Any]:
     """Validate all required environment variables.
 
     Required (ADR-018):
-      - ANTHROPIC_API_KEY
       - WH_URL
       - WH_AGENT_NAME
       - WH_STREAMS
 
     Optional with defaults:
       - WH_PERSONA_PATH (default: /persona)
-      - CLAUDE_MODEL (default: claude-3-5-sonnet-20241022)
+
+    Authentication is handled by the `claude` CLI (CLAUDE_CODE_OAUTH_TOKEN
+    env var or credentials in ~/.claude/ inside the container).
 
     Returns:
         Configuration dict with parsed values.
@@ -44,14 +44,6 @@ def validate_env() -> dict[str, Any]:
     Raises:
         AgentConfigError: If any required variable is missing or empty.
     """
-    # Check required vars -- absent OR empty both fail
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        raise AgentConfigError(
-            "agent-claude: ANTHROPIC_API_KEY is not set "
-            "-- set it via 'wh secrets init' or the ANTHROPIC_API_KEY environment variable"
-        )
-
     wh_url = os.environ.get("WH_URL", "").strip()
     if not wh_url:
         raise AgentConfigError(
@@ -82,15 +74,12 @@ def validate_env() -> dict[str, Any]:
 
     # Optional with defaults
     persona_path = os.environ.get("WH_PERSONA_PATH", DEFAULT_PERSONA_PATH).strip()
-    model = os.environ.get("CLAUDE_MODEL", DEFAULT_MODEL).strip()
 
     return {
-        "api_key": api_key,
         "wh_url": wh_url,
         "agent_name": agent_name,
         "streams": streams,
         "persona_path": persona_path,
-        "model": model,
     }
 
 

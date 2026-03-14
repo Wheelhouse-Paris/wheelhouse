@@ -61,11 +61,8 @@ async def _run() -> None:
         ", ".join(config["streams"]),
     )
 
-    # Initialize Claude API client (ADR-017)
-    claude_client = ClaudeClient(
-        api_key=config["api_key"],
-        model=config["model"],
-    )
+    # Initialize Claude Code CLI client
+    claude_client = ClaudeClient()
 
     # Run message processing loop (blocks until shutdown)
     await run_message_loop(

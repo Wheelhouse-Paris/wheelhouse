@@ -11,9 +11,9 @@ use crate::output::{OutputEnvelope, OutputFormat};
 /// Credential spec for a single secret that the wizard manages.
 #[derive(Debug, Clone)]
 pub struct CredentialSpec {
-    /// Internal name used as keychain service suffix (e.g., "anthropic_api_key").
+    /// Internal name used as keychain service suffix (e.g., "claude_code_oauth_token").
     pub name: &'static str,
-    /// Environment variable to check (e.g., "ANTHROPIC_API_KEY").
+    /// Environment variable to check (e.g., "CLAUDE_CODE_OAUTH_TOKEN").
     pub env_var: &'static str,
     /// Display name shown to users (e.g., "Claude API key").
     pub display_name: &'static str,
@@ -24,9 +24,9 @@ pub struct CredentialSpec {
 /// The MVP credential registry.
 pub const CREDENTIALS: &[CredentialSpec] = &[
     CredentialSpec {
-        name: "anthropic_api_key",
-        env_var: "ANTHROPIC_API_KEY",
-        display_name: "Claude API key",
+        name: "claude_code_oauth_token",
+        env_var: "CLAUDE_CODE_OAUTH_TOKEN",
+        display_name: "Claude Code OAuth token (run `claude setup-token` to generate)",
         required: true,
     },
     CredentialSpec {
@@ -582,10 +582,10 @@ mod tests {
     fn credential_registry_contains_expected_entries() {
         assert_eq!(CREDENTIALS.len(), 2);
 
-        let anthropic = &CREDENTIALS[0];
-        assert_eq!(anthropic.name, "anthropic_api_key");
-        assert_eq!(anthropic.env_var, "ANTHROPIC_API_KEY");
-        assert!(anthropic.required);
+        let claude = &CREDENTIALS[0];
+        assert_eq!(claude.name, "claude_code_oauth_token");
+        assert_eq!(claude.env_var, "CLAUDE_CODE_OAUTH_TOKEN");
+        assert!(claude.required);
 
         let telegram = &CREDENTIALS[1];
         assert_eq!(telegram.name, "telegram_bot_token");
@@ -658,7 +658,7 @@ mod tests {
             },
             credentials: vec![
                 CredentialResult {
-                    name: "anthropic_api_key".to_string(),
+                    name: "claude_code_oauth_token".to_string(),
                     display_name: "Claude API key".to_string(),
                     required: true,
                     status: CredentialStatus::DetectedFromEnv,
@@ -704,7 +704,7 @@ mod tests {
                 version: "2.43.0".to_string(),
             },
             credentials: vec![CredentialResult {
-                name: "anthropic_api_key".to_string(),
+                name: "claude_code_oauth_token".to_string(),
                 display_name: "Claude API key".to_string(),
                 required: true,
                 status: CredentialStatus::DetectedFromEnv,
@@ -751,11 +751,11 @@ mod tests {
     #[test]
     fn read_secret_returns_env_var() {
         // Use a unique env var name to avoid test interference.
-        std::env::set_var("ANTHROPIC_API_KEY", "test-read-secret-value");
-        let result = read_secret("anthropic_api_key");
+        std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "test-read-secret-value");
+        let result = read_secret("claude_code_oauth_token");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "test-read-secret-value");
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
     }
 
     #[test]
@@ -777,15 +777,15 @@ mod tests {
 
     #[test]
     fn check_credential_status_detects_env_var() {
-        std::env::set_var("ANTHROPIC_API_KEY", "test-check-status");
-        let status = check_credential_status("anthropic_api_key");
+        std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "test-check-status");
+        let status = check_credential_status("claude_code_oauth_token");
         assert!(matches!(status, Some(CredentialStatus::DetectedFromEnv)));
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
     }
 
     #[test]
     fn check_credential_status_returns_none_when_missing() {
-        std::env::remove_var("ANTHROPIC_API_KEY");
+        std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
         std::env::remove_var("TELEGRAM_BOT_TOKEN");
         // For keychain, we can't easily mock it, but if the test env has no keychain
         // entry for this credential, it should return None.
