@@ -55,9 +55,7 @@ impl TelegramConfig {
         })?;
 
         if wh_url.is_empty() {
-            return Err(TelegramError::ConfigError(
-                "WH_URL cannot be empty".into(),
-            ));
+            return Err(TelegramError::ConfigError("WH_URL cannot be empty".into()));
         }
 
         // Stream name: WH_STREAM (provisioning layer) > WH_TELEGRAM_STREAM (backward compat) > default
@@ -67,8 +65,8 @@ impl TelegramConfig {
 
         validate_stream_name(&stream_name)?;
 
-        let surface_name = std::env::var("WH_SURFACE_NAME")
-            .unwrap_or_else(|_| DEFAULT_SURFACE_NAME.to_string());
+        let surface_name =
+            std::env::var("WH_SURFACE_NAME").unwrap_or_else(|_| DEFAULT_SURFACE_NAME.to_string());
 
         Ok(Self {
             bot_token,

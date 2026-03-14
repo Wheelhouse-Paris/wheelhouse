@@ -469,7 +469,11 @@ pub fn destroy(
         summary_parts.push(format!(
             "removed {} surface{}",
             surfaces_destroyed_count,
-            if surfaces_destroyed_count == 1 { "" } else { "s" }
+            if surfaces_destroyed_count == 1 {
+                ""
+            } else {
+                "s"
+            }
         ));
     }
     let summary = if summary_parts.is_empty() {

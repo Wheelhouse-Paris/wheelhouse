@@ -456,7 +456,12 @@ pub fn read_secret(credential_name: &str) -> Result<String, WhError> {
 /// Returns `Some(token)` when the entry exists and contains a valid access token.
 fn try_read_claude_code_token() -> Option<String> {
     let output = Command::new("security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
         .output()
         .ok()?;
     if !output.status.success() {

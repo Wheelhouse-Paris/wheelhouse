@@ -54,23 +54,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Step 2: Connect ZMQ bridge to broker (AC-4: exit 1 on failure)
     let publisher_id = format!("surface-{}", config.surface_name());
-    let bridge = match ZmqBridge::connect(
-        config.wh_url(),
-        config.stream_name(),
-        &publisher_id,
-    )
-    .await
-    {
-        Ok(b) => b,
-        Err(e) => {
-            error!(error = %e, "failed to connect to broker");
-            eprintln!(
+    let bridge =
+        match ZmqBridge::connect(config.wh_url(), config.stream_name(), &publisher_id).await {
+            Ok(b) => b,
+            Err(e) => {
+                error!(error = %e, "failed to connect to broker");
+                eprintln!(
                 "wh-telegram: failed to connect to broker at {} -- is `wh broker start` running?",
                 config.wh_url()
             );
-            std::process::exit(1);
-        }
-    };
+                std::process::exit(1);
+            }
+        };
 
     // Split bridge into separate publisher/subscriber handles for concurrent use
     // without mutex contention (H1 fix).
@@ -80,14 +75,20 @@ async fn main() -> anyhow::Result<()> {
     let data_dir = std::env::var("WH_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     let user_store = UserStore::new(std::path::Path::new(&data_dir).join("users"));
     let chat_mapping_path = std::path::Path::new(&data_dir).join("telegram");
-    let chat_mapping = ChatMapping::new(&chat_mapping_path)
-        .unwrap_or_else(|e| {
-            error!(error = %e, path = %chat_mapping_path.display(), "failed to load chat mappings");
-            panic!("failed to create chat mapping at {}: {e}", chat_mapping_path.display());
-        });
+    let chat_mapping = ChatMapping::new(&chat_mapping_path).unwrap_or_else(|e| {
+        error!(error = %e, path = %chat_mapping_path.display(), "failed to load chat mappings");
+        panic!(
+            "failed to create chat mapping at {}: {e}",
+            chat_mapping_path.display()
+        );
+    });
 
     // Step 4: Create Telegram surface
-    let surface = Arc::new(TelegramSurface::new(config.clone(), user_store, chat_mapping));
+    let surface = Arc::new(TelegramSurface::new(
+        config.clone(),
+        user_store,
+        chat_mapping,
+    ));
     let outbound_rx = surface.take_outbound_rx();
 
     // Step 5: Create Telegram bot
@@ -192,22 +193,17 @@ async fn main() -> anyhow::Result<()> {
     // Run teloxide dispatcher with cancellation support
     // Note: we do NOT call .enable_ctrlc_handler() because we have our own
     // signal handler above that cancels the CancellationToken (H2 fix).
-    let handler = Update::filter_message().endpoint(
-        move |bot: Bot, msg: Message| {
-            let surface = dispatcher_surface.clone();
-            async move {
-                if let Err(e) = surface.handle_incoming(&bot, &msg).await {
-                    surface
-                        .send_error_to_user(&bot, msg.chat.id.0, &e)
-                        .await;
-                }
-                respond(())
+    let handler = Update::filter_message().endpoint(move |bot: Bot, msg: Message| {
+        let surface = dispatcher_surface.clone();
+        async move {
+            if let Err(e) = surface.handle_incoming(&bot, &msg).await {
+                surface.send_error_to_user(&bot, msg.chat.id.0, &e).await;
             }
-        },
-    );
+            respond(())
+        }
+    });
 
-    let mut dispatcher = Dispatcher::builder(dispatcher_bot, handler)
-        .build();
+    let mut dispatcher = Dispatcher::builder(dispatcher_bot, handler).build();
 
     tokio::select! {
         biased;

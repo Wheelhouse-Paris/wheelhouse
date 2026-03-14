@@ -75,10 +75,7 @@ pub async fn run_broker(config: BrokerConfig) -> Result<(), BrokerError> {
                 skill_refs,
             );
 
-            tracing::info!(
-                skills_repo = skills_repo_path,
-                "skill routing enabled"
-            );
+            tracing::info!(skills_repo = skills_repo_path, "skill routing enabled");
             Some(router)
         } else {
             None
@@ -87,10 +84,8 @@ pub async fn run_broker(config: BrokerConfig) -> Result<(), BrokerError> {
         None
     };
 
-    let state = BrokerState::with_data_dir_and_skills(
-        config.data_dir().to_path_buf(),
-        skill_router_opt,
-    );
+    let state =
+        BrokerState::with_data_dir_and_skills(config.data_dir().to_path_buf(), skill_router_opt);
     let cancel = CancellationToken::new();
 
     // Load stream registry from disk (broker restart recovery)

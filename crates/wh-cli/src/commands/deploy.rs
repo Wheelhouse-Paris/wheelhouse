@@ -428,7 +428,10 @@ fn execute_destroy(
     // Output result
     match format {
         OutputFormat::Human => {
-            if destroy_result.destroyed == 0 && destroy_result.streams_removed == 0 && destroy_result.surfaces_destroyed == 0 {
+            if destroy_result.destroyed == 0
+                && destroy_result.streams_removed == 0
+                && destroy_result.surfaces_destroyed == 0
+            {
                 println!("Nothing to destroy. No components were deployed.");
             } else {
                 println!("{destroy_result}");

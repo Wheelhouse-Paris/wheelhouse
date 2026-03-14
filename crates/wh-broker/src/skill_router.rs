@@ -17,7 +17,7 @@ use tokio::sync::{mpsc, Mutex};
 use wh_proto::StreamEnvelope;
 use wh_skill::executor::SkillExecutorEvent;
 use wh_skill::invocation::{
-    build_skill_result_error, build_skill_result_success, build_skill_progress,
+    build_skill_progress, build_skill_result_error, build_skill_result_success,
     SkillInvocationOutcome, SkillInvocationRequest,
 };
 use wh_skill::{InvocationPipeline, SkillAllowlist, SkillRepository};
@@ -82,9 +82,7 @@ impl SkillRouter {
 
         let config = if !skill_refs.is_empty() {
             Some(wh_skill::config::SkillsConfig {
-                skills_repo: skills_repo_path
-                    .map(PathBuf::from)
-                    .unwrap_or_default(),
+                skills_repo: skills_repo_path.map(PathBuf::from).unwrap_or_default(),
                 skills: skill_refs,
             })
         } else {
@@ -220,13 +218,11 @@ impl SkillRouter {
                     outcome,
                 } => {
                     let result_proto = match outcome {
-                        SkillInvocationOutcome::Success { output } => {
-                            build_skill_result_success(
-                                &invocation_id,
-                                &invocation.skill_name,
-                                &output,
-                            )
-                        }
+                        SkillInvocationOutcome::Success { output } => build_skill_result_success(
+                            &invocation_id,
+                            &invocation.skill_name,
+                            &output,
+                        ),
                         SkillInvocationOutcome::Error {
                             error_code,
                             error_message,
@@ -260,10 +256,7 @@ impl SkillRouter {
 }
 
 /// Build a `StreamEnvelope` for a skill response message.
-pub fn build_response_envelope(
-    stream_name: &str,
-    response: &SkillResponse,
-) -> StreamEnvelope {
+pub fn build_response_envelope(stream_name: &str, response: &SkillResponse) -> StreamEnvelope {
     StreamEnvelope {
         stream_name: stream_name.to_string(),
         object_id: String::new(),
@@ -335,7 +328,9 @@ mod tests {
 
         // Should get exactly one SkillResult (error due to no repo, but still a result)
         assert!(!responses.is_empty());
-        let result_response = responses.iter().find(|r| r.type_url == TYPE_URL_SKILL_RESULT);
+        let result_response = responses
+            .iter()
+            .find(|r| r.type_url == TYPE_URL_SKILL_RESULT);
         assert!(result_response.is_some(), "should produce a SkillResult");
 
         let result =
@@ -390,7 +385,9 @@ mod tests {
 
         // Should get a result from the default pipeline (SKILL_FETCH_FAILED since no repo)
         assert!(!responses.is_empty());
-        let result_response = responses.iter().find(|r| r.type_url == TYPE_URL_SKILL_RESULT);
+        let result_response = responses
+            .iter()
+            .find(|r| r.type_url == TYPE_URL_SKILL_RESULT);
         assert!(result_response.is_some());
 
         let result =

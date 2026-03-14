@@ -301,7 +301,9 @@ fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let topo = sanitize_name(topology_name);
     let surf = sanitize_name(surface_name);
-    home.join(".wh").join("pids").join(format!("{topo}-{surf}.pid"))
+    home.join(".wh")
+        .join("pids")
+        .join(format!("{topo}-{surf}.pid"))
 }
 
 /// Resolve the binary name for a surface kind.
@@ -357,10 +359,7 @@ pub fn spawn_surface_process(
 ///
 /// Sends SIGTERM; removes the PID file regardless of outcome.
 /// No-op if no PID file exists.
-pub fn kill_surface_process(
-    topology_name: &str,
-    surface_name: &str,
-) -> Result<(), DeployError> {
+pub fn kill_surface_process(topology_name: &str, surface_name: &str) -> Result<(), DeployError> {
     let pid_path = surface_pid_path(topology_name, surface_name);
 
     if !pid_path.exists() {
@@ -649,9 +648,11 @@ pub fn provision_containers(
     // Count stream additions upfront — streams require no container operation.
     let streams_created = changes
         .iter()
-        .filter(|c| parse_agent_name(&c.component).is_none()
-            && parse_surface_name(&c.component).is_none()
-            && c.op == "+")
+        .filter(|c| {
+            parse_agent_name(&c.component).is_none()
+                && parse_surface_name(&c.component).is_none()
+                && c.op == "+"
+        })
         .count();
 
     // Ensure Podman is running before attempting any container operations.
@@ -728,7 +729,12 @@ pub fn provision_containers(
 
             match change.op.as_str() {
                 "+" => {
-                    match spawn_surface_process(topology_name, &surface.name, &surface.kind, &surface_env) {
+                    match spawn_surface_process(
+                        topology_name,
+                        &surface.name,
+                        &surface.kind,
+                        &surface_env,
+                    ) {
                         Ok(()) => result.surfaces_created += 1,
                         Err(e) => tracing::error!(
                             surface = %surface.name,
@@ -739,7 +745,12 @@ pub fn provision_containers(
                 }
                 "~" => {
                     let _ = kill_surface_process(topology_name, &surface.name);
-                    match spawn_surface_process(topology_name, &surface.name, &surface.kind, &surface_env) {
+                    match spawn_surface_process(
+                        topology_name,
+                        &surface.name,
+                        &surface.kind,
+                        &surface_env,
+                    ) {
                         Ok(()) => result.surfaces_changed += 1,
                         Err(e) => tracing::error!(
                             surface = %surface.name,
@@ -1127,9 +1138,10 @@ mod tests {
     #[test]
     fn surface_env_merge_includes_spec_entries() {
         // Simulate the env merge logic from provision_containers
-        let extra_env: Vec<(String, String)> = vec![
-            ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "oauth-token-xxx".to_string()),
-        ];
+        let extra_env: Vec<(String, String)> = vec![(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+            "oauth-token-xxx".to_string(),
+        )];
         let surface = crate::deploy::Surface {
             name: "telegram".to_string(),
             kind: "telegram".to_string(),
@@ -1152,11 +1164,23 @@ mod tests {
 
         // Verify all expected env vars are present
         let keys: Vec<&str> = surface_env.iter().map(|(k, _)| k.as_str()).collect();
-        assert!(keys.contains(&"CLAUDE_CODE_OAUTH_TOKEN"), "should carry over extra_env");
-        assert!(keys.contains(&"WH_SURFACE_NAME"), "should inject WH_SURFACE_NAME");
+        assert!(
+            keys.contains(&"CLAUDE_CODE_OAUTH_TOKEN"),
+            "should carry over extra_env"
+        );
+        assert!(
+            keys.contains(&"WH_SURFACE_NAME"),
+            "should inject WH_SURFACE_NAME"
+        );
         assert!(keys.contains(&"WH_STREAM"), "should inject WH_STREAM");
-        assert!(keys.contains(&"TELEGRAM_BOT_TOKEN"), "should include surface spec env");
-        assert!(keys.contains(&"CHAT_ID"), "should include all surface spec env entries");
+        assert!(
+            keys.contains(&"TELEGRAM_BOT_TOKEN"),
+            "should include surface spec env"
+        );
+        assert!(
+            keys.contains(&"CHAT_ID"),
+            "should include all surface spec env entries"
+        );
         assert_eq!(surface_env.len(), 5, "should have exactly 5 env entries");
     }
 

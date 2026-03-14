@@ -1106,8 +1106,14 @@ mod tests {
                 skills: None,
             }],
             streams: vec![
-                Stream { name: "main".to_string(), retention: None },
-                Stream { name: "alt".to_string(), retention: None },
+                Stream {
+                    name: "main".to_string(),
+                    retention: None,
+                },
+                Stream {
+                    name: "alt".to_string(),
+                    retention: None,
+                },
             ],
             surfaces: vec![Surface {
                 name: "telegram".to_string(),
@@ -1145,7 +1151,10 @@ mod tests {
             "expected surface change, got: {:?}",
             surface_changes
         );
-        let fields: Vec<_> = surface_changes.iter().filter_map(|c| c.field.as_deref()).collect();
+        let fields: Vec<_> = surface_changes
+            .iter()
+            .filter_map(|c| c.field.as_deref())
+            .collect();
         assert!(fields.contains(&"stream"), "should detect stream change");
     }
 
@@ -1176,9 +1185,10 @@ mod tests {
                 name: "telegram".to_string(),
                 kind: "telegram".to_string(),
                 stream: "main".to_string(),
-                env: Some(std::collections::BTreeMap::from([
-                    ("TELEGRAM_BOT_TOKEN".to_string(), "old-token".to_string()),
-                ])),
+                env: Some(std::collections::BTreeMap::from([(
+                    "TELEGRAM_BOT_TOKEN".to_string(),
+                    "old-token".to_string(),
+                )])),
             }],
             guardrails: None,
         };
@@ -1199,7 +1209,10 @@ mod tests {
         let linted = crate::deploy::lint::lint(&wh_path).unwrap();
         let plan_output = plan(linted).unwrap();
 
-        assert!(plan_output.has_changes(), "env change should produce a diff");
+        assert!(
+            plan_output.has_changes(),
+            "env change should produce a diff"
+        );
         let env_changes: Vec<_> = plan_output
             .changes()
             .iter()

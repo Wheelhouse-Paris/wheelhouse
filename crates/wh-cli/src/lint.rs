@@ -411,9 +411,7 @@ fn validate_surfaces(wh_file: &WhFile, filename: &str, errors: &mut Vec<LintDiag
                         file: filename.to_string(),
                         line: None,
                         level: DiagnosticLevel::Error,
-                        message: format!(
-                            "unsupported surface kind '{kind}' on {surface_label}"
-                        ),
+                        message: format!("unsupported surface kind '{kind}' on {surface_label}"),
                         hint: format!(
                             "use a supported kind: {}",
                             SUPPORTED_SURFACE_KINDS.join(", ")

@@ -91,9 +91,11 @@ impl ZmqSubscriber {
     /// Returns `None` for messages that are not `TextMessage` or cannot be decoded.
     #[instrument(skip(self))]
     pub async fn recv(&mut self) -> Result<Option<(TextMessage, String)>, TelegramError> {
-        let msg = self.sub_socket.recv().await.map_err(|e| {
-            TelegramError::StreamError(format!("recv failed: {e}"))
-        })?;
+        let msg = self
+            .sub_socket
+            .recv()
+            .await
+            .map_err(|e| TelegramError::StreamError(format!("recv failed: {e}")))?;
 
         let raw: Vec<u8> = msg.try_into().unwrap_or_default();
 
@@ -174,10 +176,9 @@ impl ZmqBridge {
 
         // SUB socket connects to broker PUB endpoint (to receive messages)
         let mut sub_socket = SubSocket::new();
-        sub_socket
-            .connect(&sub_endpoint)
-            .await
-            .map_err(|e| TelegramError::StreamError(format!("failed to connect SUB socket: {e}")))?;
+        sub_socket.connect(&sub_endpoint).await.map_err(|e| {
+            TelegramError::StreamError(format!("failed to connect SUB socket: {e}"))
+        })?;
 
         // Subscribe to stream prefix (stream_name) to receive only relevant messages
         sub_socket
@@ -193,10 +194,9 @@ impl ZmqBridge {
 
         // PUB socket connects to broker SUB endpoint (to publish messages)
         let mut pub_socket = PubSocket::new();
-        pub_socket
-            .connect(&pub_endpoint)
-            .await
-            .map_err(|e| TelegramError::StreamError(format!("failed to connect PUB socket: {e}")))?;
+        pub_socket.connect(&pub_endpoint).await.map_err(|e| {
+            TelegramError::StreamError(format!("failed to connect PUB socket: {e}"))
+        })?;
 
         tracing::info!(
             endpoint = %pub_endpoint,

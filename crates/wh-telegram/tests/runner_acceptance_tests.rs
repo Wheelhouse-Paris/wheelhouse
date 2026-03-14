@@ -14,8 +14,7 @@ mod ac1_inbound_message_to_stream {
         // Then the wh_url field is populated
         // This test validates the config accessor exists
         // (will fail until config.rs is updated with wh_url field)
-        let _: fn(&wh_telegram::TelegramConfig) -> &str =
-            wh_telegram::TelegramConfig::wh_url;
+        let _: fn(&wh_telegram::TelegramConfig) -> &str = wh_telegram::TelegramConfig::wh_url;
     }
 
     #[test]
@@ -23,8 +22,7 @@ mod ac1_inbound_message_to_stream {
         // Given WH_SURFACE_NAME is set in the environment
         // When TelegramConfig::from_env() is called
         // Then the surface_name field is populated
-        let _: fn(&wh_telegram::TelegramConfig) -> &str =
-            wh_telegram::TelegramConfig::surface_name;
+        let _: fn(&wh_telegram::TelegramConfig) -> &str = wh_telegram::TelegramConfig::surface_name;
     }
 
     #[test]
@@ -68,9 +66,8 @@ mod ac4_startup_failure {
         // Then a ConfigError is returned with a human-readable message
         // Note: env var tests are inherently racy in parallel;
         // the actual validation is tested in config.rs unit tests
-        let err = wh_telegram::TelegramError::ConfigError(
-            "WH_URL environment variable not set".into(),
-        );
+        let err =
+            wh_telegram::TelegramError::ConfigError("WH_URL environment variable not set".into());
         match err {
             wh_telegram::TelegramError::ConfigError(msg) => {
                 assert!(msg.contains("WH_URL"));

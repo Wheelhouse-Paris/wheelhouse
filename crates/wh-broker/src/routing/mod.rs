@@ -164,7 +164,8 @@ async fn route_message(msg: ZmqMessage, pub_socket: &mut PubSocket, state: &Arc<
                         if let Ok(invocation) =
                             wh_proto::SkillInvocation::decode(envelope.payload.as_slice())
                         {
-                            let request = wh_skill::invocation::SkillInvocationRequest::from(invocation);
+                            let request =
+                                wh_skill::invocation::SkillInvocationRequest::from(invocation);
                             Some(skill_router.handle_invocation(request).await)
                         } else {
                             tracing::warn!(
@@ -219,9 +220,8 @@ async fn route_message(msg: ZmqMessage, pub_socket: &mut PubSocket, state: &Arc<
                                 let final_payload = response_envelope.encode_to_vec();
                                 drop(streams);
 
-                                let mut response_wire: Vec<u8> = Vec::with_capacity(
-                                    stream_name.len() + 1 + final_payload.len(),
-                                );
+                                let mut response_wire: Vec<u8> =
+                                    Vec::with_capacity(stream_name.len() + 1 + final_payload.len());
                                 response_wire.extend_from_slice(stream_name.as_bytes());
                                 response_wire.push(0);
                                 response_wire.extend_from_slice(&final_payload);
