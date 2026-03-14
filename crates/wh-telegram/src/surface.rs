@@ -6,17 +6,18 @@
 //! - Error sanitization (RT-B1)
 //! - Ack timeout ("Working on it...")
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use teloxide::prelude::*;
-use teloxide::types::ChatId;
-use tokio::sync::{mpsc, Mutex};
+use teloxide::types::{ChatAction, ChatId};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{error, instrument};
 
 use wh_proto::TextMessage;
 use wh_user::UserStore;
 
-use crate::ack::AckTracker;
 use crate::config::TelegramConfig;
 use crate::error::{sanitize_for_user, TelegramError};
 use crate::mapping::ChatMapping;
@@ -26,7 +27,8 @@ pub struct TelegramSurface {
     config: TelegramConfig,
     user_store: Arc<UserStore>,
     chat_mapping: Arc<Mutex<ChatMapping>>,
-    ack_tracker: Arc<AckTracker>,
+    /// Per-user cancellation senders for the typing indicator loop.
+    typing_cancel: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     /// Channel for outbound messages (TextMessages to publish to stream).
     outbound_tx: mpsc::UnboundedSender<TextMessage>,
     /// Channel receiver for outbound messages.
@@ -44,7 +46,7 @@ impl TelegramSurface {
             config,
             user_store: Arc::new(user_store),
             chat_mapping: Arc::new(Mutex::new(chat_mapping)),
-            ack_tracker: Arc::new(AckTracker::new(std::time::Duration::from_secs(5))),
+            typing_cancel: Arc::new(Mutex::new(HashMap::new())),
             outbound_tx,
             outbound_rx: Arc::new(Mutex::new(Some(outbound_rx))),
         }
@@ -109,7 +111,6 @@ impl TelegramSurface {
 
         // Create TextMessage for stream publication
         let timestamp_ms = chrono::Utc::now().timestamp_millis();
-        let msg_id = timestamp_ms.to_string();
         let text_msg = TextMessage {
             content: text,
             publisher_id: "telegram-surface".to_string(),
@@ -123,20 +124,31 @@ impl TelegramSurface {
             .send(text_msg)
             .map_err(|e| TelegramError::StreamError(e.to_string()))?;
 
-        // Start ack timer
-        let ack_tracker = self.ack_tracker.clone();
-        let bot_clone = bot.clone();
-        let ack_chat_id = ChatId(chat_id);
-        let user_id = profile.user_id.clone();
+        // Cancel any previous typing indicator for this user, then start a new one.
+        // The typing action lasts ~5s on Telegram; we refresh every 4s until cancelled.
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+        {
+            let mut cancel_map = self.typing_cancel.lock().await;
+            if let Some(prev) = cancel_map.insert(profile.user_id.clone(), cancel_tx) {
+                let _ = prev.send(());
+            }
+        }
 
+        let bot_clone = bot.clone();
+        let typing_chat_id = ChatId(chat_id);
         tokio::spawn(async move {
-            let mut rx = ack_tracker.track(&user_id, &msg_id).await;
-            if rx.recv().await.is_some() {
+            tokio::pin!(cancel_rx);
+            loop {
                 if let Err(e) = bot_clone
-                    .send_message(ack_chat_id, "Working on it...")
+                    .send_chat_action(typing_chat_id, ChatAction::Typing)
                     .await
                 {
-                    error!(error = %e, "failed to send ack message");
+                    error!(error = %e, "failed to send typing action");
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut cancel_rx => break,
+                    _ = tokio::time::sleep(Duration::from_secs(4)) => {}
                 }
             }
         });
@@ -161,8 +173,10 @@ impl TelegramSurface {
             text_msg.reply_to_user_id.as_str()
         };
 
-        // Cancel ack timer for this user
-        self.ack_tracker.cancel_all_for_user(target_user_id).await;
+        // Cancel typing indicator for this user
+        if let Some(cancel) = self.typing_cancel.lock().await.remove(target_user_id) {
+            let _ = cancel.send(());
+        }
 
         // Look up chat_id
         let chat_id = {
