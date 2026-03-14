@@ -48,17 +48,25 @@ RUN apt-get update \
 RUN npm install -g @anthropic-ai/claude-code
 ENV CLAUDE_DISABLE_AUTO_UPDATES=1
 
+# Non-root user required by claude --dangerously-skip-permissions
+RUN useradd --create-home --shell /bin/bash agent \
+    && mkdir -p /home/agent/.claude /persona \
+    && chown -R agent:agent /home/agent/.claude /persona
+
 # Copy installed Python packages from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 
 # Copy application code
-COPY agent-claude/agent_claude/ /app/agent_claude/
+COPY --chown=agent:agent agent-claude/agent_claude/ /app/agent_claude/
 
 WORKDIR /app
 
 # Inject build metadata into package (ADR-019)
 RUN echo "__version__ = \"${VERSION}\"" > /app/agent_claude/_build_info.py && \
-    echo "__git_sha__ = \"${GIT_SHA}\"" >> /app/agent_claude/_build_info.py
+    echo "__git_sha__ = \"${GIT_SHA}\"" >> /app/agent_claude/_build_info.py && \
+    chown agent:agent /app/agent_claude/_build_info.py
+
+USER agent
 
 # AC-10: log lines flush immediately for `wh logs` real-time tail
 ENV PYTHONUNBUFFERED=1
