@@ -136,7 +136,7 @@ impl UserStore {
 pub fn generate_user_id(platform: &str, platform_user_id: &str) -> String {
     let input = format!("{platform}:{platform_user_id}");
     let hash = Sha256::digest(input.as_bytes());
-    let hex = format!("{:x}", hash);
+    let hex = format!("{hash:x}");
     format!("usr_{}", &hex[..16])
 }
 
