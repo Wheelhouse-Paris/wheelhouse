@@ -4,6 +4,7 @@ use std::process::Command;
 use clap::Subcommand;
 use console::style;
 use serde::Serialize;
+use serde_json;
 
 use crate::output::error::WhError;
 use crate::output::{OutputEnvelope, OutputFormat};
@@ -449,11 +450,45 @@ pub fn read_secret(credential_name: &str) -> Result<String, WhError> {
     Err(WhError::SecretNotFound(credential_name.to_string()))
 }
 
+/// Try to read the Claude Code OAuth token from the macOS keychain entry
+/// written by `claude login` ("Claude Code-credentials").
+///
+/// Returns `Some(token)` when the entry exists and contains a valid access token.
+fn try_read_claude_code_token() -> Option<String> {
+    let output = Command::new("security")
+        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let json: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    json.get("claudeAiOauth")?
+        .get("accessToken")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 /// Prompt the user for a credential value and store it.
 fn prompt_credential(
     spec: &CredentialSpec,
     format: OutputFormat,
 ) -> Result<CredentialStatus, WhError> {
+    // Auto-detect Claude Code OAuth token from the local Claude Code keychain entry.
+    if spec.name == "claude_code_oauth_token" {
+        if let Some(token) = try_read_claude_code_token() {
+            if format == OutputFormat::Human {
+                println!(
+                    "  {} Claude Code credentials detected in keychain — token auto-configured.",
+                    style("✓").green().bold(),
+                );
+            }
+            store_in_keychain(spec.name, &token)?;
+            return Ok(CredentialStatus::Configured);
+        }
+    }
+
     if format == OutputFormat::Human {
         // Print prompt header.
         if spec.required {
