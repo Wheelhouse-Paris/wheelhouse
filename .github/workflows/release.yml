@@ -38,14 +38,15 @@ jobs:
       - name: Package binaries
         run: |
           mkdir -p dist
-          for bin in wh wh-broker; do
+          for bin in wh wh-broker wh-telegram; do
             cp target/${{ matrix.target }}/release/${bin} dist/${bin}-${{ matrix.target }}
           done
-          # Bundle both binaries in a tarball for Homebrew (named binaries at root)
+          # Bundle all binaries in a tarball for Homebrew (named binaries at root)
           mkdir -p /tmp/wh-bundle
           cp target/${{ matrix.target }}/release/wh /tmp/wh-bundle/wh
           cp target/${{ matrix.target }}/release/wh-broker /tmp/wh-bundle/wh-broker
-          tar -czf dist/wh-${{ matrix.target }}.tar.gz -C /tmp/wh-bundle wh wh-broker
+          cp target/${{ matrix.target }}/release/wh-telegram /tmp/wh-bundle/wh-telegram
+          tar -czf dist/wh-${{ matrix.target }}.tar.gz -C /tmp/wh-bundle wh wh-broker wh-telegram
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
