@@ -1,0 +1,15 @@
+# Local development image for wh-telegram.
+# Multi-stage build — compiles inside the container, no cross-compilation needed.
+# Usage: podman build -f crates/wh-telegram/Dockerfile.local -t wh-telegram:local .
+# (run from workspace root so Cargo workspace is available)
+
+FROM rust:1.85-slim-bookworm AS builder
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p wh-telegram
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/wh-telegram /usr/local/bin/wh-telegram
+ENTRYPOINT ["/usr/local/bin/wh-telegram"]

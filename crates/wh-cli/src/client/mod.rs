@@ -43,12 +43,35 @@ impl ControlClient {
     /// The payload should include the "command" field plus any additional fields
     /// needed by the handler (e.g., "name", "retention" for stream commands).
     pub async fn send_command_with_payload(&self, payload: Value) -> Result<Value, WhError> {
+        // TCP liveness probe before ZMQ — prevents uninterruptible kernel sleep
+        // when the broker is down. ZMQ connect() always succeeds; recv() can
+        // block at the kernel level (U state) indefinitely if the broker isn't
+        // running, making tokio::time::timeout ineffective.
+        self.probe_liveness().await?;
+
         tokio::time::timeout(
             std::time::Duration::from_millis(RECV_TIMEOUT_MS),
             self.send_command_inner(payload),
         )
         .await
         .map_err(|_| WhError::Timeout)?
+    }
+
+    /// Probe the control endpoint via TCP before attempting ZMQ.
+    async fn probe_liveness(&self) -> Result<(), WhError> {
+        let tcp_addr = self
+            .endpoint
+            .strip_prefix("tcp://")
+            .unwrap_or(&self.endpoint)
+            .to_string();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            tokio::net::TcpStream::connect(&tcp_addr),
+        )
+        .await
+        .map_err(|_| WhError::ConnectionError)?
+        .map_err(|_| WhError::ConnectionError)?;
+        Ok(())
     }
 
     async fn send_command_inner(&self, payload: Value) -> Result<Value, WhError> {
