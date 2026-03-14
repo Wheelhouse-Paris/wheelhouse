@@ -7,11 +7,12 @@ export default defineConfig({
 	site: 'https://docs.wheelhouse.paris',
 	integrations: [
 		starlight({
-			title: 'Wheelhouse',
+			title: 'The Wheelhouse',
 			logo: {
-				src: './src/assets/logo.svg',
-				alt: 'Wheelhouse',
-				replacesTitle: false,
+				light: './src/assets/title-dark.svg',
+				dark: './src/assets/title.svg',
+				alt: 'The Wheelhouse',
+				replacesTitle: true,
 			},
 			description: 'The operating infrastructure for autonomous agent factories',
 			social: [
