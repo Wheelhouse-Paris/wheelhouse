@@ -55,10 +55,16 @@ agents:
     replicas: 1                 # default: 1
     streams: [main, ops]
     persona: agents/donna/      # optional: path to SOUL.md / IDENTITY.md / MEMORY.md
+    skills_repo: github.com/org/skills-repo   # optional: git repo containing skills
+    skills:                     # optional: skills this agent can invoke
+      - name: web-search
+        ref: a3f9c2d            # pinned commit hash — branch refs are rejected
 
 guardrails:
   max_replicas: 2               # topology-wide cap — deployment blocked if exceeded
 ```
+
+An agent can only invoke skills listed in its `skills` block. Undeclared `SkillInvocation` messages are rejected by the broker's skill router. Skills are lazy-loaded from `skills_repo` on first invocation.
 
 ## Guardrails
 

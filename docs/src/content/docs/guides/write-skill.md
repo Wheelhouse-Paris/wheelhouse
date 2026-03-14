@@ -55,16 +55,17 @@ These types (`SkillInvocation`, `SkillResult`, `SkillProgress`) are defined in `
 
 Skills are stored in git repositories and loaded lazily by the broker at invocation time. A skill reference pins a specific commit hash — branch references are rejected.
 
-## Phase 2 — .wh file integration
+## Declaring skills in `.wh`
 
-Declaring skills in `.wh` agent configuration is planned:
+Declare skills in the agent's `.wh` entry. Skill references must be pinned to a commit hash — branch names are rejected to prevent supply chain drift.
 
 ```yaml
-# Coming in Phase 2
 agents:
   - name: donna
+    skills_repo: github.com/you/your-skills
     skills:
       - name: my-skill
-        repo: github.com/you/your-skills
         ref: a1b2c3d4e5f6   # pinned commit hash, not a branch
 ```
+
+The broker loads each skill lazily on first invocation. An agent can only invoke skills listed in its `.wh` entry — undeclared invocations are rejected.

@@ -38,10 +38,10 @@ Skill references must be pinned to a specific git commit hash — not a branch n
 ```yaml
 agents:
   - name: donna
+    skills_repo: github.com/wheelhouse-paris/skills   # shared repo for all skills
     skills:
-      - repo: github.com/wheelhouse-paris/skills
-        name: web-search
+      - name: web-search
         ref: a3f9c2d   # pinned commit hash, not a branch
 ```
 
-Skills are lazy-loaded on first invocation. An agent can only invoke skills declared in its `.wh` — undeclared skill invocations are rejected.
+Skills are lazy-loaded on first invocation. An agent can only invoke skills declared in its `.wh` — undeclared skill invocations are rejected by the broker's skill router.

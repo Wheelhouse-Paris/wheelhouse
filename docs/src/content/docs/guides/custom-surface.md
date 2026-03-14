@@ -89,10 +89,12 @@ asyncio.run(main())
 ```yaml
 surfaces:
   - name: my-surface
-    type: custom
+    kind: custom
     image: my-org/my-surface:latest
-    streams: [main]
+    stream: main
 ```
+
+The provisioning layer automatically injects `WH_URL`, `WH_SURFACE_NAME`, and `WH_STREAM` into your container — use these to connect to the broker. Secrets stored via `wh secrets init` are also injected automatically.
 
 ## Test without a running topology
 

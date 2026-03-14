@@ -29,13 +29,14 @@ The `wh` CLI is the primary control plane for Wheelhouse — used by human opera
 | `wh deploy plan <file>` | Preview topology changes |
 | `wh deploy apply <file>` | Apply a topology |
 | `wh deploy destroy <file>` | Destroy a topology |
-| `wh ps` | List running components |
+| `wh ps` | List running components (agents + surfaces) |
 | `wh logs <agent>` | Stream agent logs |
 | `wh status` | Topology health summary |
 | `wh stream create <name>` | Create a stream |
 | `wh stream list` | List streams |
 | `wh stream delete <name>` | Delete a stream |
 | `wh stream tail <name>` | Live stream of objects |
+| `wh surface cli --stream <name>` | Interactive CLI surface (PUB/SUB to broker) |
 | `wh secrets init` | Initialize credential wizard |
 | `wh memory` | Show agent memory (MEMORY.md) |
 | `wh compact` | Trigger stream compaction |
@@ -138,6 +139,35 @@ wh deploy plan topology.wh --format json | jq '.has_changes'
 # Get running agent names
 wh ps --format json | jq '[.components[] | select(.status == "running") | .name]'
 ```
+
+### `wh surface cli`
+
+Connect to a stream as an interactive terminal surface. Probes broker liveness before connecting; reconnects automatically on transient failures.
+
+```sh
+wh surface cli --stream main
+wh surface cli --stream main --format json
+```
+
+```
+Connected to stream 'main'. Type a message and press Enter. Ctrl+C to quit.
+> Hello
+[donna] Hi! How can I help?
+```
+
+With `--format json`, each incoming message is printed as a JSON object:
+
+```json
+{ "publisher": "donna", "type": "TextMessage", "content": "Hi! How can I help?" }
+```
+
+Endpoint env vars (defaults match broker defaults):
+
+| Env var | Description |
+|---------|-------------|
+| `WH_PUB_ENDPOINT` | Override broker PUB socket address |
+| `WH_SUB_ENDPOINT` | Override broker SUB socket address |
+| `WH_CONTROL_ENDPOINT` | Override broker control socket (used for liveness probe) |
 
 ## Shell completion
 
