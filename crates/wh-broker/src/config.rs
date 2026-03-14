@@ -36,6 +36,12 @@ pub struct BrokerConfig {
     /// Compaction interval in seconds.
     /// Configured via `WH_COMPACTION_INTERVAL_SECS` env var, default 86400 (24h).
     compaction_interval_secs: u64,
+    /// Optional path to the git repository containing skills (Story 9.3).
+    /// Configured via `WH_SKILLS_REPO` env var. None means skill routing disabled.
+    skills_repo: Option<String>,
+    /// Comma-separated list of allowed skill names (Story 9.3, FM-05).
+    /// Configured via `WH_SKILLS_ALLOWLIST` env var. Empty means no skills allowed.
+    skills_allowlist: Vec<String>,
 }
 
 impl BrokerConfig {
@@ -57,12 +63,25 @@ impl BrokerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_COMPACTION_INTERVAL_SECS);
 
+        let skills_repo = std::env::var("WH_SKILLS_REPO").ok();
+        let skills_allowlist = std::env::var("WH_SKILLS_ALLOWLIST")
+            .ok()
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Self {
             pub_port: Self::read_port_env("WH_PUB_PORT", DEFAULT_PUB_PORT),
             sub_port: Self::read_port_env("WH_SUB_PORT", DEFAULT_SUB_PORT),
             control_port: Self::read_port_env("WH_CONTROL_PORT", DEFAULT_CONTROL_PORT),
             data_dir,
             compaction_interval_secs,
+            skills_repo,
+            skills_allowlist,
         }
     }
 
@@ -80,6 +99,8 @@ impl BrokerConfig {
                         .join(".wh")
                 }),
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
+            skills_repo: None,
+            skills_allowlist: vec![],
         }
     }
 
@@ -96,6 +117,8 @@ impl BrokerConfig {
             control_port,
             data_dir,
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
+            skills_repo: None,
+            skills_allowlist: vec![],
         }
     }
 
@@ -144,6 +167,16 @@ impl BrokerConfig {
         self.compaction_interval_secs
     }
 
+    /// Path to the git skills repository, if configured.
+    pub fn skills_repo(&self) -> Option<&str> {
+        self.skills_repo.as_deref()
+    }
+
+    /// List of allowed skill names (FM-05).
+    pub fn skills_allowlist(&self) -> &[String] {
+        &self.skills_allowlist
+    }
+
     fn read_port_env(var: &str, default: u16) -> u16 {
         std::env::var(var)
             .ok()
@@ -162,6 +195,8 @@ impl Default for BrokerConfig {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".wh"),
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
+            skills_repo: None,
+            skills_allowlist: vec![],
         }
     }
 }

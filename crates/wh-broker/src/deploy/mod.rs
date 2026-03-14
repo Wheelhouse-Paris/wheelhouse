@@ -67,6 +67,18 @@ pub struct Topology {
     pub guardrails: Option<Guardrails>,
 }
 
+/// A skill reference in an agent's configuration.
+///
+/// Mirrors `wh_skill::config::SkillRef` but stays in the deploy layer.
+/// Converted to `wh_skill::config::SkillRef` at registration time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SkillRefConfig {
+    /// Skill name (must match a directory in the skills repo).
+    pub name: String,
+    /// Version pin: bare semver, `"branch:<name>"`, or `"commit:<sha>"`.
+    pub version: String,
+}
+
 /// An agent declaration within a topology.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Agent {
@@ -80,6 +92,12 @@ pub struct Agent {
     /// Contains SOUL.md, IDENTITY.md, and MEMORY.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
+    /// Optional path to the git repository containing skills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills_repo: Option<String>,
+    /// Optional list of skills available to this agent (FM-05 allowlist).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<SkillRefConfig>>,
 }
 
 fn default_replicas() -> u32 {
@@ -293,6 +311,8 @@ agents:
                     replicas: 1,
                     streams: vec![],
                     persona: None,
+                    skills_repo: None,
+                    skills: None,
                 },
                 Agent {
                     name: "alpha".to_string(),
@@ -300,6 +320,8 @@ agents:
                     replicas: 1,
                     streams: vec![],
                     persona: None,
+                    skills_repo: None,
+                    skills: None,
                 },
             ],
             streams: vec![
@@ -355,5 +377,77 @@ streams:
     fn persona_load_failed_error_code() {
         let err = DeployError::PersonaLoadFailed("test".to_string());
         assert_eq!(err.code(), "PERSONA_LOAD_FAILED");
+    }
+
+    #[test]
+    fn parse_topology_with_skills_config() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: donna
+    image: agent-claude:latest
+    streams: [main]
+    skills_repo: /path/to/skills
+    skills:
+      - name: summarize
+        version: "1.0.0"
+      - name: web-search
+        version: "branch:main"
+streams:
+  - name: main
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(
+            topo.agents[0].skills_repo,
+            Some("/path/to/skills".to_string())
+        );
+        let skills = topo.agents[0].skills.as_ref().unwrap();
+        assert_eq!(skills.len(), 2);
+        assert_eq!(skills[0].name, "summarize");
+        assert_eq!(skills[0].version, "1.0.0");
+        assert_eq!(skills[1].name, "web-search");
+        assert_eq!(skills[1].version, "branch:main");
+    }
+
+    #[test]
+    fn parse_topology_without_skills_defaults_to_none() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+streams:
+  - name: main
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.agents[0].skills_repo, None);
+        assert_eq!(topo.agents[0].skills, None);
+    }
+
+    #[test]
+    fn skills_yaml_roundtrip() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![Agent {
+                name: "donna".to_string(),
+                image: "agent-claude:latest".to_string(),
+                replicas: 1,
+                streams: vec!["main".to_string()],
+                persona: None,
+                skills_repo: Some("/skills".to_string()),
+                skills: Some(vec![SkillRefConfig {
+                    name: "summarize".to_string(),
+                    version: "1.0.0".to_string(),
+                }]),
+            }],
+            streams: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(topo, parsed);
     }
 }

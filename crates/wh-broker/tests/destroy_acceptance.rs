@@ -70,6 +70,8 @@ fn setup_deployed_repo() -> tempfile::TempDir {
             replicas: 1,
             streams: vec!["main".to_string()],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![wh_broker::deploy::Stream {
             name: "main".to_string(),

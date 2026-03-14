@@ -62,6 +62,8 @@ fn high_impact_change_with_low_threshold_requires_approval() {
             replicas: 1,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![],
         guardrails: Some(Guardrails {
@@ -197,6 +199,8 @@ fn low_impact_change_with_low_threshold_proceeds_autonomously() {
             replicas: 5,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![],
         guardrails: Some(Guardrails {
@@ -238,6 +242,8 @@ fn any_change_without_threshold_proceeds_autonomously() {
             replicas: 1,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![],
         guardrails: None,
@@ -274,6 +280,8 @@ fn medium_threshold_allows_medium_but_blocks_high() {
             replicas: 2,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![],
         guardrails: Some(Guardrails {
@@ -332,6 +340,8 @@ fn high_threshold_allows_all_changes() {
             replicas: 1,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![],
         guardrails: Some(Guardrails {

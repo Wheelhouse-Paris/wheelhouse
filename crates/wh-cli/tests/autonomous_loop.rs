@@ -144,6 +144,8 @@ fn signal_evaluation_proposes_scale_up_on_timeout_pattern() {
             replicas: 1,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![],
         guardrails: None,
@@ -186,6 +188,8 @@ fn signal_evaluation_respects_guardrail_max_replicas() {
             replicas: 1,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }],
         streams: vec![],
         guardrails: Some(Guardrails {
