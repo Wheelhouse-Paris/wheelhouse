@@ -1002,6 +1002,8 @@ mod tests {
                 replicas: 1,
                 streams: vec![],
                 persona: None,
+                skills_repo: None,
+                skills: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -1054,6 +1056,8 @@ mod tests {
                 replicas: 1,
                 streams: vec![],
                 persona: None,
+                skills_repo: None,
+                skills: None,
             }],
             streams: vec![],
             surfaces: vec![Surface {
@@ -1109,6 +1113,8 @@ mod tests {
                 replicas: 1,
                 streams: vec![],
                 persona: None,
+                skills_repo: None,
+                skills: None,
             }],
             streams: vec![
                 Stream { name: "main".to_string(), retention: None },
@@ -1173,6 +1179,8 @@ mod tests {
                 replicas: 1,
                 streams: vec![],
                 persona: None,
+                skills_repo: None,
+                skills: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),

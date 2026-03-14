@@ -467,6 +467,7 @@ streams:
                 }]),
             }],
             streams: vec![],
+            surfaces: vec![],
             guardrails: None,
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
