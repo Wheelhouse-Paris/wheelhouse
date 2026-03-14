@@ -2804,7 +2804,9 @@ dependencies = [
 name = "wh-telegram"
 version = "0.1.0-alpha.8"
 dependencies = [
+ "anyhow",
  "chrono",
+ "prost",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2812,9 +2814,12 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
+ "tracing-subscriber",
  "wh-proto",
  "wh-user",
+ "zeromq",
 ]
 
 [[package]]

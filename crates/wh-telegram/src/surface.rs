@@ -30,9 +30,8 @@ pub struct TelegramSurface {
     /// Channel for outbound messages (TextMessages to publish to stream).
     outbound_tx: mpsc::UnboundedSender<TextMessage>,
     /// Channel receiver for outbound messages.
-    /// Consumed by the stream publication loop.
-    #[allow(dead_code)]
-    outbound_rx: Arc<Mutex<mpsc::UnboundedReceiver<TextMessage>>>,
+    /// Consumed by the stream publication loop via `take_outbound_rx()`.
+    outbound_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<TextMessage>>>>,
 }
 
 impl TelegramSurface {
@@ -47,13 +46,28 @@ impl TelegramSurface {
             chat_mapping: Arc::new(Mutex::new(chat_mapping)),
             ack_tracker: Arc::new(AckTracker::new(std::time::Duration::from_secs(5))),
             outbound_tx,
-            outbound_rx: Arc::new(Mutex::new(outbound_rx)),
+            outbound_rx: Arc::new(Mutex::new(Some(outbound_rx))),
         }
     }
 
     /// Returns a clone of the outbound sender for publishing messages to stream.
     pub fn outbound_sender(&self) -> mpsc::UnboundedSender<TextMessage> {
         self.outbound_tx.clone()
+    }
+
+    /// Takes the outbound receiver for the stream publication loop.
+    ///
+    /// Can only be called once — subsequent calls return `None`.
+    /// The runner binary calls this to drain outbound messages and publish
+    /// them to the broker via ZMQ (Story 9.2).
+    #[instrument(skip_all)]
+    pub fn take_outbound_rx(&self) -> Option<mpsc::UnboundedReceiver<TextMessage>> {
+        // Use try_lock to avoid blocking — this is called once at startup
+        if let Ok(mut guard) = self.outbound_rx.try_lock() {
+            guard.take()
+        } else {
+            None
+        }
     }
 
     /// Processes an incoming Telegram message.
