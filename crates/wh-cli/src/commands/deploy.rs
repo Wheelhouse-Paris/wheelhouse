@@ -358,7 +358,10 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
                         "created": apply_result.created,
                         "changed": apply_result.changed,
                         "destroyed": apply_result.destroyed,
-                        "streams_created": apply_result.streams_created
+                        "streams_created": apply_result.streams_created,
+                        "surfaces_created": apply_result.surfaces_created,
+                        "surfaces_changed": apply_result.surfaces_changed,
+                        "surfaces_destroyed": apply_result.surfaces_destroyed
                     }
                 })
             );
@@ -425,7 +428,7 @@ fn execute_destroy(
     // Output result
     match format {
         OutputFormat::Human => {
-            if destroy_result.destroyed == 0 && destroy_result.streams_removed == 0 {
+            if destroy_result.destroyed == 0 && destroy_result.streams_removed == 0 && destroy_result.surfaces_destroyed == 0 {
                 println!("Nothing to destroy. No components were deployed.");
             } else {
                 println!("{destroy_result}");
@@ -440,7 +443,8 @@ fn execute_destroy(
                     "data": {
                         "destroyed": true,
                         "agents_removed": destroy_result.destroyed,
-                        "streams_removed": destroy_result.streams_removed
+                        "streams_removed": destroy_result.streams_removed,
+                        "surfaces_destroyed": destroy_result.surfaces_destroyed
                     }
                 })
             );

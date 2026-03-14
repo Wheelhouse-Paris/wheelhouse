@@ -15,6 +15,9 @@ const SUPPORTED_API_VERSION: &str = "wheelhouse.dev/v1";
 /// The only supported stream provider in MVP (FR12).
 const SUPPORTED_PROVIDERS: &[&str] = &["local"];
 
+/// Supported surface kinds.
+const SUPPORTED_SURFACE_KINDS: &[&str] = &["telegram", "cli"];
+
 /// Severity level for lint diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -132,6 +135,7 @@ pub fn lint_file(path: &Path) -> Result<(LintResult, Option<LintedFile>), LintEr
     validate_agents(&wh_file, &filename, &mut errors);
     validate_streams(&wh_file, &filename, &mut errors, &mut warnings);
     validate_stream_references(&wh_file, &filename, &mut errors);
+    validate_surfaces(&wh_file, &filename, &mut errors);
 
     let result = LintResult { errors, warnings };
 
@@ -330,6 +334,125 @@ fn validate_stream_references(wh_file: &WhFile, filename: &str, errors: &mut Vec
                         level: DiagnosticLevel::Error,
                         message: format!(
                             "agent '{agent_name}' references undeclared stream '{stream_ref}'"
+                        ),
+                        hint: format!(
+                            "declare stream '{stream_ref}' in the streams section or fix the reference"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn validate_surfaces(wh_file: &WhFile, filename: &str, errors: &mut Vec<LintDiagnostic>) {
+    let surfaces = match &wh_file.surfaces {
+        Some(surfaces) => surfaces,
+        None => return,
+    };
+
+    // Build the set of declared stream names for reference validation
+    let declared_streams: HashSet<String> = wh_file
+        .streams
+        .as_ref()
+        .map(|streams| streams.iter().filter_map(|s| s.name.clone()).collect())
+        .unwrap_or_default();
+
+    let mut seen_names = HashSet::new();
+
+    for (i, surface) in surfaces.iter().enumerate() {
+        let surface_label = surface
+            .name
+            .as_deref()
+            .map(|n| format!("surface '{n}'"))
+            .unwrap_or_else(|| format!("surface at index {i}"));
+
+        // Validate name
+        match &surface.name {
+            None => {
+                errors.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    level: DiagnosticLevel::Error,
+                    message: format!("field 'name' is required on {surface_label}"),
+                    hint: "add name to surface definition".to_string(),
+                });
+            }
+            Some(name) => {
+                if !seen_names.insert(name.clone()) {
+                    errors.push(LintDiagnostic {
+                        file: filename.to_string(),
+                        line: None,
+                        level: DiagnosticLevel::Error,
+                        message: format!("duplicate surface name '{name}'"),
+                        hint: "each surface must have a unique name".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Validate kind
+        match &surface.kind {
+            None => {
+                errors.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    level: DiagnosticLevel::Error,
+                    message: format!("field 'kind' is required on {surface_label}"),
+                    hint: format!(
+                        "add kind to surface definition (supported: {})",
+                        SUPPORTED_SURFACE_KINDS.join(", ")
+                    ),
+                });
+            }
+            Some(kind) => {
+                if !SUPPORTED_SURFACE_KINDS.contains(&kind.as_str()) {
+                    errors.push(LintDiagnostic {
+                        file: filename.to_string(),
+                        line: None,
+                        level: DiagnosticLevel::Error,
+                        message: format!(
+                            "unsupported surface kind '{kind}' on {surface_label}"
+                        ),
+                        hint: format!(
+                            "use a supported kind: {}",
+                            SUPPORTED_SURFACE_KINDS.join(", ")
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Validate image
+        if surface.image.is_none() {
+            errors.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Error,
+                message: format!("field 'image' is required on {surface_label}"),
+                hint: "add image to surface definition (e.g., wh-telegram:latest)".to_string(),
+            });
+        }
+
+        // Validate stream reference
+        match &surface.stream {
+            None => {
+                errors.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    level: DiagnosticLevel::Error,
+                    message: format!("field 'stream' is required on {surface_label}"),
+                    hint: "add stream name this surface connects to".to_string(),
+                });
+            }
+            Some(stream_ref) => {
+                if !declared_streams.contains(stream_ref) {
+                    errors.push(LintDiagnostic {
+                        file: filename.to_string(),
+                        line: None,
+                        level: DiagnosticLevel::Error,
+                        message: format!(
+                            "{surface_label} references undeclared stream '{stream_ref}'"
                         ),
                         hint: format!(
                             "declare stream '{stream_ref}' in the streams section or fix the reference"
@@ -645,6 +768,208 @@ streams:
         assert!(
             !result.has_errors(),
             "absent provider should be valid (defaults to local)"
+        );
+    }
+
+    // ── Surface validation tests ──
+
+    #[test]
+    fn valid_surface_produces_no_errors() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+agents:
+  - name: researcher
+    image: r:latest
+    max_replicas: 3
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    image: wh-telegram:latest
+    stream: main
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+    }
+
+    #[test]
+    fn surface_missing_name_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - kind: telegram
+    image: wh-telegram:latest
+    stream: main
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("name")));
+    }
+
+    #[test]
+    fn surface_missing_kind_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: tg
+    image: wh-telegram:latest
+    stream: main
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("kind")));
+    }
+
+    #[test]
+    fn surface_unsupported_kind_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: slack
+    kind: slack
+    image: wh-slack:latest
+    stream: main
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("slack") && e.message.contains("unsupported")));
+    }
+
+    #[test]
+    fn surface_missing_image_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: tg
+    kind: telegram
+    stream: main
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("image")));
+    }
+
+    #[test]
+    fn surface_missing_stream_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: tg
+    kind: telegram
+    image: wh-telegram:latest
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("stream")));
+    }
+
+    #[test]
+    fn surface_undeclared_stream_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: tg
+    kind: telegram
+    image: wh-telegram:latest
+    stream: nonexistent
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("nonexistent")));
+    }
+
+    #[test]
+    fn duplicate_surface_names_produce_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: tg
+    kind: telegram
+    image: wh-telegram:latest
+    stream: main
+  - name: tg
+    kind: cli
+    image: wh-cli:latest
+    stream: main
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("duplicate")));
+    }
+
+    #[test]
+    fn surface_kind_cli_is_valid() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+agents:
+  - name: researcher
+    image: r:latest
+    max_replicas: 3
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: terminal
+    kind: cli
+    image: wh-cli:latest
+    stream: main
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(
+            !result.has_errors(),
+            "cli should be a valid surface kind: {:?}",
+            result.errors
         );
     }
 }

@@ -64,6 +64,7 @@ fn high_impact_change_with_low_threshold_requires_approval() {
             persona: None,
         }],
         streams: vec![],
+        surfaces: vec![],
         guardrails: Some(Guardrails {
             max_replicas: Some(10),
             autonomous_apply_threshold: Some(ThresholdLevel::Low),
@@ -199,6 +200,7 @@ fn low_impact_change_with_low_threshold_proceeds_autonomously() {
             persona: None,
         }],
         streams: vec![],
+        surfaces: vec![],
         guardrails: Some(Guardrails {
             max_replicas: Some(10),
             autonomous_apply_threshold: Some(ThresholdLevel::Low),
@@ -240,6 +242,7 @@ fn any_change_without_threshold_proceeds_autonomously() {
             persona: None,
         }],
         streams: vec![],
+        surfaces: vec![],
         guardrails: None,
     };
 
@@ -276,6 +279,7 @@ fn medium_threshold_allows_medium_but_blocks_high() {
             persona: None,
         }],
         streams: vec![],
+        surfaces: vec![],
         guardrails: Some(Guardrails {
             max_replicas: Some(10),
             autonomous_apply_threshold: Some(ThresholdLevel::Medium),
@@ -334,6 +338,7 @@ fn high_threshold_allows_all_changes() {
             persona: None,
         }],
         streams: vec![],
+        surfaces: vec![],
         guardrails: Some(Guardrails {
             max_replicas: Some(10),
             autonomous_apply_threshold: Some(ThresholdLevel::High),
@@ -459,6 +464,7 @@ fn classify_impact_high_for_large_scaling() {
         name: "dev".to_string(),
         agents: vec![],
         streams: vec![],
+        surfaces: vec![],
         guardrails: None,
     };
 
@@ -483,6 +489,7 @@ fn classify_impact_low_for_small_increase() {
         name: "dev".to_string(),
         agents: vec![],
         streams: vec![],
+        surfaces: vec![],
         guardrails: None,
     };
 

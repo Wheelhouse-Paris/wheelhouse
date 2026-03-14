@@ -580,6 +580,7 @@ mod tests {
             name: "dev".to_string(),
             agents,
             streams: vec![],
+            surfaces: vec![],
             guardrails,
         }
     }

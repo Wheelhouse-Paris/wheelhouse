@@ -38,6 +38,9 @@ const CONTAINER_BROKER_URL: &str = DEFAULT_BROKER_URL;
 /// Port 5557 = control REP socket (matches DEFAULT_CONTROL_PORT in config.rs).
 const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5557";
 
+/// ZMQ endpoint for the broker control socket.
+const BROKER_CONTROL_ENDPOINT: &str = "tcp://127.0.0.1:5557";
+
 /// Maximum time to wait for the broker to start after spawning it.
 const BROKER_START_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -47,22 +50,29 @@ const BROKER_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// Result of applying a set of changes to the container infrastructure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyResult {
-    /// Number of containers created.
+    /// Number of agent containers created.
     pub created: usize,
-    /// Number of containers changed (stopped + restarted).
+    /// Number of agent containers changed (stopped + restarted).
     pub changed: usize,
-    /// Number of containers destroyed.
+    /// Number of agent containers destroyed.
     pub destroyed: usize,
     /// Number of streams registered (broker-managed, no container operation).
     pub streams_created: usize,
+    /// Number of surface containers created.
+    pub surfaces_created: usize,
+    /// Number of surface containers changed (stopped + restarted).
+    pub surfaces_changed: usize,
+    /// Number of surface containers destroyed.
+    pub surfaces_destroyed: usize,
 }
 
 impl std::fmt::Display for ApplyResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} created \u{00B7} {} changed \u{00B7} {} destroyed \u{00B7} {} streams",
-            self.created, self.changed, self.destroyed, self.streams_created
+            "{} created \u{00B7} {} changed \u{00B7} {} destroyed \u{00B7} {} streams \u{00B7} {} surfaces created \u{00B7} {} surfaces changed \u{00B7} {} surfaces destroyed",
+            self.created, self.changed, self.destroyed, self.streams_created,
+            self.surfaces_created, self.surfaces_changed, self.surfaces_destroyed
         )
     }
 }
@@ -209,6 +219,50 @@ pub fn ensure_broker_running() -> Result<(), DeployError> {
     }
 }
 
+/// Register a stream with the running broker via the control socket.
+///
+/// Sends a `stream_create` command over ZMQ REQ/REP. Errors are logged but not
+/// propagated — stream registration is best-effort during deploy (the operator
+/// can always run `wh stream create` manually if needed).
+fn register_stream_with_broker(name: &str, retention: Option<&str>) {
+    use zeromq::{ReqSocket, Socket, SocketRecv, SocketSend, ZmqMessage};
+
+    let endpoint = BROKER_CONTROL_ENDPOINT.to_string();
+    let name_owned = name.to_string();
+    let retention_owned = retention.map(|r| r.to_string());
+
+    // provision_containers is sync but called from within a tokio runtime.
+    // block_in_place moves this work off the async thread pool, then
+    // Handle::current().block_on() runs the async ZMQ call synchronously.
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async move {
+            let mut req = ReqSocket::new();
+            req.connect(&endpoint).await?;
+
+            let mut payload = serde_json::json!({
+                "command": "stream_create",
+                "name": name_owned,
+            });
+            if let Some(r) = retention_owned {
+                payload["retention"] = serde_json::json!(r);
+            }
+
+            let bytes = serde_json::to_vec(&payload)?;
+            req.send(ZmqMessage::from(bytes)).await?;
+
+            tokio::time::timeout(std::time::Duration::from_secs(2), req.recv()).await??;
+
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+    });
+
+    if let Err(e) = result {
+        tracing::warn!(stream = %name, error = %e, "stream registration with broker failed");
+    } else {
+        tracing::info!(stream = %name, "stream registered with broker");
+    }
+}
+
 /// Sanitize a string for use in a container name.
 ///
 /// Replaces non-alphanumeric chars (except `-`) with `-`,
@@ -238,6 +292,15 @@ pub fn container_name(topology_name: &str, agent_name: &str) -> String {
     let topo = sanitize_name(topology_name);
     let agent = sanitize_name(agent_name);
     format!("wh-{topo}-{agent}")
+}
+
+/// Build the deterministic container name for a surface.
+///
+/// Format: `wh-<topology>-surface-<name>`
+pub fn surface_container_name(topology_name: &str, surface_name: &str) -> String {
+    let topo = sanitize_name(topology_name);
+    let surface = sanitize_name(surface_name);
+    format!("wh-{topo}-surface-{surface}")
 }
 
 /// Run a podman command with the given timeout.
@@ -383,6 +446,67 @@ pub fn podman_run(
     Ok(())
 }
 
+/// Build command arguments for `podman run` for a **surface** container.
+///
+/// Uses `surface_container_name()` for the `--name` argument, ensuring
+/// naming symmetry between start and stop paths (code review fix H3).
+pub fn build_surface_run_args(
+    topology_name: &str,
+    surface_name: &str,
+    image: &str,
+    broker_url: Option<&str>,
+    extra_env: &[(String, String)],
+) -> Vec<String> {
+    let name = surface_container_name(topology_name, surface_name);
+    let url = broker_url.unwrap_or(DEFAULT_BROKER_URL);
+
+    let mut args = vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),
+        name,
+        "-e".to_string(),
+        format!("WH_URL={url}"),
+    ];
+
+    // Inject caller-provided env vars (WH_SURFACE_NAME, WH_STREAM, secrets, surface env)
+    for (key, value) in extra_env {
+        args.push("-e".to_string());
+        args.push(format!("{key}={value}"));
+    }
+
+    args.push(image.to_string());
+    args
+}
+
+/// Start a surface container via Podman.
+///
+/// Uses `surface_container_name()` for naming symmetry with `podman_stop()`.
+/// Timeout: 120s (image pull may be slow on first run).
+#[tracing::instrument(skip_all, fields(surface = surface_name, topology = topology_name))]
+pub fn podman_run_surface(
+    topology_name: &str,
+    surface_name: &str,
+    image: &str,
+    broker_url: Option<&str>,
+    extra_env: &[(String, String)],
+) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let args = build_surface_run_args(
+        topology_name,
+        surface_name,
+        image,
+        broker_url,
+        extra_env,
+    );
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    tracing::info!("starting surface container");
+    run_podman_checked(podman, &args_ref, PODMAN_RUN_TIMEOUT)?;
+    tracing::info!("surface container started");
+    Ok(())
+}
+
 /// Build command arguments for `podman stop`.
 ///
 /// Returns the argument list for stopping a container.
@@ -458,6 +582,11 @@ fn parse_agent_name(component: &str) -> Option<&str> {
     component.strip_prefix("agent ")
 }
 
+/// Parse a component string like "surface telegram" to extract the surface name.
+fn parse_surface_name(component: &str) -> Option<&str> {
+    component.strip_prefix("surface ")
+}
+
 /// Resolve an agent's persona path to an absolute path for volume mounting.
 ///
 /// Returns `None` if the agent has no persona configured or if workspace_root
@@ -495,13 +624,17 @@ pub fn provision_containers(
     topology_name: &str,
     changes: &[Change],
     agents: &[crate::deploy::Agent],
+    streams: &[crate::deploy::Stream],
+    surfaces: &[crate::deploy::Surface],
     workspace_root: Option<&std::path::Path>,
     extra_env: &[(String, String)],
 ) -> ApplyResult {
     // Count stream additions upfront — streams require no container operation.
     let streams_created = changes
         .iter()
-        .filter(|c| parse_agent_name(&c.component).is_none() && c.op == "+")
+        .filter(|c| parse_agent_name(&c.component).is_none()
+            && parse_surface_name(&c.component).is_none()
+            && c.op == "+")
         .count();
 
     // Ensure Podman is running before attempting any container operations.
@@ -514,6 +647,9 @@ pub fn provision_containers(
             changed: 0,
             destroyed: 0,
             streams_created,
+            surfaces_created: 0,
+            surfaces_changed: 0,
+            surfaces_destroyed: 0,
         };
     }
 
@@ -527,6 +663,9 @@ pub fn provision_containers(
             changed: 0,
             destroyed: 0,
             streams_created,
+            surfaces_created: 0,
+            surfaces_changed: 0,
+            surfaces_destroyed: 0,
         };
     }
 
@@ -535,11 +674,116 @@ pub fn provision_containers(
         changed: 0,
         destroyed: 0,
         streams_created,
+        surfaces_created: 0,
+        surfaces_changed: 0,
+        surfaces_destroyed: 0,
     };
 
     for change in changes {
-        // Skip stream changes — already counted above.
+        // Surface changes — handle container lifecycle for surfaces.
+        if let Some(surface_name) = parse_surface_name(&change.component) {
+            let Some(surface) = surfaces.iter().find(|s| s.name == surface_name) else {
+                if change.op != "-" {
+                    tracing::warn!(
+                        surface = %surface_name,
+                        "surface not found in topology — skipping"
+                    );
+                }
+                if change.op == "-" {
+                    // For removals, stop the surface container
+                    let name = surface_container_name(topology_name, surface_name);
+                    match podman_stop(&name) {
+                        Ok(()) => result.surfaces_destroyed += 1,
+                        Err(e) => {
+                            tracing::error!(
+                                surface = %surface_name,
+                                error = %e,
+                                "failed to stop surface container — retry with `wh deploy apply`"
+                            );
+                        }
+                    }
+                }
+                continue;
+            };
+
+            // Merge surface env with extra_env (surface env takes precedence)
+            let mut surface_env = extra_env.to_vec();
+            surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
+            surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+            if let Some(env_map) = &surface.env {
+                for (key, value) in env_map {
+                    surface_env.push((key.clone(), value.clone()));
+                }
+            }
+
+            match change.op.as_str() {
+                "+" => {
+                    match podman_run_surface(
+                        topology_name,
+                        &surface.name,
+                        &surface.image,
+                        Some(CONTAINER_BROKER_URL),
+                        &surface_env,
+                    ) {
+                        Ok(()) => result.surfaces_created += 1,
+                        Err(e) => {
+                            tracing::error!(
+                                surface = %surface.name,
+                                error = %e,
+                                "failed to start surface container — retry with `wh deploy apply`"
+                            );
+                        }
+                    }
+                }
+                "-" => {
+                    let name = surface_container_name(topology_name, &surface.name);
+                    match podman_stop(&name) {
+                        Ok(()) => result.surfaces_destroyed += 1,
+                        Err(e) => {
+                            tracing::error!(
+                                surface = %surface.name,
+                                error = %e,
+                                "failed to stop surface container — retry with `wh deploy apply`"
+                            );
+                        }
+                    }
+                }
+                "~" => {
+                    let name = surface_container_name(topology_name, &surface.name);
+                    let _ = podman_stop(&name);
+                    match podman_run_surface(
+                        topology_name,
+                        &surface.name,
+                        &surface.image,
+                        Some(CONTAINER_BROKER_URL),
+                        &surface_env,
+                    ) {
+                        Ok(()) => result.surfaces_changed += 1,
+                        Err(e) => {
+                            tracing::error!(
+                                surface = %surface.name,
+                                error = %e,
+                                "failed to restart surface container — retry with `wh deploy apply`"
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        // Stream changes — register with broker (no container operation).
         if parse_agent_name(&change.component).is_none() {
+            if change.op == "+" {
+                // Component format: "stream <name>"
+                let stream_name = change.component.trim_start_matches("stream ").to_string();
+                let retention = streams
+                    .iter()
+                    .find(|s| s.name == stream_name)
+                    .and_then(|s| s.retention.as_deref());
+                register_stream_with_broker(&stream_name, retention);
+            }
             continue;
         }
         // Agent changes — handle container lifecycle.
@@ -792,7 +1036,7 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], None, &[]);
+        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[]);
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
         assert_eq!(result.destroyed, 0);
@@ -806,10 +1050,13 @@ mod tests {
             changed: 0,
             destroyed: 2,
             streams_created: 1,
+            surfaces_created: 0,
+            surfaces_changed: 0,
+            surfaces_destroyed: 0,
         };
         assert_eq!(
             result.to_string(),
-            "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed \u{00B7} 1 streams"
+            "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed \u{00B7} 1 streams \u{00B7} 0 surfaces created \u{00B7} 0 surfaces changed \u{00B7} 0 surfaces destroyed"
         );
     }
 
@@ -845,8 +1092,176 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], None, &[]);
+        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[]);
         // Should skip gracefully, not panic, and not increment created
         assert_eq!(result.created, 0);
+    }
+
+    #[test]
+    fn surface_container_name_formats_correctly() {
+        assert_eq!(
+            surface_container_name("dev", "telegram"),
+            "wh-dev-surface-telegram"
+        );
+        assert_eq!(
+            surface_container_name("my-app", "cli"),
+            "wh-my-app-surface-cli"
+        );
+    }
+
+    #[test]
+    fn surface_container_name_sanitizes_special_chars() {
+        assert_eq!(
+            surface_container_name("my app", "tg.bot"),
+            "wh-my-app-surface-tg-bot"
+        );
+    }
+
+    #[test]
+    fn parse_surface_name_works() {
+        assert_eq!(parse_surface_name("surface telegram"), Some("telegram"));
+        assert_eq!(parse_surface_name("surface cli"), Some("cli"));
+        assert_eq!(parse_surface_name("agent researcher"), None);
+        assert_eq!(parse_surface_name("stream main"), None);
+    }
+
+    #[test]
+    fn apply_result_display_with_surfaces() {
+        let result = ApplyResult {
+            created: 1,
+            changed: 0,
+            destroyed: 0,
+            streams_created: 1,
+            surfaces_created: 2,
+            surfaces_changed: 1,
+            surfaces_destroyed: 0,
+        };
+        let display = result.to_string();
+        assert!(
+            display.contains("2 surfaces created"),
+            "should show surfaces_created separately: {display}"
+        );
+        assert!(
+            display.contains("1 surfaces changed"),
+            "should show surfaces_changed separately: {display}"
+        );
+        assert!(
+            display.contains("0 surfaces destroyed"),
+            "should show surfaces_destroyed separately: {display}"
+        );
+    }
+
+    #[test]
+    fn build_surface_run_args_uses_surface_container_name() {
+        let args = build_surface_run_args(
+            "dev",
+            "telegram",
+            "wh-telegram:latest",
+            None,
+            &[
+                ("WH_SURFACE_NAME".to_string(), "telegram".to_string()),
+                ("WH_STREAM".to_string(), "main".to_string()),
+                ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
+            ],
+        );
+        // --name must use surface_container_name format
+        assert_eq!(args[3], "wh-dev-surface-telegram");
+        // Should contain WH_URL
+        assert_eq!(args[5], "WH_URL=tcp://127.0.0.1:5555");
+        // Should contain all env vars including surface-specific ones
+        let env_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        assert!(
+            env_args.contains(&"WH_SURFACE_NAME=telegram"),
+            "should pass WH_SURFACE_NAME: {:?}",
+            args
+        );
+        assert!(
+            env_args.contains(&"WH_STREAM=main"),
+            "should pass WH_STREAM: {:?}",
+            args
+        );
+        assert!(
+            env_args.contains(&"TELEGRAM_BOT_TOKEN=tok123"),
+            "should pass surface-specific env: {:?}",
+            args
+        );
+        // Image should be the last arg
+        assert_eq!(args.last().unwrap(), "wh-telegram:latest");
+    }
+
+    #[test]
+    fn surface_env_merge_includes_spec_entries() {
+        // Simulate the env merge logic from provision_containers
+        let extra_env: Vec<(String, String)> = vec![
+            ("ANTHROPIC_API_KEY".to_string(), "sk-ant-xxx".to_string()),
+        ];
+        let surface = crate::deploy::Surface {
+            name: "telegram".to_string(),
+            kind: "telegram".to_string(),
+            image: "wh-telegram:latest".to_string(),
+            stream: "main".to_string(),
+            env: Some(std::collections::BTreeMap::from([
+                ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
+                ("CHAT_ID".to_string(), "456".to_string()),
+            ])),
+        };
+
+        // Reproduce the merge logic from provision_containers
+        let mut surface_env = extra_env.to_vec();
+        surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
+        surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+        if let Some(env_map) = &surface.env {
+            for (key, value) in env_map {
+                surface_env.push((key.clone(), value.clone()));
+            }
+        }
+
+        // Verify all expected env vars are present
+        let keys: Vec<&str> = surface_env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"ANTHROPIC_API_KEY"), "should carry over extra_env");
+        assert!(keys.contains(&"WH_SURFACE_NAME"), "should inject WH_SURFACE_NAME");
+        assert!(keys.contains(&"WH_STREAM"), "should inject WH_STREAM");
+        assert!(keys.contains(&"TELEGRAM_BOT_TOKEN"), "should include surface spec env");
+        assert!(keys.contains(&"CHAT_ID"), "should include all surface spec env entries");
+        assert_eq!(surface_env.len(), 5, "should have exactly 5 env entries");
+    }
+
+    #[test]
+    fn stream_count_excludes_surface_and_agent_components() {
+        // Verify stream counting logic: only components that are NOT agents
+        // and NOT surfaces with op "+" count as stream additions.
+        let changes = vec![
+            Change {
+                op: "+".to_string(),
+                component: "stream main".to_string(),
+                field: None,
+                from: None,
+                to: None,
+            },
+            Change {
+                op: "+".to_string(),
+                component: "surface telegram".to_string(),
+                field: None,
+                from: None,
+                to: None,
+            },
+            Change {
+                op: "+".to_string(),
+                component: "agent researcher".to_string(),
+                field: None,
+                from: None,
+                to: None,
+            },
+        ];
+        // Count streams using the same logic as provision_containers
+        let streams_created = changes
+            .iter()
+            .filter(|c| {
+                parse_agent_name(&c.component).is_none()
+                    && parse_surface_name(&c.component).is_none()
+                    && c.op == "+"
+            })
+            .count();
+        assert_eq!(streams_created, 1, "only 'stream main' should count");
     }
 }

@@ -268,6 +268,9 @@ pub fn apply(
             changed: 0,
             destroyed: 0,
             streams_created: 0,
+            surfaces_created: 0,
+            surfaces_changed: 0,
+            surfaces_destroyed: 0,
         });
     }
 
@@ -281,6 +284,8 @@ pub fn apply(
         &committed.desired_topology.name,
         &committed.changes,
         &committed.desired_topology.agents,
+        &committed.desired_topology.streams,
+        &committed.desired_topology.surfaces,
         Some(workspace_root),
         extra_env,
     );
@@ -295,14 +300,16 @@ pub struct DestroyResult {
     pub destroyed: usize,
     /// Number of streams removed from state (no Podman teardown — streams are broker-managed).
     pub streams_removed: usize,
+    /// Number of surface containers destroyed.
+    pub surfaces_destroyed: usize,
 }
 
 impl std::fmt::Display for DestroyResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} destroyed \u{00B7} {} streams removed",
-            self.destroyed, self.streams_removed
+            "{} destroyed \u{00B7} {} streams removed \u{00B7} {} surfaces destroyed",
+            self.destroyed, self.streams_removed, self.surfaces_destroyed
         )
     }
 }
@@ -351,15 +358,17 @@ pub fn destroy(
             return Ok(DestroyResult {
                 destroyed: 0,
                 streams_removed: 0,
+                surfaces_destroyed: 0,
             });
         }
     };
 
-    if topology.agents.is_empty() && topology.streams.is_empty() {
+    if topology.agents.is_empty() && topology.streams.is_empty() && topology.surfaces.is_empty() {
         // State exists but is empty — no-op
         return Ok(DestroyResult {
             destroyed: 0,
             streams_removed: 0,
+            surfaces_destroyed: 0,
         });
     }
 
@@ -387,6 +396,26 @@ pub fn destroy(
         }
     }
 
+    // Stop and remove all surface containers
+    let mut surfaces_destroyed_count: usize = 0;
+    for surface_def in &topology.surfaces {
+        let name = podman::surface_container_name(&topology.name, &surface_def.name);
+        match podman::podman_stop(&name) {
+            Ok(()) => {
+                surfaces_destroyed_count += 1;
+                tracing::info!(surface = %surface_def.name, "surface container destroyed");
+            }
+            Err(e) => {
+                tracing::error!(
+                    surface = %surface_def.name,
+                    error = %e,
+                    "failed to stop surface container during destroy — continuing"
+                );
+                surfaces_destroyed_count += 1;
+            }
+        }
+    }
+
     // Write cleared state to .wh/state.json
     let wh_dir = workspace_root.join(".wh");
     std::fs::create_dir_all(&wh_dir).map_err(DeployError::FileRead)?;
@@ -396,6 +425,7 @@ pub fn destroy(
         name: topology.name.clone(),
         agents: vec![],
         streams: vec![],
+        surfaces: vec![],
         guardrails: topology.guardrails.clone(),
     };
     let state_path = wh_dir.join("state.json");
@@ -436,6 +466,13 @@ pub fn destroy(
             if streams_removed == 1 { "" } else { "s" }
         ));
     }
+    if surfaces_destroyed_count > 0 {
+        summary_parts.push(format!(
+            "removed {} surface{}",
+            surfaces_destroyed_count,
+            if surfaces_destroyed_count == 1 { "" } else { "s" }
+        ));
+    }
     let summary = if summary_parts.is_empty() {
         "no changes".to_string()
     } else {
@@ -455,6 +492,7 @@ pub fn destroy(
     Ok(DestroyResult {
         destroyed: destroyed_count,
         streams_removed,
+        surfaces_destroyed: surfaces_destroyed_count,
     })
 }
 
@@ -482,6 +520,7 @@ mod tests {
                 name: "dev".to_string(),
                 agents: vec![],
                 streams: vec![],
+                surfaces: vec![],
                 guardrails: None,
             },
             source_path: PathBuf::from("test.wh"),
@@ -511,6 +550,7 @@ mod tests {
                 name: "dev".to_string(),
                 agents: vec![],
                 streams: vec![],
+                surfaces: vec![],
                 guardrails: None,
             },
             source_path: PathBuf::from("test.wh"),

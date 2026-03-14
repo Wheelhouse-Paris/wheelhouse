@@ -146,6 +146,7 @@ fn signal_evaluation_proposes_scale_up_on_timeout_pattern() {
             persona: None,
         }],
         streams: vec![],
+        surfaces: vec![],
         guardrails: None,
     };
 
@@ -165,6 +166,7 @@ fn signal_evaluation_returns_none_for_unrecognized_pattern() {
         name: "dev".to_string(),
         agents: vec![],
         streams: vec![],
+        surfaces: vec![],
         guardrails: None,
     };
 
@@ -188,6 +190,7 @@ fn signal_evaluation_respects_guardrail_max_replicas() {
             persona: None,
         }],
         streams: vec![],
+        surfaces: vec![],
         guardrails: Some(Guardrails {
             max_replicas: Some(1),
             ..Default::default()

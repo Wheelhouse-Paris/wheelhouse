@@ -30,6 +30,9 @@ pub struct WhFile {
 
     /// Stream specifications. May be absent or empty for skeleton files.
     pub streams: Option<Vec<StreamSpec>>,
+
+    /// Surface specifications. May be absent or empty.
+    pub surfaces: Option<Vec<SurfaceSpec>>,
 }
 
 /// Agent specification within a `.wh` file.
@@ -59,4 +62,23 @@ pub struct StreamSpec {
 
     /// Compaction cron expression. Warning if absent (FM-06).
     pub compaction_cron: Option<String>,
+}
+
+/// Surface specification within a `.wh` file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfaceSpec {
+    /// Unique surface name.
+    pub name: Option<String>,
+
+    /// Surface type: "telegram" or "cli".
+    pub kind: Option<String>,
+
+    /// Container image reference (e.g., `ghcr.io/wheelhouse-paris/wh-telegram:latest`).
+    pub image: Option<String>,
+
+    /// Stream name this surface connects to.
+    pub stream: Option<String>,
+
+    /// Optional environment variables for the surface container.
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
