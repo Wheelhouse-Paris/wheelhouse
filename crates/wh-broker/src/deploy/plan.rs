@@ -366,6 +366,15 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     to: Some(serde_json::json!(desired_surface.kind)),
                 });
             }
+            if current_surface.env != desired_surface.env {
+                changes.push(Change {
+                    op: "~".to_string(),
+                    component: format!("surface {name}"),
+                    field: Some("env".to_string()),
+                    from: Some(serde_json::json!(current_surface.env)),
+                    to: Some(serde_json::json!(desired_surface.env)),
+                });
+            }
         }
     }
 
@@ -1136,5 +1145,69 @@ mod tests {
         let fields: Vec<_> = surface_changes.iter().filter_map(|c| c.field.as_deref()).collect();
         assert!(fields.contains(&"stream"), "should detect stream change");
         assert!(fields.contains(&"image"), "should detect image change");
+    }
+
+    #[test]
+    fn plan_detects_surface_env_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let wh_dir = dir.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        // Current state: surface with env
+        let topology = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![Agent {
+                name: "researcher".to_string(),
+                image: "r:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+                persona: None,
+            }],
+            streams: vec![Stream {
+                name: "main".to_string(),
+                retention: None,
+            }],
+            surfaces: vec![Surface {
+                name: "telegram".to_string(),
+                kind: "telegram".to_string(),
+                image: "wh-telegram:latest".to_string(),
+                stream: "main".to_string(),
+                env: Some(std::collections::BTreeMap::from([
+                    ("TELEGRAM_BOT_TOKEN".to_string(), "old-token".to_string()),
+                ])),
+            }],
+            guardrails: None,
+        };
+        std::fs::write(
+            wh_dir.join("state.json"),
+            serde_json::to_string(&topology).unwrap(),
+        )
+        .unwrap();
+
+        // Desired state: same surface with different env value
+        let wh_path = dir.path().join("topology.wh");
+        std::fs::write(
+            &wh_path,
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\nsurfaces:\n  - name: telegram\n    kind: telegram\n    image: wh-telegram:latest\n    stream: main\n    env:\n      TELEGRAM_BOT_TOKEN: new-token\n",
+        )
+        .unwrap();
+
+        let linted = crate::deploy::lint::lint(&wh_path).unwrap();
+        let plan_output = plan(linted).unwrap();
+
+        assert!(plan_output.has_changes(), "env change should produce a diff");
+        let env_changes: Vec<_> = plan_output
+            .changes()
+            .iter()
+            .filter(|c| c.component == "surface telegram" && c.field.as_deref() == Some("env"))
+            .collect();
+        assert_eq!(
+            env_changes.len(),
+            1,
+            "should detect exactly one env change: {:?}",
+            plan_output.changes()
+        );
+        assert_eq!(env_changes[0].op, "~");
     }
 }

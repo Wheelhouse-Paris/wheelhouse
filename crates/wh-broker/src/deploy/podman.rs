@@ -70,9 +70,9 @@ impl std::fmt::Display for ApplyResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} created \u{00B7} {} changed \u{00B7} {} destroyed \u{00B7} {} streams \u{00B7} {} surfaces",
+            "{} created \u{00B7} {} changed \u{00B7} {} destroyed \u{00B7} {} streams \u{00B7} {} surfaces created \u{00B7} {} surfaces changed \u{00B7} {} surfaces destroyed",
             self.created, self.changed, self.destroyed, self.streams_created,
-            self.surfaces_created + self.surfaces_changed
+            self.surfaces_created, self.surfaces_changed, self.surfaces_destroyed
         )
     }
 }
@@ -446,6 +446,67 @@ pub fn podman_run(
     Ok(())
 }
 
+/// Build command arguments for `podman run` for a **surface** container.
+///
+/// Uses `surface_container_name()` for the `--name` argument, ensuring
+/// naming symmetry between start and stop paths (code review fix H3).
+pub fn build_surface_run_args(
+    topology_name: &str,
+    surface_name: &str,
+    image: &str,
+    broker_url: Option<&str>,
+    extra_env: &[(String, String)],
+) -> Vec<String> {
+    let name = surface_container_name(topology_name, surface_name);
+    let url = broker_url.unwrap_or(DEFAULT_BROKER_URL);
+
+    let mut args = vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),
+        name,
+        "-e".to_string(),
+        format!("WH_URL={url}"),
+    ];
+
+    // Inject caller-provided env vars (WH_SURFACE_NAME, WH_STREAM, secrets, surface env)
+    for (key, value) in extra_env {
+        args.push("-e".to_string());
+        args.push(format!("{key}={value}"));
+    }
+
+    args.push(image.to_string());
+    args
+}
+
+/// Start a surface container via Podman.
+///
+/// Uses `surface_container_name()` for naming symmetry with `podman_stop()`.
+/// Timeout: 120s (image pull may be slow on first run).
+#[tracing::instrument(skip_all, fields(surface = surface_name, topology = topology_name))]
+pub fn podman_run_surface(
+    topology_name: &str,
+    surface_name: &str,
+    image: &str,
+    broker_url: Option<&str>,
+    extra_env: &[(String, String)],
+) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let args = build_surface_run_args(
+        topology_name,
+        surface_name,
+        image,
+        broker_url,
+        extra_env,
+    );
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    tracing::info!("starting surface container");
+    run_podman_checked(podman, &args_ref, PODMAN_RUN_TIMEOUT)?;
+    tracing::info!("surface container started");
+    Ok(())
+}
+
 /// Build command arguments for `podman stop`.
 ///
 /// Returns the argument list for stopping a container.
@@ -657,13 +718,11 @@ pub fn provision_containers(
 
             match change.op.as_str() {
                 "+" => {
-                    match podman_run(
+                    match podman_run_surface(
                         topology_name,
-                        &format!("surface-{}", surface.name),
+                        &surface.name,
                         &surface.image,
-                        &[surface.stream.clone()],
                         Some(CONTAINER_BROKER_URL),
-                        None,
                         &surface_env,
                     ) {
                         Ok(()) => result.surfaces_created += 1,
@@ -692,13 +751,11 @@ pub fn provision_containers(
                 "~" => {
                     let name = surface_container_name(topology_name, &surface.name);
                     let _ = podman_stop(&name);
-                    match podman_run(
+                    match podman_run_surface(
                         topology_name,
-                        &format!("surface-{}", surface.name),
+                        &surface.name,
                         &surface.image,
-                        &[surface.stream.clone()],
                         Some(CONTAINER_BROKER_URL),
-                        None,
                         &surface_env,
                     ) {
                         Ok(()) => result.surfaces_changed += 1,
@@ -999,7 +1056,7 @@ mod tests {
         };
         assert_eq!(
             result.to_string(),
-            "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed \u{00B7} 1 streams \u{00B7} 0 surfaces"
+            "1 created \u{00B7} 0 changed \u{00B7} 2 destroyed \u{00B7} 1 streams \u{00B7} 0 surfaces created \u{00B7} 0 surfaces changed \u{00B7} 0 surfaces destroyed"
         );
     }
 
@@ -1081,9 +1138,92 @@ mod tests {
         };
         let display = result.to_string();
         assert!(
-            display.contains("3 surfaces"),
-            "should show surfaces_created + surfaces_changed = 3: {display}"
+            display.contains("2 surfaces created"),
+            "should show surfaces_created separately: {display}"
         );
+        assert!(
+            display.contains("1 surfaces changed"),
+            "should show surfaces_changed separately: {display}"
+        );
+        assert!(
+            display.contains("0 surfaces destroyed"),
+            "should show surfaces_destroyed separately: {display}"
+        );
+    }
+
+    #[test]
+    fn build_surface_run_args_uses_surface_container_name() {
+        let args = build_surface_run_args(
+            "dev",
+            "telegram",
+            "wh-telegram:latest",
+            None,
+            &[
+                ("WH_SURFACE_NAME".to_string(), "telegram".to_string()),
+                ("WH_STREAM".to_string(), "main".to_string()),
+                ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
+            ],
+        );
+        // --name must use surface_container_name format
+        assert_eq!(args[3], "wh-dev-surface-telegram");
+        // Should contain WH_URL
+        assert_eq!(args[5], "WH_URL=tcp://127.0.0.1:5555");
+        // Should contain all env vars including surface-specific ones
+        let env_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        assert!(
+            env_args.contains(&"WH_SURFACE_NAME=telegram"),
+            "should pass WH_SURFACE_NAME: {:?}",
+            args
+        );
+        assert!(
+            env_args.contains(&"WH_STREAM=main"),
+            "should pass WH_STREAM: {:?}",
+            args
+        );
+        assert!(
+            env_args.contains(&"TELEGRAM_BOT_TOKEN=tok123"),
+            "should pass surface-specific env: {:?}",
+            args
+        );
+        // Image should be the last arg
+        assert_eq!(args.last().unwrap(), "wh-telegram:latest");
+    }
+
+    #[test]
+    fn surface_env_merge_includes_spec_entries() {
+        // Simulate the env merge logic from provision_containers
+        let extra_env: Vec<(String, String)> = vec![
+            ("ANTHROPIC_API_KEY".to_string(), "sk-ant-xxx".to_string()),
+        ];
+        let surface = crate::deploy::Surface {
+            name: "telegram".to_string(),
+            kind: "telegram".to_string(),
+            image: "wh-telegram:latest".to_string(),
+            stream: "main".to_string(),
+            env: Some(std::collections::BTreeMap::from([
+                ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
+                ("CHAT_ID".to_string(), "456".to_string()),
+            ])),
+        };
+
+        // Reproduce the merge logic from provision_containers
+        let mut surface_env = extra_env.to_vec();
+        surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
+        surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+        if let Some(env_map) = &surface.env {
+            for (key, value) in env_map {
+                surface_env.push((key.clone(), value.clone()));
+            }
+        }
+
+        // Verify all expected env vars are present
+        let keys: Vec<&str> = surface_env.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"ANTHROPIC_API_KEY"), "should carry over extra_env");
+        assert!(keys.contains(&"WH_SURFACE_NAME"), "should inject WH_SURFACE_NAME");
+        assert!(keys.contains(&"WH_STREAM"), "should inject WH_STREAM");
+        assert!(keys.contains(&"TELEGRAM_BOT_TOKEN"), "should include surface spec env");
+        assert!(keys.contains(&"CHAT_ID"), "should include all surface spec env entries");
+        assert_eq!(surface_env.len(), 5, "should have exactly 5 env entries");
     }
 
     #[test]

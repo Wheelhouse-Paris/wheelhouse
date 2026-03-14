@@ -34,6 +34,13 @@ impl LintedFile {
 /// Lint a `.wh` topology file: parse, validate structure, and return a `LintedFile` token.
 ///
 /// This is the entry point of the deploy pipeline typestate chain.
+///
+/// **Known limitation**: This broker-side lint only validates YAML structure via serde
+/// deserialization (`parse_topology()`). It does NOT validate field-level rules for
+/// surfaces (e.g., `kind` must be "telegram"/"cli", `stream` must reference a declared
+/// stream). Those validations live in the CLI lint layer (`wh-cli/src/lint.rs:validate_surfaces()`).
+/// If the broker is called directly (not via CLI), surfaces with invalid field values
+/// will be accepted. This mirrors the pre-existing pattern for agents and streams.
 #[tracing::instrument(skip_all, fields(path = %path.as_ref().display()))]
 #[must_use = "a LintedFile must be passed to plan() — do not discard"]
 pub fn lint(path: impl AsRef<Path>) -> Result<LintedFile, DeployError> {

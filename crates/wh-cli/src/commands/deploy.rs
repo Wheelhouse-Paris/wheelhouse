@@ -444,7 +444,7 @@ fn execute_destroy(
                         "destroyed": true,
                         "agents_removed": destroy_result.destroyed,
                         "streams_removed": destroy_result.streams_removed,
-                        "surfaces_removed": destroy_result.surfaces_destroyed
+                        "surfaces_destroyed": destroy_result.surfaces_destroyed
                     }
                 })
             );
