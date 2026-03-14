@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -37,7 +38,17 @@ class ClaudeClient:
     """
 
     def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022") -> None:
-        self._client = anthropic.Anthropic(api_key=api_key)
+        # OAuth tokens (sk-ant-oat01-*) must be sent as Authorization: Bearer,
+        # not as x-api-key. The Anthropic SDK uses auth_token= for this.
+        # We must also remove ANTHROPIC_API_KEY from env before creating the client
+        # so the SDK doesn't pick it up as api_key (which would send both X-Api-Key
+        # and Authorization headers, causing the server to reject the OAuth token
+        # as an invalid API key).
+        if api_key.startswith("sk-ant-oat"):
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            self._client = anthropic.Anthropic(auth_token=api_key)
+        else:
+            self._client = anthropic.Anthropic(api_key=api_key)
         self.model = model
 
     async def complete(
