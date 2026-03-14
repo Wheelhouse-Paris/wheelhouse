@@ -361,8 +361,8 @@ impl BrokerState {
         let Some(json) = json_opt else {
             return Ok(());
         };
-        let metadata: Vec<StreamMetadata> = serde_json::from_str(&json)
-            .map_err(|e| StreamError::Io(std::io::Error::other(e)))?;
+        let metadata: Vec<StreamMetadata> =
+            serde_json::from_str(&json).map_err(|e| StreamError::Io(std::io::Error::other(e)))?;
 
         let mut streams = self.streams.write().await;
         for meta in metadata {

@@ -206,9 +206,7 @@ pub async fn compact_stream(
     let tp2 = temp_file.temp_path().to_path_buf();
     let temp_content = tokio::task::spawn_blocking(move || std::fs::read_to_string(&tp2))
         .await
-        .map_err(|e| {
-            CompactionError::IoError(std::io::Error::other(e))
-        })??;
+        .map_err(|e| CompactionError::IoError(std::io::Error::other(e)))??;
     if temp_content.is_empty() {
         return Err(CompactionError::SummaryFailed(
             "temp summary file is empty".to_string(),

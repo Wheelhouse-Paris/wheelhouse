@@ -105,10 +105,7 @@ impl Table {
                 }
             })
             .collect();
-        output.push_str(&format!(
-            " {} \n",
-            header_line.join(&format!(" {v_bar} "))
-        ));
+        output.push_str(&format!(" {} \n", header_line.join(&format!(" {v_bar} "))));
 
         // Separator line
         let sep_parts: Vec<String> = widths.iter().map(|w| h_bar.repeat(w + 2)).collect();

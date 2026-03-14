@@ -237,9 +237,7 @@ pub fn format_notification(
             agent_name,
             from_replicas,
             to_replicas,
-        } => format!(
-            "Scaled agent '{agent_name}' from {from_replicas} to {to_replicas} replicas"
-        ),
+        } => format!("Scaled agent '{agent_name}' from {from_replicas} to {to_replicas} replicas"),
     };
 
     AutonomousNotification {
@@ -336,9 +334,7 @@ pub fn evaluate_threshold(evaluation: &SignalEvaluation, topology: &Topology) ->
                 from_replicas,
                 to_replicas,
             } => {
-                format!(
-                    "Scale agent '{agent_name}' from {from_replicas} to {to_replicas} replicas"
-                )
+                format!("Scale agent '{agent_name}' from {from_replicas} to {to_replicas} replicas")
             }
         };
         let request = ApprovalRequest {

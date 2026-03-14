@@ -135,9 +135,8 @@ pub fn write_memory(
     let timestamp = Utc::now().to_rfc3339();
 
     // Commit with attribution (ADR-003 pattern)
-    let commit_message = format!(
-        "[{agent_name}] memory: {reason}\n\nTimestamp: {timestamp}\nAgent: {agent_name}"
-    );
+    let commit_message =
+        format!("[{agent_name}] memory: {reason}\n\nTimestamp: {timestamp}\nAgent: {agent_name}");
     run_git_checked(workspace_root, &["commit", "-m", &commit_message])?;
 
     // Get the commit hash

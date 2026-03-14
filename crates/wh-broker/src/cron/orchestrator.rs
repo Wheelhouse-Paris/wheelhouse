@@ -205,15 +205,9 @@ impl CronSkillChain {
     /// simulate failure; all others succeed.
     fn simulate_skill_execution(&self, skill_name: &str) -> (bool, String) {
         if skill_name.starts_with("fail-") || skill_name.starts_with("error-") {
-            (
-                false,
-                format!("simulated failure for skill '{skill_name}'"),
-            )
+            (false, format!("simulated failure for skill '{skill_name}'"))
         } else {
-            (
-                true,
-                format!("simulated output from skill '{skill_name}'"),
-            )
+            (true, format!("simulated output from skill '{skill_name}'"))
         }
     }
 }

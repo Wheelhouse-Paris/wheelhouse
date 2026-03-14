@@ -91,9 +91,7 @@ impl DoctorArgs {
                     println!("  [{}] {} — {}", icon, check.name, check.message);
                 }
                 println!();
-                println!(
-                    "  {pass_count} passed, {warn_count} warnings, {fail_count} failures"
-                );
+                println!("  {pass_count} passed, {warn_count} warnings, {fail_count} failures");
             }
             OutputFormat::Json => {
                 let report = DoctorReport {

@@ -493,9 +493,7 @@ fn print_stream_list(response: &serde_json::Value, format: OutputFormat) {
                             .get("created_at")
                             .and_then(|v| v.as_str())
                             .unwrap_or("-");
-                        println!(
-                            "{name:<20} {retention:<12} {message_count:<15} {created}"
-                        );
+                        println!("{name:<20} {retention:<12} {message_count:<15} {created}");
                     }
                 }
                 None => {

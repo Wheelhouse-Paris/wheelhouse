@@ -246,9 +246,7 @@ pub fn endpoint_with_port_offset(endpoint: &str, offset: u16) -> Result<String, 
             ))
         })?;
         let offset_port = port.checked_add(offset).ok_or_else(|| {
-            TelegramError::ConfigError(format!(
-                "port overflow: {port} + {offset} exceeds u16 max"
-            ))
+            TelegramError::ConfigError(format!("port overflow: {port} + {offset} exceeds u16 max"))
         })?;
         Ok(format!("{}:{}", &endpoint[..colon_pos], offset_port))
     } else {
