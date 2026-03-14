@@ -89,9 +89,11 @@ class ClaudeClient:
             return subprocess.run(
                 cmd,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,  # prevent blocking on interactive prompts
                 text=True,
                 timeout=timeout,
                 env=env,
+                cwd="/tmp",  # neutral cwd — avoids workspace trust/analysis delays
             )
 
         try:
