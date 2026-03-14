@@ -313,8 +313,7 @@ fn plan_self_destruct_with_force_json_includes_warning() {
                 .map(|s| s.contains("destroy") || s.contains("self-destruct"))
                 .unwrap_or(false)
         }),
-        "warnings should mention destroy/self-destruct, got: {:?}",
-        warnings
+        "warnings should mention destroy/self-destruct, got: {warnings:?}"
     );
 }
 

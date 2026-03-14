@@ -92,8 +92,7 @@ impl DoctorArgs {
                 }
                 println!();
                 println!(
-                    "  {} passed, {} warnings, {} failures",
-                    pass_count, warn_count, fail_count
+                    "  {pass_count} passed, {warn_count} warnings, {fail_count} failures"
                 );
             }
             OutputFormat::Json => {

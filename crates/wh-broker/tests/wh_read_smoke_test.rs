@@ -83,7 +83,7 @@ fn agent_reads_own_wh_invalid_yaml_errors() {
     // Invalid YAML should result in a parse error
     match result.unwrap_err() {
         DeployError::YamlParse(_) => {}
-        other => panic!("Expected YamlParse, got: {:?}", other),
+        other => panic!("Expected YamlParse, got: {other:?}"),
     }
 }
 

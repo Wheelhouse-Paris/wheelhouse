@@ -60,8 +60,7 @@ fn ac1_ps_shows_summary_line() {
     // Using a loose check for the format
     assert!(
         stdout.contains("agents") && stdout.contains("running") && stdout.contains("stopped"),
-        "Summary line must show 'N agents · N running · N stopped', got: {}",
-        stdout
+        "Summary line must show 'N agents · N running · N stopped', got: {stdout}"
     );
 }
 
@@ -74,8 +73,7 @@ fn ac2_ps_json_format_is_valid_json() {
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
     assert!(
         parsed.is_ok(),
-        "wh ps --format json must output valid JSON, got: {}",
-        stdout
+        "wh ps --format json must output valid JSON, got: {stdout}"
     );
     assert_eq!(code, 0, "Exit code must be 0 on success");
 }
@@ -110,9 +108,7 @@ fn ac2_ps_json_components_have_status_enum() {
             .expect("each component must have a 'status' string field");
         assert!(
             valid_statuses.contains(&status),
-            "Status must be one of {:?}, got: {}",
-            valid_statuses,
-            status
+            "Status must be one of {valid_statuses:?}, got: {status}"
         );
     }
 }
@@ -128,16 +124,14 @@ fn ac2_ps_json_fields_are_snake_case() {
             for (key, val) in obj {
                 assert!(
                     !key.chars().any(|c| c.is_uppercase()),
-                    "JSON key '{}' at path '{}' contains uppercase chars — must be snake_case (SCV-01)",
-                    key,
-                    path
+                    "JSON key '{key}' at path '{path}' contains uppercase chars — must be snake_case (SCV-01)"
                 );
-                check_snake_case(val, &format!("{}.{}", path, key));
+                check_snake_case(val, &format!("{path}.{key}"));
             }
         }
         if let Some(arr) = value.as_array() {
             for (i, val) in arr.iter().enumerate() {
-                check_snake_case(val, &format!("{}[{}]", path, i));
+                check_snake_case(val, &format!("{path}[{i}]"));
             }
         }
     }
@@ -165,8 +159,7 @@ fn ac3_no_tty_uses_ascii_borders() {
     for ch in &unicode_box_chars {
         assert!(
             !stdout.contains(*ch),
-            "Non-TTY output must use ASCII borders, but found Unicode char '{}'",
-            ch
+            "Non-TTY output must use ASCII borders, but found Unicode char '{ch}'"
         );
     }
 }
@@ -177,27 +170,24 @@ fn ac3_no_tty_uses_ascii_borders() {
 fn ac4_no_broker_shows_friendly_error() {
     // When broker is not running, should show "Wheelhouse not running"
     let (stdout, stderr, code) = run_wh_ps(&[]);
-    let combined = format!("{}{}", stdout, stderr);
+    let combined = format!("{stdout}{stderr}");
     assert_eq!(
         code, 1,
         "Exit code must be 1 when Wheelhouse is not running"
     );
     assert!(
         combined.contains("Wheelhouse not running") || combined.contains("not running"),
-        "Error message must say 'Wheelhouse not running', got: {}",
-        combined
+        "Error message must say 'Wheelhouse not running', got: {combined}"
     );
     // Must NOT mention "broker" or "connection refused"
     let lower = combined.to_lowercase();
     assert!(
         !lower.contains("broker"),
-        "Error must never mention 'broker' (RT-B1), got: {}",
-        combined
+        "Error must never mention 'broker' (RT-B1), got: {combined}"
     );
     assert!(
         !lower.contains("connection refused"),
-        "Error must never mention 'connection refused' (RT-B1), got: {}",
-        combined
+        "Error must never mention 'connection refused' (RT-B1), got: {combined}"
     );
 }
 

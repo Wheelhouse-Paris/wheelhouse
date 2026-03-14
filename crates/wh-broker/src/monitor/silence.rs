@@ -52,19 +52,19 @@ pub fn format_human_duration(d: Duration) -> String {
         if hours == 1 {
             "1 hour".to_string()
         } else {
-            format!("{} hours", hours)
+            format!("{hours} hours")
         }
     } else if total_secs >= 60 {
         let minutes = (total_secs as f64 / 60.0).round() as u64;
         if minutes == 1 {
             "1 minute".to_string()
         } else {
-            format!("{} minutes", minutes)
+            format!("{minutes} minutes")
         }
     } else if total_secs == 1 {
         "1 second".to_string()
     } else {
-        format!("{} seconds", total_secs)
+        format!("{total_secs} seconds")
     }
 }
 

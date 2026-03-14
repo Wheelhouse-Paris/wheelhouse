@@ -54,6 +54,12 @@ pub struct SkillRouter {
     pipelines: HashMap<String, Mutex<InvocationPipeline>>,
 }
 
+impl Default for SkillRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SkillRouter {
     /// Create a new empty skill router with no agents registered.
     pub fn new() -> Self {

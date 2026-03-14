@@ -108,7 +108,7 @@ impl CronEventDispatcher {
                         // Timer fired — publish progress, then continue waiting for handler
                         let progress = ProgressUpdate {
                             job_name: job_name.clone(),
-                            message: format!("cron job '{}' still running after {}s", job_name, PROGRESS_TIMEOUT_SECS),
+                            message: format!("cron job '{job_name}' still running after {PROGRESS_TIMEOUT_SECS}s"),
                             percent: None,
                         };
                         if let Err(e) = progress_tx.send(progress).await {

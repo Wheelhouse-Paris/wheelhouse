@@ -52,7 +52,7 @@ impl CronEventHandler for CronSkillHandler {
         })?;
 
         Ok(HandlerOutcome::Completed {
-            message: format!("skill invocation published for {}", skill_name),
+            message: format!("skill invocation published for {skill_name}"),
         })
     }
 }

@@ -245,7 +245,7 @@ fn stream_tail_default_format_is_human() {
         "Expected human-format error, got: {stderr}"
     );
     // Should NOT be JSON
-    let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stderr.trim());
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(stderr.trim());
     assert!(
         parsed.is_err(),
         "Human format should not produce valid JSON"

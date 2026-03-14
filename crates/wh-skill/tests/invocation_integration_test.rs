@@ -507,7 +507,7 @@ async fn timeout_does_not_remove_cached_skill() {
     pipeline.process(request, tx).await.unwrap();
 
     // Drain events
-    while let Ok(_) = rx.try_recv() {}
+    while rx.try_recv().is_ok() {}
 
     // Skill should still be cached (loading from git succeeded, only execution timed out)
     assert_eq!(

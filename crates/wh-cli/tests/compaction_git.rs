@@ -8,7 +8,6 @@
 
 #![allow(unused_must_use)]
 
-use std::path::PathBuf;
 use std::process::Command;
 
 use tempfile::TempDir;
@@ -70,7 +69,7 @@ async fn compaction_acquires_per_stream_mutex() {
     // AND a concurrent compaction attempt returns MutexBusy
 
     // This test will fail until compact_stream() and the compaction mutex exist
-    use wh_broker::wal::compaction::{compact_stream, CompactionError};
+    use wh_broker::wal::compaction::compact_stream;
 
     let dir = TempDir::new().unwrap();
     init_git_repo(dir.path());

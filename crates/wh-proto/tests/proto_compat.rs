@@ -10,7 +10,7 @@ const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixt
 
 #[test]
 fn v1_text_message_fixture_exists() {
-    let path = format!("{}/v1_text_message.bin", FIXTURE_DIR);
+    let path = format!("{FIXTURE_DIR}/v1_text_message.bin");
     assert!(
         std::path::Path::new(&path).exists(),
         "Proto fixture file must exist at {path} for backward compatibility (NFR-E1). \
@@ -20,7 +20,7 @@ fn v1_text_message_fixture_exists() {
 
 #[test]
 fn v1_text_message_roundtrip() {
-    let path = format!("{}/v1_text_message.bin", FIXTURE_DIR);
+    let path = format!("{FIXTURE_DIR}/v1_text_message.bin");
     let data = std::fs::read(&path).unwrap_or_else(|e| {
         panic!("Failed to read proto fixture at {path}: {e}. Run fixture generator first.")
     });
@@ -43,7 +43,7 @@ fn v1_text_message_roundtrip() {
 
 #[test]
 fn v1_skill_invocation_fixture_roundtrip() {
-    let path = format!("{}/v1_skill_invocation.bin", FIXTURE_DIR);
+    let path = format!("{FIXTURE_DIR}/v1_skill_invocation.bin");
     let data = std::fs::read(&path).unwrap_or_else(|e| {
         panic!("Failed to read proto fixture at {path}: {e}. Run fixture generator first.")
     });
@@ -58,7 +58,7 @@ fn v1_skill_invocation_fixture_roundtrip() {
 
 #[test]
 fn v1_cron_event_fixture_roundtrip() {
-    let path = format!("{}/v1_cron_event.bin", FIXTURE_DIR);
+    let path = format!("{FIXTURE_DIR}/v1_cron_event.bin");
     let data = std::fs::read(&path).unwrap_or_else(|e| {
         panic!("Failed to read proto fixture at {path}: {e}. Run fixture generator first.")
     });

@@ -576,7 +576,7 @@ async fn test_skill_timeout_produces_skill_timeout_result() {
                 _ => panic!("Expected Error outcome, got Success"),
             }
         }
-        _ => panic!("Last event must be Completed, got {:?}", last),
+        _ => panic!("Last event must be Completed, got {last:?}"),
     }
 }
 
@@ -710,8 +710,7 @@ async fn test_wall_clock_timeout_enforced_at_executor_level() {
     // Should complete within 500ms (generous margin for CI)
     assert!(
         elapsed < Duration::from_millis(500),
-        "Pipeline should timeout quickly (~100ms), not wait for slow executor. Elapsed: {:?}",
-        elapsed
+        "Pipeline should timeout quickly (~100ms), not wait for slow executor. Elapsed: {elapsed:?}"
     );
 
     // Verify SKILL_TIMEOUT emitted

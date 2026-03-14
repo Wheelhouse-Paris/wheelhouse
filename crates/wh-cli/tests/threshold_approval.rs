@@ -84,7 +84,7 @@ fn high_impact_change_with_low_threshold_requires_approval() {
             assert!(!request.instruction.is_empty());
             assert_eq!(request.impact_level, "High");
         }
-        other => panic!("Expected RequiresApproval, got {:?}", other),
+        other => panic!("Expected RequiresApproval, got {other:?}"),
     }
 }
 
@@ -413,8 +413,7 @@ fn apply_with_approval_creates_attributed_commit() {
     let log_text = String::from_utf8_lossy(&git_log.stdout);
     assert!(
         log_text.contains("[donna]"),
-        "Git log should contain agent name: {}",
-        log_text
+        "Git log should contain agent name: {log_text}"
     );
 }
 

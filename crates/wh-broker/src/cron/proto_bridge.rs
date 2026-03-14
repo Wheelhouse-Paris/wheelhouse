@@ -81,7 +81,7 @@ pub fn build_chain_summary(outcome: &ChainOutcome) -> String {
 mod tests {
     use super::*;
     use crate::cron::chain::ChainEvent;
-    use prost_types::Timestamp;
+    
     use std::collections::HashMap;
 
     #[test]

@@ -212,8 +212,7 @@ pub async fn run_cli(stream: &str, output_format: OutputFormat) -> Result<(), Wh
         }
         ConnectionEvent::Reconnected => {
             eprintln!(
-                "Reconnected — listening on stream '{}'",
-                stream_name_for_event
+                "Reconnected — listening on stream '{stream_name_for_event}'"
             );
         }
         ConnectionEvent::ReconnectFailed {

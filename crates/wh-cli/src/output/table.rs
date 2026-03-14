@@ -107,7 +107,7 @@ impl Table {
             .collect();
         output.push_str(&format!(
             " {} \n",
-            header_line.join(&format!(" {} ", v_bar))
+            header_line.join(&format!(" {v_bar} "))
         ));
 
         // Separator line
@@ -130,7 +130,7 @@ impl Table {
                     }
                 })
                 .collect();
-            output.push_str(&format!(" {} \n", cells.join(&format!(" {} ", v_bar))));
+            output.push_str(&format!(" {} \n", cells.join(&format!(" {v_bar} "))));
         }
 
         output

@@ -89,7 +89,7 @@ impl TelegramSurface {
                 u.first_name.clone()
                     + &u.last_name
                         .as_ref()
-                        .map(|ln| format!(" {}", ln))
+                        .map(|ln| format!(" {ln}"))
                         .unwrap_or_default()
             })
             .unwrap_or_else(|| "Unknown".to_string());

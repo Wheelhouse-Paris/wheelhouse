@@ -93,7 +93,7 @@ pub async fn execute(cmd: &StreamCommand) {
                         .and_then(|s| s.as_str())
                         .unwrap_or("unknown");
                     if status == "ok" {
-                        println!("Stream '{}' created", name);
+                        println!("Stream '{name}' created");
                     } else {
                         output::print_error(&response, OutputFormat::Human);
                         std::process::exit(1);
@@ -134,7 +134,7 @@ pub async fn execute(cmd: &StreamCommand) {
                         .and_then(|s| s.as_str())
                         .unwrap_or("unknown");
                     if status == "ok" {
-                        println!("Stream '{}' deleted", name);
+                        println!("Stream '{name}' deleted");
                     } else {
                         output::print_error(&response, OutputFormat::Human);
                         std::process::exit(1);
@@ -312,8 +312,7 @@ async fn execute_subscribe(stream_name: &str, format: &OutputFormat) -> Result<(
         }
         ConnectionEvent::Reconnected => {
             eprintln!(
-                "Reconnected — subscribed to stream '{}', waiting for messages...",
-                stream_name_owned
+                "Reconnected — subscribed to stream '{stream_name_owned}', waiting for messages..."
             );
         }
         ConnectionEvent::ReconnectFailed {
@@ -495,8 +494,7 @@ fn print_stream_list(response: &serde_json::Value, format: OutputFormat) {
                             .and_then(|v| v.as_str())
                             .unwrap_or("-");
                         println!(
-                            "{:<20} {:<12} {:<15} {}",
-                            name, retention, message_count, created
+                            "{name:<20} {retention:<12} {message_count:<15} {created}"
                         );
                     }
                 }

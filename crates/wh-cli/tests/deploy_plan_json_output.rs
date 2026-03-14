@@ -137,8 +137,7 @@ fn plan_json_schema_contains_all_v1_required_fields() {
     for field in &required_fields {
         assert!(
             data.get(field).is_some(),
-            "missing required data field: {}",
-            field
+            "missing required data field: {field}"
         );
     }
 

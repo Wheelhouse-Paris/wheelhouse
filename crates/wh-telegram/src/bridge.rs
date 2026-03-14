@@ -242,21 +242,18 @@ pub fn endpoint_with_port_offset(endpoint: &str, offset: u16) -> Result<String, 
         let port_str = &endpoint[colon_pos + 1..];
         let port: u16 = port_str.parse().map_err(|_| {
             TelegramError::ConfigError(format!(
-                "invalid port in endpoint '{}': '{}'",
-                endpoint, port_str
+                "invalid port in endpoint '{endpoint}': '{port_str}'"
             ))
         })?;
         let offset_port = port.checked_add(offset).ok_or_else(|| {
             TelegramError::ConfigError(format!(
-                "port overflow: {} + {} exceeds u16 max",
-                port, offset
+                "port overflow: {port} + {offset} exceeds u16 max"
             ))
         })?;
         Ok(format!("{}:{}", &endpoint[..colon_pos], offset_port))
     } else {
         Err(TelegramError::ConfigError(format!(
-            "endpoint '{}' has no port",
-            endpoint
+            "endpoint '{endpoint}' has no port"
         )))
     }
 }

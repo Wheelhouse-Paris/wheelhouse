@@ -186,7 +186,7 @@ pub fn render_stream_end() -> Result<String, WhError> {
 
 /// Render the agent-stopped notice to stderr.
 pub fn render_agent_stopped_notice(agent_name: &str) -> String {
-    format!("Agent '{}' is not currently running", agent_name)
+    format!("Agent '{agent_name}' is not currently running")
 }
 
 #[cfg(test)]

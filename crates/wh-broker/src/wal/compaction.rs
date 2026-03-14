@@ -198,7 +198,7 @@ pub async fn compact_stream(
         Ok(())
     })
     .await
-    .map_err(|e| CompactionError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+    .map_err(|e| CompactionError::IoError(std::io::Error::other(e)))??;
 
     let temp_file = CompactionTempFile::new(temp_path, final_path.clone());
 
@@ -207,7 +207,7 @@ pub async fn compact_stream(
     let temp_content = tokio::task::spawn_blocking(move || std::fs::read_to_string(&tp2))
         .await
         .map_err(|e| {
-            CompactionError::IoError(std::io::Error::new(std::io::ErrorKind::Other, e))
+            CompactionError::IoError(std::io::Error::other(e))
         })??;
     if temp_content.is_empty() {
         return Err(CompactionError::SummaryFailed(

@@ -281,8 +281,7 @@ fn autonomous_apply_creates_attributed_git_commit() {
     let log_text = String::from_utf8_lossy(&git_log.stdout);
     assert!(
         log_text.contains("[donna]"),
-        "Git log should contain agent name: {}",
-        log_text
+        "Git log should contain agent name: {log_text}"
     );
 
     // Verify the commit message body contains plan hash (AC #2)
@@ -294,8 +293,7 @@ fn autonomous_apply_creates_attributed_git_commit() {
     let body = String::from_utf8_lossy(&git_log_body.stdout);
     assert!(
         body.contains("Plan: sha256:"),
-        "Commit body should contain plan hash: {}",
-        body
+        "Commit body should contain plan hash: {body}"
     );
 }
 

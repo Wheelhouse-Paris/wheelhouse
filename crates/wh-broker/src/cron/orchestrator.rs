@@ -81,7 +81,7 @@ impl CronSkillChain {
         // Wait for the spawned task to complete
         handle.await.map_err(|e| ChainError::InvocationFailed {
             job_name: job_name.clone(),
-            reason: format!("handler task panicked: {}", e),
+            reason: format!("handler task panicked: {e}"),
         })?;
 
         // Receive the SkillInvocationPublished event from the handler
@@ -133,8 +133,7 @@ impl CronSkillChain {
         // Step 6/7: Construct TextMessage and handle failure
         if success {
             let summary = format!(
-                "[CRON CHAIN OK] job={} skill={} output={}",
-                job_name, skill_name, output_or_error
+                "[CRON CHAIN OK] job={job_name} skill={skill_name} output={output_or_error}"
             );
             let _ = proto_bridge::build_text_message(&summary, &self.agent_id);
 
@@ -153,8 +152,7 @@ impl CronSkillChain {
             })
         } else {
             let error_msg = format!(
-                "[CRON CHAIN FAILED] job={} skill={} error=SKILL_RESULT_ERROR: {}",
-                job_name, skill_name, output_or_error
+                "[CRON CHAIN FAILED] job={job_name} skill={skill_name} error=SKILL_RESULT_ERROR: {output_or_error}"
             );
             let _ = proto_bridge::build_text_message(&error_msg, &self.agent_id);
 
@@ -209,12 +207,12 @@ impl CronSkillChain {
         if skill_name.starts_with("fail-") || skill_name.starts_with("error-") {
             (
                 false,
-                format!("simulated failure for skill '{}'", skill_name),
+                format!("simulated failure for skill '{skill_name}'"),
             )
         } else {
             (
                 true,
-                format!("simulated output from skill '{}'", skill_name),
+                format!("simulated output from skill '{skill_name}'"),
             )
         }
     }

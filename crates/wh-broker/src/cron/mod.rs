@@ -134,8 +134,8 @@ fn validate_cron_expression(job_name: &str, expression: &str) -> Result<(), Cron
 fn normalize_cron_expression(expression: &str) -> String {
     let field_count = expression.split_whitespace().count();
     match field_count {
-        5 => format!("0 {} *", expression),
-        6 => format!("{} *", expression),
+        5 => format!("0 {expression} *"),
+        6 => format!("{expression} *"),
         7 => expression.to_string(),
         _ => expression.to_string(), // Let the parser produce the error
     }

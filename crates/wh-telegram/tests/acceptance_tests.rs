@@ -196,8 +196,7 @@ mod ac4_error_sanitization {
         for term in &forbidden {
             assert!(
                 !sanitized.to_lowercase().contains(term),
-                "sanitized message must not contain '{}'",
-                term
+                "sanitized message must not contain '{term}'"
             );
         }
     }

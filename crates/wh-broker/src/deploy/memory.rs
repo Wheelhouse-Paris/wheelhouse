@@ -76,15 +76,13 @@ fn validate_agent_name(agent_name: &str) -> Result<(), MemoryError> {
 
     if !agent_name.chars().all(|c| c.is_alphanumeric() || c == '-') {
         return Err(MemoryError::InvalidPath(format!(
-            "agent name '{}' contains invalid characters — only alphanumeric and hyphens allowed",
-            agent_name
+            "agent name '{agent_name}' contains invalid characters — only alphanumeric and hyphens allowed"
         )));
     }
 
     if agent_name.starts_with('-') || agent_name.ends_with('-') {
         return Err(MemoryError::InvalidPath(format!(
-            "agent name '{}' must not start or end with a hyphen",
-            agent_name
+            "agent name '{agent_name}' must not start or end with a hyphen"
         )));
     }
 
@@ -128,7 +126,7 @@ pub fn write_memory(
     std::fs::write(&file_path, content)?;
 
     // Build the relative path for git add
-    let relative_path = format!(".wh/agents/{}/MEMORY.md", agent_name);
+    let relative_path = format!(".wh/agents/{agent_name}/MEMORY.md");
 
     // Stage the file
     run_git_checked(workspace_root, &["add", &relative_path])?;
@@ -138,8 +136,7 @@ pub fn write_memory(
 
     // Commit with attribution (ADR-003 pattern)
     let commit_message = format!(
-        "[{}] memory: {}\n\nTimestamp: {}\nAgent: {}",
-        agent_name, reason, timestamp, agent_name
+        "[{agent_name}] memory: {reason}\n\nTimestamp: {timestamp}\nAgent: {agent_name}"
     );
     run_git_checked(workspace_root, &["commit", "-m", &commit_message])?;
 
@@ -190,7 +187,7 @@ pub fn append_memory(
 
     let new_content = match existing {
         Some(existing_content) if !existing_content.is_empty() => {
-            format!("{}\n\n---\n\n{}", existing_content, entry)
+            format!("{existing_content}\n\n---\n\n{entry}")
         }
         _ => entry.to_string(),
     };

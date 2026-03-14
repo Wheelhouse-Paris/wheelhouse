@@ -147,8 +147,7 @@ mod tests {
             // Verify SCREAMING_SNAKE_CASE: all uppercase, underscores allowed, no lowercase
             assert!(
                 code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
-                "error code '{}' is not SCREAMING_SNAKE_CASE",
-                code
+                "error code '{code}' is not SCREAMING_SNAKE_CASE"
             );
         }
     }

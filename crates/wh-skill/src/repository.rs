@@ -362,7 +362,7 @@ mod tests {
         let (tmp, oid) = create_repo_with_skill("test", "1.0.0", &["01-do.md"]);
 
         let repo = SkillRepository::open(tmp.path()).unwrap();
-        let resolved = repo.resolve_version(&format!("commit:{}", oid)).unwrap();
+        let resolved = repo.resolve_version(&format!("commit:{oid}")).unwrap();
         assert_eq!(resolved, oid);
     }
 

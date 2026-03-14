@@ -116,7 +116,7 @@ async fn handle_stream_create(
         }
         Err(StreamError::AlreadyExists(n)) => Ok(error_response(
             "STREAM_EXISTS",
-            &format!("Stream '{}' already exists", n),
+            &format!("Stream '{n}' already exists"),
         )),
         Err(StreamError::InvalidName(msg)) => Ok(error_response("INVALID_STREAM_NAME", &msg)),
         Err(e) => Ok(error_response("INTERNAL_ERROR", &e.to_string())),
@@ -183,7 +183,7 @@ async fn handle_stream_delete(
         })),
         Err(StreamError::NotFound(n)) => Ok(error_response(
             "STREAM_NOT_FOUND",
-            &format!("Stream '{}' not found", n),
+            &format!("Stream '{n}' not found"),
         )),
         Err(e) => Ok(error_response("INTERNAL_ERROR", &e.to_string())),
     }

@@ -115,16 +115,14 @@ fn validate_stream_name(name: &str) -> Result<(), TelegramError> {
     let first = chars.next().unwrap();
     if !first.is_ascii_lowercase() {
         return Err(TelegramError::ConfigError(format!(
-            "stream name must start with lowercase letter, got '{}'",
-            first
+            "stream name must start with lowercase letter, got '{first}'"
         )));
     }
 
     for ch in chars {
         if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '-' {
             return Err(TelegramError::ConfigError(format!(
-                "stream name contains invalid character: '{}'",
-                ch
+                "stream name contains invalid character: '{ch}'"
             )));
         }
     }

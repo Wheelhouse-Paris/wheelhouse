@@ -21,8 +21,7 @@ fn ac1_rerun_shows_already_configured_status() {
     let status = wh_cli::commands::secrets::check_credential_status("claude_code_oauth_token");
     assert!(
         matches!(status, Some(CredentialStatus::DetectedFromEnv)),
-        "Expected DetectedFromEnv status, got {:?}",
-        status
+        "Expected DetectedFromEnv status, got {status:?}"
     );
     std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
 }
@@ -139,7 +138,7 @@ fn ac3_read_secret_returns_env_var_value() {
     // Then: it returns the env var value
     std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token-ac3");
     let result = wh_cli::commands::secrets::read_secret("claude_code_oauth_token");
-    assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+    assert!(result.is_ok(), "Expected Ok, got {result:?}");
     assert_eq!(result.unwrap(), "oauth-token-ac3");
     std::env::remove_var("CLAUDE_CODE_OAUTH_TOKEN");
 }
@@ -151,7 +150,7 @@ fn ac3_read_secret_returns_error_when_not_configured() {
     // Then: it returns SecretNotFound error
     std::env::remove_var("NONEXISTENT_CREDENTIAL");
     let result = wh_cli::commands::secrets::read_secret("nonexistent_credential");
-    assert!(result.is_err(), "Expected error, got {:?}", result);
+    assert!(result.is_err(), "Expected error, got {result:?}");
     let err = result.unwrap_err();
     let err_msg = format!("{err}");
     assert!(

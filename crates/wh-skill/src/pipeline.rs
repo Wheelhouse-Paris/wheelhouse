@@ -263,8 +263,7 @@ impl InvocationPipeline {
                         outcome: SkillInvocationOutcome::Error {
                             error_code: "SKILL_EXECUTION_FAILED".into(),
                             error_message: format!(
-                                "Skill '{}' panicked during execution: {}",
-                                skill_name, panic_message
+                                "Skill '{skill_name}' panicked during execution: {panic_message}"
                             ),
                         },
                     })

@@ -133,8 +133,7 @@ pub fn evaluate_signal(signal: &str, current_topology: &Topology) -> Option<Sign
         }
 
         return propose_scale_up(&agent_name, current_topology, signal, &format!(
-            "Detected {} daily timeouts on agent '{}', indicating insufficient capacity. Scaling up by 1 replica.",
-            count, agent_name
+            "Detected {count} daily timeouts on agent '{agent_name}', indicating insufficient capacity. Scaling up by 1 replica."
         ));
     }
 
@@ -143,8 +142,7 @@ pub fn evaluate_signal(signal: &str, current_topology: &Topology) -> Option<Sign
         let agent_name = caps[1].to_string();
 
         return propose_scale_up(&agent_name, current_topology, signal, &format!(
-            "High error rate detected on agent '{}', suggesting resource exhaustion. Scaling up by 1 replica.",
-            agent_name
+            "High error rate detected on agent '{agent_name}', suggesting resource exhaustion. Scaling up by 1 replica."
         ));
     }
 
@@ -202,7 +200,7 @@ pub fn modify_topology_replicas(
         .iter_mut()
         .find(|a| a.name == agent_name)
         .ok_or_else(|| {
-            DeployError::InvalidTopology(format!("agent '{}' not found in topology", agent_name))
+            DeployError::InvalidTopology(format!("agent '{agent_name}' not found in topology"))
         })?;
 
     agent.replicas = new_replicas;
@@ -240,8 +238,7 @@ pub fn format_notification(
             from_replicas,
             to_replicas,
         } => format!(
-            "Scaled agent '{}' from {} to {} replicas",
-            agent_name, from_replicas, to_replicas
+            "Scaled agent '{agent_name}' from {from_replicas} to {to_replicas} replicas"
         ),
     };
 
@@ -340,15 +337,14 @@ pub fn evaluate_threshold(evaluation: &SignalEvaluation, topology: &Topology) ->
                 to_replicas,
             } => {
                 format!(
-                    "Scale agent '{}' from {} to {} replicas",
-                    agent_name, from_replicas, to_replicas
+                    "Scale agent '{agent_name}' from {from_replicas} to {to_replicas} replicas"
                 )
             }
         };
         let request = ApprovalRequest {
             what,
             why: evaluation.justification.clone(),
-            impact_level: format!("{:?}", impact),
+            impact_level: format!("{impact:?}"),
             instruction: format!(
                 "This change is classified as {:?} impact and exceeds the configured threshold ({:?}). \
                  Reply 'yes' or 'approve' to proceed, or 'no' / 'reject' to deny.",
@@ -436,8 +432,7 @@ fn apply_autonomous_change_inner(
     };
 
     let commit_summary = format!(
-        "[{}] apply: scale agent {} replicas to {}{}",
-        agent_name, target_agent, new_replicas, approved_suffix
+        "[{agent_name}] apply: scale agent {target_agent} replicas to {new_replicas}{approved_suffix}"
     );
 
     Ok(AutonomousApplyResult {
@@ -872,7 +867,7 @@ mod tests {
                 assert!(!request.instruction.is_empty());
                 assert_eq!(request.impact_level, "High");
             }
-            other => panic!("Expected RequiresApproval, got {:?}", other),
+            other => panic!("Expected RequiresApproval, got {other:?}"),
         }
     }
 

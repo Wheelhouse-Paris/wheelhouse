@@ -33,8 +33,7 @@ fn validate_persona_path(persona_path: &str) -> Result<(), DeployError> {
     for component in persona_path.split('/') {
         if component == ".." {
             return Err(DeployError::PersonaLoadFailed(format!(
-                "persona path '{}' contains path traversal component '..'",
-                persona_path
+                "persona path '{persona_path}' contains path traversal component '..'"
             )));
         }
     }
@@ -42,8 +41,7 @@ fn validate_persona_path(persona_path: &str) -> Result<(), DeployError> {
     // Reject absolute paths
     if persona_path.starts_with('/') {
         return Err(DeployError::PersonaLoadFailed(format!(
-            "persona path '{}' must be relative, not absolute",
-            persona_path
+            "persona path '{persona_path}' must be relative, not absolute"
         )));
     }
 

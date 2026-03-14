@@ -133,16 +133,14 @@ fn build_run_args_includes_persona_volume_when_set() {
         .any(|w| w[0] == "-v" && w[1].contains("/persona"));
     assert!(
         has_volume,
-        "Expected persona volume mount in args: {:?}",
-        args
+        "Expected persona volume mount in args: {args:?}"
     );
 
     // Should include WH_PERSONA_PATH env var
     let has_env = args.iter().any(|a| a == "WH_PERSONA_PATH=/persona");
     assert!(
         has_env,
-        "Expected WH_PERSONA_PATH env var in args: {:?}",
-        args
+        "Expected WH_PERSONA_PATH env var in args: {args:?}"
     );
 }
 
@@ -163,8 +161,7 @@ fn build_run_args_excludes_persona_when_not_set() {
         .any(|a| a.contains("persona") || a.contains("PERSONA"));
     assert!(
         !has_persona,
-        "Should not include persona args when not set: {:?}",
-        args
+        "Should not include persona args when not set: {args:?}"
     );
 }
 

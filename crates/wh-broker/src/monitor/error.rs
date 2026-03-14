@@ -59,7 +59,7 @@ mod tests {
     fn test_alert_failed_display() {
         let err = MonitorError::AlertFailed {
             agent_name: "assistant-1".to_string(),
-            source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, "test")),
+            source: Box::new(std::io::Error::other("test")),
         };
         assert!(err.to_string().contains("assistant-1"));
         assert_eq!(err.code(), "ALERT_FAILED");
@@ -78,15 +78,14 @@ mod tests {
             .code(),
             MonitorError::AlertFailed {
                 agent_name: "a".to_string(),
-                source: Box::new(std::io::Error::new(std::io::ErrorKind::Other, "t")),
+                source: Box::new(std::io::Error::other("t")),
             }
             .code(),
         ];
         for code in &codes {
             assert!(
                 code.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
-                "code '{}' is not SCREAMING_SNAKE_CASE",
-                code
+                "code '{code}' is not SCREAMING_SNAKE_CASE"
             );
         }
     }

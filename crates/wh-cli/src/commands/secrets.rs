@@ -405,7 +405,7 @@ pub fn check_credential_status(credential_name: &str) -> Option<CredentialStatus
     }
 
     // Check keychain directly.
-    let service = format!("{}.{}", KEYRING_SERVICE_PREFIX, credential_name);
+    let service = format!("{KEYRING_SERVICE_PREFIX}.{credential_name}");
     if let Ok(entry) = keyring::Entry::new(&service, KEYRING_USER) {
         if entry.get_password().is_ok() {
             return Some(CredentialStatus::AlreadyConfigured);
@@ -439,7 +439,7 @@ pub fn read_secret(credential_name: &str) -> Result<String, WhError> {
     }
 
     // 2. Check keychain.
-    let service = format!("{}.{}", KEYRING_SERVICE_PREFIX, credential_name);
+    let service = format!("{KEYRING_SERVICE_PREFIX}.{credential_name}");
     if let Ok(entry) = keyring::Entry::new(&service, KEYRING_USER) {
         if let Ok(password) = entry.get_password() {
             return Ok(password);
@@ -562,7 +562,7 @@ fn prompt_update_credential(
 
 /// Store a value in the OS keychain.
 fn store_in_keychain(credential_name: &str, value: &str) -> Result<(), WhError> {
-    let service = format!("{}.{}", KEYRING_SERVICE_PREFIX, credential_name);
+    let service = format!("{KEYRING_SERVICE_PREFIX}.{credential_name}");
     let entry = keyring::Entry::new(&service, KEYRING_USER)
         .map_err(|e| WhError::KeychainError(e.to_string()))?;
     entry

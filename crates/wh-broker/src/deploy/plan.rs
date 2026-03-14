@@ -122,14 +122,13 @@ impl std::fmt::Display for PlanData {
         writeln!(f)?;
         writeln!(
             f,
-            "{} to create \u{00B7} {} to update \u{00B7} {} to destroy",
-            create_count, update_count, destroy_count
+            "{create_count} to create \u{00B7} {update_count} to update \u{00B7} {destroy_count} to destroy"
         )?;
         writeln!(f)?;
         writeln!(f, "Plan hash: {}", self.plan_hash)?;
 
         for warning in &self.warnings {
-            writeln!(f, "Warning: {}", warning)?;
+            writeln!(f, "Warning: {warning}")?;
         }
 
         Ok(())
@@ -392,7 +391,7 @@ fn compute_plan_hash(changes: &[Change]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(canonical_json.as_bytes());
     let result = hasher.finalize();
-    format!("sha256:{:x}", result)
+    format!("sha256:{result:x}")
 }
 
 /// Execute the plan step: consume a `LintedFile` and produce a `PlanOutput`.
@@ -523,8 +522,7 @@ pub fn plan_with_self_check(
             // Check for direct removal
             if change.op == "-" && change.component == target_component {
                 return Err(DeployError::SelfDestructDetected(format!(
-                    "agent '{}' cannot remove itself from the topology",
-                    agent_name
+                    "agent '{agent_name}' cannot remove itself from the topology"
                 )));
             }
             // Check for scaling to 0 replicas (functionally equivalent to removal)
@@ -534,8 +532,7 @@ pub fn plan_with_self_check(
                 && change.to == Some(serde_json::json!(0))
             {
                 return Err(DeployError::SelfDestructDetected(format!(
-                    "agent '{}' cannot scale itself to 0 replicas",
-                    agent_name
+                    "agent '{agent_name}' cannot scale itself to 0 replicas"
                 )));
             }
         }
@@ -551,7 +548,7 @@ mod tests {
 
     fn create_temp_wh(content: &str) -> tempfile::NamedTempFile {
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        write!(tmp, "{}", content).unwrap();
+        write!(tmp, "{content}").unwrap();
         tmp
     }
 
@@ -1148,8 +1145,7 @@ mod tests {
             .collect();
         assert!(
             !surface_changes.is_empty(),
-            "expected surface change, got: {:?}",
-            surface_changes
+            "expected surface change, got: {surface_changes:?}"
         );
         let fields: Vec<_> = surface_changes
             .iter()

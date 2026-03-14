@@ -330,7 +330,7 @@ impl BrokerState {
         drop(streams);
 
         let json = serde_json::to_string_pretty(&metadata)
-            .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| StreamError::Io(std::io::Error::other(e)))?;
 
         let data_dir = self.data_dir.clone();
         tokio::task::spawn_blocking(move || -> std::io::Result<()> {
@@ -339,7 +339,7 @@ impl BrokerState {
             Ok(())
         })
         .await
-        .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+        .map_err(|e| StreamError::Io(std::io::Error::other(e)))??;
 
         Ok(())
     }
@@ -356,13 +356,13 @@ impl BrokerState {
             Ok(Some(std::fs::read_to_string(&path_clone)?))
         })
         .await
-        .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))??;
+        .map_err(|e| StreamError::Io(std::io::Error::other(e)))??;
 
         let Some(json) = json_opt else {
             return Ok(());
         };
         let metadata: Vec<StreamMetadata> = serde_json::from_str(&json)
-            .map_err(|e| StreamError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| StreamError::Io(std::io::Error::other(e)))?;
 
         let mut streams = self.streams.write().await;
         for meta in metadata {
