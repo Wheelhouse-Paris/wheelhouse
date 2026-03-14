@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::RwLock;
 
+use crate::skill_router::SkillRouter;
 use crate::wal::{WalError, WalWriter};
 
 /// Runtime metrics for the broker (SC-10).
@@ -185,6 +186,9 @@ pub struct BrokerState {
     pub streams: RwLock<HashMap<String, StreamInfo>>,
     /// Data directory for WAL files and stream registry.
     pub data_dir: PathBuf,
+    /// Optional skill router for processing SkillInvocation messages (Story 9.3).
+    /// None means skill routing is disabled — SkillInvocation messages pass through.
+    pub skill_router: Option<SkillRouter>,
 }
 
 impl BrokerState {
@@ -194,6 +198,7 @@ impl BrokerState {
             subscriber_count: RwLock::new(0),
             streams: RwLock::new(HashMap::new()),
             data_dir: PathBuf::from("."),
+            skill_router: None,
         })
     }
 
@@ -204,6 +209,21 @@ impl BrokerState {
             subscriber_count: RwLock::new(0),
             streams: RwLock::new(HashMap::new()),
             data_dir,
+            skill_router: None,
+        })
+    }
+
+    /// Create a new BrokerState with data directory and optional skill router (Story 9.3).
+    pub fn with_data_dir_and_skills(
+        data_dir: PathBuf,
+        skill_router: Option<SkillRouter>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            metrics: BrokerMetrics::new(),
+            subscriber_count: RwLock::new(0),
+            streams: RwLock::new(HashMap::new()),
+            data_dir,
+            skill_router,
         })
     }
 
@@ -382,6 +402,7 @@ impl Default for BrokerState {
             subscriber_count: RwLock::new(0),
             streams: RwLock::new(HashMap::new()),
             data_dir: PathBuf::from("."),
+            skill_router: None,
         }
     }
 }

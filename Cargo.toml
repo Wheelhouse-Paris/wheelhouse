@@ -56,3 +56,4 @@ protoc-bin-vendored = "3"
 
 # Internal crates
 wh-proto = { path = "crates/wh-proto" }
+wh-skill = { path = "crates/wh-skill" }

@@ -187,6 +187,8 @@ fn agent_struct_persona_field_included_in_serialization() {
         replicas: 1,
         streams: vec!["main".to_string()],
         persona: Some("agents/donna/".to_string()),
+        skills_repo: None,
+        skills: None,
     };
     let yaml = serde_yaml::to_string(&agent).unwrap();
     assert!(

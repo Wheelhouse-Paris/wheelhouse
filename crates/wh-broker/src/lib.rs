@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod monitor;
 pub mod registry;
 pub mod routing;
+pub mod skill_router;
 pub mod wal;
 
 use std::sync::Arc;
@@ -53,7 +54,43 @@ pub async fn run_broker(config: BrokerConfig) -> Result<(), BrokerError> {
         .map_err(|e| BrokerError::RoutingError(format!("spawn_blocking join error: {e}")))?
         .map_err(|e| BrokerError::RoutingError(format!("Failed to create data directory: {e}")))?;
 
-    let state = BrokerState::with_data_dir(config.data_dir().to_path_buf());
+    // Initialize skill router if configured (Story 9.3)
+    let skill_router_opt = if let Some(skills_repo_path) = config.skills_repo() {
+        let allowlist_names = config.skills_allowlist().to_vec();
+        if !allowlist_names.is_empty() {
+            let skill_refs: Vec<wh_skill::config::SkillRef> = allowlist_names
+                .iter()
+                .map(|name| wh_skill::config::SkillRef {
+                    name: name.clone(),
+                    // Default to branch:main for env-var based config
+                    version: "branch:main".to_string(),
+                })
+                .collect();
+
+            let mut router = skill_router::SkillRouter::new();
+            router.register_agent(
+                "default",
+                allowlist_names,
+                Some(skills_repo_path),
+                skill_refs,
+            );
+
+            tracing::info!(
+                skills_repo = skills_repo_path,
+                "skill routing enabled"
+            );
+            Some(router)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let state = BrokerState::with_data_dir_and_skills(
+        config.data_dir().to_path_buf(),
+        skill_router_opt,
+    );
     let cancel = CancellationToken::new();
 
     // Load stream registry from disk (broker restart recovery)

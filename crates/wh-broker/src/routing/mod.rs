@@ -16,6 +16,7 @@ use zeromq::{PubSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
 use crate::config::BrokerConfig;
 use crate::error::BrokerError;
 use crate::metrics::BrokerState;
+use crate::skill_router;
 
 /// Run the routing loop (ADR-009, SC-06).
 ///
@@ -151,7 +152,36 @@ async fn route_message(msg: ZmqMessage, pub_socket: &mut PubSocket, state: &Arc<
                 payload.to_vec()
             };
 
+            // Drop streams lock before async skill execution to avoid blocking
+            // stream create/delete operations during skill processing.
             drop(streams);
+
+            // Check for SkillInvocation interception (Story 9.3)
+            // Decode the forwarded envelope to check type_url
+            let skill_responses = if let Some(ref skill_router) = state.skill_router {
+                if let Ok(envelope) = StreamEnvelope::decode(forward_bytes.as_slice()) {
+                    if envelope.type_url == skill_router::TYPE_URL_SKILL_INVOCATION {
+                        if let Ok(invocation) =
+                            wh_proto::SkillInvocation::decode(envelope.payload.as_slice())
+                        {
+                            let request = wh_skill::invocation::SkillInvocationRequest::from(invocation);
+                            Some(skill_router.handle_invocation(request).await)
+                        } else {
+                            tracing::warn!(
+                                stream = %stream_name,
+                                "failed to decode SkillInvocation payload"
+                            );
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
             // Build the forwarded ZMQ message: stream_name\0augmented_payload
             let mut wire: Vec<u8> = Vec::with_capacity(stream_name.len() + 1 + forward_bytes.len());
@@ -162,6 +192,61 @@ async fn route_message(msg: ZmqMessage, pub_socket: &mut PubSocket, state: &Arc<
             let forward_msg = ZmqMessage::from(wire);
             if let Err(e) = pub_socket.send(forward_msg).await {
                 tracing::warn!(error = %e, "failed to forward message to PUB socket");
+            }
+
+            // Publish skill responses back to the stream (Story 9.3)
+            if let Some(responses) = skill_responses {
+                for response in responses {
+                    let mut response_envelope =
+                        skill_router::build_response_envelope(&stream_name, &response);
+
+                    // WAL write the skill response, then assign sequence + publish
+                    let streams = state.streams.read().await;
+                    if let Some(stream_info) = streams.get(&stream_name) {
+                        let response_payload = response_envelope.encode_to_vec();
+                        match stream_info.wal_writer.write(&response_payload).await {
+                            Ok(receipt) => {
+                                stream_info.message_count.fetch_add(1, Ordering::Relaxed);
+                                receipt.acknowledge();
+
+                                // Assign sequence number
+                                let seq =
+                                    stream_info.sequence_counter.fetch_add(1, Ordering::Relaxed);
+                                response_envelope.sequence_number = seq;
+                                response_envelope.published_at_ms =
+                                    chrono::Utc::now().timestamp_millis();
+
+                                let final_payload = response_envelope.encode_to_vec();
+                                drop(streams);
+
+                                let mut response_wire: Vec<u8> = Vec::with_capacity(
+                                    stream_name.len() + 1 + final_payload.len(),
+                                );
+                                response_wire.extend_from_slice(stream_name.as_bytes());
+                                response_wire.push(0);
+                                response_wire.extend_from_slice(&final_payload);
+
+                                let response_msg = ZmqMessage::from(response_wire);
+                                if let Err(e) = pub_socket.send(response_msg).await {
+                                    tracing::warn!(
+                                        error = %e,
+                                        "failed to publish skill response to PUB socket"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                drop(streams);
+                                tracing::warn!(
+                                    stream = %stream_name,
+                                    error = %e,
+                                    "WAL write failed for skill response — not published (SC-07)"
+                                );
+                            }
+                        }
+                    } else {
+                        drop(streams);
+                    }
+                }
             }
         }
         Err(e) => {

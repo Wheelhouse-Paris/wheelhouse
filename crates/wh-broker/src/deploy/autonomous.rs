@@ -592,6 +592,8 @@ mod tests {
             replicas,
             streams: vec![],
             persona: None,
+            skills_repo: None,
+            skills: None,
         }
     }
 
