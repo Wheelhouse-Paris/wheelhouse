@@ -421,17 +421,6 @@ fn validate_surfaces(wh_file: &WhFile, filename: &str, errors: &mut Vec<LintDiag
             }
         }
 
-        // Validate image
-        if surface.image.is_none() {
-            errors.push(LintDiagnostic {
-                file: filename.to_string(),
-                line: None,
-                level: DiagnosticLevel::Error,
-                message: format!("field 'image' is required on {surface_label}"),
-                hint: "add image to surface definition (e.g., wh-telegram:latest)".to_string(),
-            });
-        }
-
         // Validate stream reference
         match &surface.stream {
             None => {
@@ -786,7 +775,6 @@ streams:
 surfaces:
   - name: telegram
     kind: telegram
-    image: wh-telegram:latest
     stream: main
 "#,
         );
@@ -805,7 +793,6 @@ streams:
     compaction_cron: "0 2 * * *"
 surfaces:
   - kind: telegram
-    image: wh-telegram:latest
     stream: main
 "#,
         );
@@ -824,7 +811,6 @@ streams:
     compaction_cron: "0 2 * * *"
 surfaces:
   - name: tg
-    image: wh-telegram:latest
     stream: main
 "#,
         );
@@ -844,7 +830,6 @@ streams:
 surfaces:
   - name: slack
     kind: slack
-    image: wh-slack:latest
     stream: main
 "#,
         );
@@ -854,25 +839,6 @@ surfaces:
             .errors
             .iter()
             .any(|e| e.message.contains("slack") && e.message.contains("unsupported")));
-    }
-
-    #[test]
-    fn surface_missing_image_produces_error() {
-        let f = write_wh(
-            r#"
-apiVersion: wheelhouse.dev/v1
-streams:
-  - name: main
-    compaction_cron: "0 2 * * *"
-surfaces:
-  - name: tg
-    kind: telegram
-    stream: main
-"#,
-        );
-        let (result, _) = lint_file(f.path()).unwrap();
-        assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("image")));
     }
 
     #[test]
@@ -886,7 +852,6 @@ streams:
 surfaces:
   - name: tg
     kind: telegram
-    image: wh-telegram:latest
 "#,
         );
         let (result, _) = lint_file(f.path()).unwrap();
@@ -905,7 +870,6 @@ streams:
 surfaces:
   - name: tg
     kind: telegram
-    image: wh-telegram:latest
     stream: nonexistent
 "#,
         );
@@ -928,11 +892,9 @@ streams:
 surfaces:
   - name: tg
     kind: telegram
-    image: wh-telegram:latest
     stream: main
   - name: tg
     kind: cli
-    image: wh-cli:latest
     stream: main
 "#,
         );
@@ -959,7 +921,6 @@ streams:
 surfaces:
   - name: terminal
     kind: cli
-    image: wh-cli:latest
     stream: main
 "#,
         );

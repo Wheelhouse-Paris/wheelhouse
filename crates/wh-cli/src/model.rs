@@ -73,9 +73,6 @@ pub struct SurfaceSpec {
     /// Surface type: "telegram" or "cli".
     pub kind: Option<String>,
 
-    /// Container image reference (e.g., `ghcr.io/wheelhouse-paris/wh-telegram:latest`).
-    pub image: Option<String>,
-
     /// Stream name this surface connects to.
     pub stream: Option<String>,
 
