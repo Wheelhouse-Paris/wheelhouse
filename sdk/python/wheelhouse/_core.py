@@ -1,6 +1,12 @@
 """Internal implementation module for Wheelhouse Python SDK.
 
 Do NOT import from this module directly — use `import wheelhouse` or `from wheelhouse import ...`.
+
+Wire format (matches Rust broker):
+  Publish:   single ZMQ frame — b"stream_name\0<StreamEnvelope protobuf bytes>"
+  Subscribe: prefix filter  — b"stream_name\0" (null-terminated stream name)
+
+This format is compatible with the Rust broker's routing loop (routing/mod.rs).
 """
 
 from __future__ import annotations
@@ -9,8 +15,10 @@ import asyncio
 import logging
 import os
 import random
+import time
 from typing import Any, Callable, Awaitable
 
+import betterproto
 import zmq
 import zmq.asyncio
 
@@ -20,11 +28,12 @@ from wheelhouse.errors import (
     PublishTimeout,
     ReservedNamespaceError,
 )
-from wheelhouse.types import (
+from wheelhouse._proto.wheelhouse.v1 import (
     CronEvent,
     SkillInvocation,
     SkillProgress,
     SkillResult,
+    StreamEnvelope,
     TextMessage,
     TopologyShutdown,
 )
@@ -42,6 +51,16 @@ RECONNECT_JITTER_MAX_MS = 100
 
 # Global registry of types decorated with @register_type
 _registered_types: dict[str, type] = {}
+
+# Map from short type name to type_url prefix
+_BUILTIN_TYPES: dict[str, type] = {
+    "TextMessage": TextMessage,
+    "CronEvent": CronEvent,
+    "SkillInvocation": SkillInvocation,
+    "SkillProgress": SkillProgress,
+    "SkillResult": SkillResult,
+    "TopologyShutdown": TopologyShutdown,
+}
 
 
 def _calculate_backoff(attempt: int) -> float:
@@ -178,6 +197,92 @@ def register_type(type_name: str) -> Callable:
 MessageHandler = Callable[[Any], Awaitable[None]]
 
 
+def _encode_message(stream: str, message: Any, publisher_id: str) -> bytes:
+    """Encode a message into wire format: stream_name\\0StreamEnvelope_bytes.
+
+    Uses betterproto serialization for known built-in types and custom types
+    that inherit from betterproto.Message.
+    """
+    type_name = type(message).__name__
+
+    # Determine type_url
+    if hasattr(message, "_wh_type_name"):
+        # @register_type decorated custom type
+        type_url = f"wheelhouse.v1.custom.{message._wh_type_name}"
+    else:
+        type_url = f"wheelhouse.v1.{type_name}"
+
+    # Serialize inner payload using betterproto
+    if isinstance(message, betterproto.Message):
+        payload = bytes(message)
+    else:
+        raise TypeError(f"Cannot serialize type {type_name}: must be a betterproto.Message")
+
+    # Build StreamEnvelope
+    envelope = StreamEnvelope(
+        stream_name=stream,
+        type_url=type_url,
+        payload=payload,
+        publisher_id=publisher_id,
+        published_at_ms=int(time.time() * 1000),
+        sequence_number=0,  # Broker assigns authoritative value
+    )
+    envelope_bytes = bytes(envelope)
+
+    # Wire format: stream_name\0envelope_bytes
+    return stream.encode("utf-8") + b"\0" + envelope_bytes
+
+
+def _decode_message(raw: bytes) -> tuple[str, str, Any] | None:
+    """Decode a wire-format message: stream_name\\0StreamEnvelope_bytes.
+
+    Returns (stream_name, type_name, message) or None if decoding fails.
+    """
+    null_pos = raw.find(b"\0")
+    if null_pos < 0:
+        logger.debug("received message without stream prefix, skipping")
+        return None
+
+    stream_name = raw[:null_pos].decode("utf-8", errors="replace")
+    payload = raw[null_pos + 1:]
+
+    # Decode StreamEnvelope
+    try:
+        envelope = StreamEnvelope().parse(payload)
+    except Exception as e:
+        logger.debug("failed to decode StreamEnvelope: %s", e)
+        return None
+
+    type_url = envelope.type_url
+    # Extract short type name from type_url (e.g. "wheelhouse.v1.TextMessage" → "TextMessage")
+    type_name = type_url.rsplit(".", 1)[-1] if "." in type_url else type_url
+
+    # Deserialize the inner payload
+    message = _deserialize_payload(type_name, envelope.payload)
+
+    return stream_name, type_name, message
+
+
+def _deserialize_payload(type_name: str, data: bytes) -> Any:
+    """Deserialize an inner message payload based on type name."""
+    # Check global @register_type registry (CM-07)
+    if type_name in _registered_types:
+        cls = _registered_types[type_name]
+        if isinstance(cls, type) and issubclass(cls, betterproto.Message):
+            return cls().parse(data)
+        # Legacy: try FromString for non-betterproto types
+        if hasattr(cls, "FromString"):
+            return cls.FromString(data)
+
+    # Fall back to known built-in types
+    if type_name in _BUILTIN_TYPES:
+        return _BUILTIN_TYPES[type_name]().parse(data)
+
+    # Unknown type — return raw bytes
+    logger.warning("Unknown message type '%s', returning raw bytes", type_name)
+    return data
+
+
 class Connection:
     """A connection to Wheelhouse for publishing and subscribing to streams.
 
@@ -188,9 +293,11 @@ class Connection:
     def __init__(
         self,
         endpoint: str,
+        publisher_id: str = "",
         on_connection_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._endpoint = endpoint
+        self._publisher_id = publisher_id
         self._ctx: zmq.asyncio.Context | None = None
         self._pub_socket: zmq.asyncio.Socket | None = None
         self._sub_socket: zmq.asyncio.Socket | None = None
@@ -289,16 +396,18 @@ class Connection:
         self._connected = False
 
     async def publish(self, stream: str, message: Any) -> None:
-        """Publish a typed message to a stream (fire-and-forget)."""
+        """Publish a typed message to a stream (fire-and-forget).
+
+        Wire format: single ZMQ frame — b"stream_name\\0StreamEnvelope_bytes"
+        """
         if not self._connected or self._pub_socket is None:
             raise ConnectionError(
                 "Not connected to Wheelhouse",
                 code="NOT_CONNECTED",
             )
 
-        data = message.SerializeToString()
-        topic = f"{stream}:{type(message).__name__}".encode("utf-8")
-        await self._pub_socket.send_multipart([topic, data])
+        wire = _encode_message(stream, message, self._publisher_id)
+        await self._pub_socket.send(wire)
 
     async def publish_confirmed(
         self, stream: str, message: Any, timeout: float = 5.0
@@ -310,9 +419,8 @@ class Connection:
                 code="NOT_CONNECTED",
             )
 
-        data = message.SerializeToString()
-        topic = f"{stream}:{type(message).__name__}".encode("utf-8")
-        await self._pub_socket.send_multipart([topic, data])
+        wire = _encode_message(stream, message, self._publisher_id)
+        await self._pub_socket.send(wire)
 
         try:
             await asyncio.wait_for(self._wait_for_ack(stream), timeout=timeout)
@@ -334,7 +442,11 @@ class Connection:
         await asyncio.sleep(0)  # Yield control
 
     async def subscribe(self, stream: str, handler: MessageHandler) -> None:
-        """Subscribe to a stream with an async handler callback."""
+        """Subscribe to a stream with an async handler callback.
+
+        Subscription prefix: b"stream_name\\0" — matches the broker's wire format
+        (single-frame messages starting with the stream name followed by null byte).
+        """
         if not self._connected or self._sub_socket is None:
             raise ConnectionError(
                 "Not connected to Wheelhouse",
@@ -343,9 +455,10 @@ class Connection:
 
         if stream not in self._subscriptions:
             self._subscriptions[stream] = []
-            # Subscribe to ZMQ topic for this stream
-            topic = f"{stream}:".encode("utf-8")
-            self._sub_socket.subscribe(topic)
+            # Subscribe using null-terminated stream name prefix to match broker wire format
+            # Broker sends: b"stream_name\0<StreamEnvelope bytes>"
+            prefix = f"{stream}\0".encode("utf-8")
+            self._sub_socket.subscribe(prefix)
 
         self._subscriptions[stream].append(handler)
 
@@ -360,28 +473,28 @@ class Connection:
 
         while self._connected and not self._closing:
             try:
-                parts = await asyncio.wait_for(
-                    self._sub_socket.recv_multipart(), timeout=0.1
+                # Receive single-frame ZMQ message
+                raw: bytes = await asyncio.wait_for(
+                    self._sub_socket.recv(), timeout=0.1
                 )
-                if len(parts) >= 2:
-                    topic_bytes, data = parts[0], parts[1]
-                    topic = topic_bytes.decode("utf-8")
 
-                    # Parse topic: "stream_name:TypeName"
-                    if ":" in topic:
-                        stream_name, type_name = topic.split(":", 1)
-                        handlers = self._subscriptions.get(stream_name, [])
+                # Decode the wire-format message
+                decoded = _decode_message(raw)
+                if decoded is None:
+                    continue
 
-                        # Deserialize based on type name
-                        message = self._deserialize(type_name, data)
+                stream_name, type_name, message = decoded
 
-                        for handler in handlers:
-                            try:
-                                await handler(message)
-                            except Exception:
-                                logger.exception(
-                                    "Handler error for stream %s", stream_name
-                                )
+                # Dispatch to registered handlers for this stream
+                handlers = self._subscriptions.get(stream_name, [])
+                for handler in handlers:
+                    try:
+                        await handler(message)
+                    except Exception:
+                        logger.exception(
+                            "Handler error for stream %s type %s", stream_name, type_name
+                        )
+
             except asyncio.TimeoutError:
                 continue
             except zmq.ZMQError as exc:
@@ -396,36 +509,6 @@ class Connection:
                 if not self._closing:
                     logger.exception("Unexpected error in listener")
                 break
-
-    def _deserialize(self, type_name: str, data: bytes) -> Any:
-        """Deserialize a message based on its type name.
-
-        Checks instance-level types first, then global @register_type registry,
-        then falls back to known built-in types.
-        """
-        # Check instance-level registered types
-        if type_name in self._instance_types:
-            return self._instance_types[type_name].FromString(data)
-
-        # Check global @register_type registry (CM-07)
-        if type_name in _registered_types:
-            return _registered_types[type_name].FromString(data)
-
-        # Fall back to known built-in types
-        _builtin_types = {
-            "TextMessage": TextMessage,
-            "CronEvent": CronEvent,
-            "SkillInvocation": SkillInvocation,
-            "SkillProgress": SkillProgress,
-            "SkillResult": SkillResult,
-            "TopologyShutdown": TopologyShutdown,
-        }
-        if type_name in _builtin_types:
-            return _builtin_types[type_name].FromString(data)
-
-        # Return raw data if type unknown
-        logger.warning("Unknown message type: %s", type_name)
-        return data
 
     async def _reconnect(self) -> None:
         """Reconnect with exponential backoff (ADR-011).
@@ -516,6 +599,7 @@ Surface = Connection
 
 async def connect(
     endpoint: str | None = None,
+    publisher_id: str = "",
     on_connection_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> Connection:
     """Connect to Wheelhouse.
@@ -523,6 +607,8 @@ async def connect(
     Args:
         endpoint: Wheelhouse endpoint URL. If not provided, uses WH_URL
                   environment variable, or defaults to tcp://127.0.0.1:5555.
+        publisher_id: Identifier for this connection used in outgoing message envelopes.
+                      Set to the agent name so surfaces can filter self-echoes.
         on_connection_event: Optional callback for connection lifecycle events
             (CM-02). Receives a dict with "type" key: "disconnected",
             "reconnecting", "reconnected", or "reconnect_failed".
@@ -535,7 +621,7 @@ async def connect(
             not reachable.
     """
     resolved = _resolve_endpoint(endpoint)
-    conn = Connection(resolved, on_connection_event=on_connection_event)
+    conn = Connection(resolved, publisher_id=publisher_id, on_connection_event=on_connection_event)
 
     try:
         await conn._connect()

@@ -114,7 +114,10 @@ async def run_startup() -> dict[str, Any]:
 
     # Step 3: Connect to Wheelhouse broker
     try:
-        connection = await wheelhouse.connect(config["wh_url"])
+        connection = await wheelhouse.connect(
+            config["wh_url"],
+            publisher_id=config["agent_name"],
+        )
     except wheelhouse.ConnectionError as exc:
         logger.error("Failed to connect to broker at %s: %s", config["wh_url"], exc)
         sys.exit(1)

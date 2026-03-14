@@ -36,6 +36,7 @@ __all__ = [
 
 async def connect(
     endpoint: str | None = None,
+    publisher_id: str = "",
     *,
     mock: bool = False,
     on_connection_event: Callable[[dict[str, Any]], None] | None = None,
@@ -45,6 +46,8 @@ async def connect(
     Args:
         endpoint: Wheelhouse endpoint URL. If not provided, uses WH_URL
                   environment variable, or defaults to tcp://127.0.0.1:5555.
+        publisher_id: Identifier embedded in outgoing message envelopes.
+                      Set to the agent name so surfaces can filter self-echoes.
         mock: If True, returns a MockConnection for testing without a running
               Wheelhouse instance (NFR-D4).
         on_connection_event: Optional callback for connection lifecycle events
@@ -61,7 +64,7 @@ async def connect(
         from wheelhouse.testing import MockConnection
         return MockConnection()
     from wheelhouse._core import connect as _real_connect
-    return await _real_connect(endpoint, on_connection_event=on_connection_event)
+    return await _real_connect(endpoint, publisher_id=publisher_id, on_connection_event=on_connection_event)
 
 
 def register_type(type_name: str) -> Any:

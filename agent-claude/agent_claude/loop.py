@@ -15,6 +15,7 @@ Dispatch table:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -140,7 +141,7 @@ def _make_handler(
             "Message received: type=%s stream=%s publisher=%s",
             type(message).__name__,
             stream_name,
-            getattr(message, "publisher", "unknown"),
+            getattr(message, "publisher_id", "unknown"),
         )
 
         if isinstance(message, TopologyShutdown):
@@ -220,12 +221,12 @@ async def _handle_text_message(
     persona_path: str,
 ) -> None:
     """Handle an incoming TextMessage (AC #2, #6)."""
-    # Self-echo filter (AC-07)
-    if message.publisher == agent_name:
+    # Self-echo filter (AC-07): skip messages published by this agent
+    if message.publisher_id == agent_name:
         logger.debug(
-            "Self-message filtered: stream=%s publisher=%s",
+            "Self-message filtered: stream=%s publisher_id=%s",
             stream_name,
-            message.publisher,
+            message.publisher_id,
         )
         return
 
@@ -247,7 +248,11 @@ async def _handle_text_message(
     if result is not None:
         response_msg = TextMessage(
             content=result.text,
-            publisher=agent_name,
+            publisher_id=agent_name,
+            # Route response back to the user who sent the message (FR59).
+            # Surfaces (e.g. wh-telegram) use this field to deliver the reply
+            # to the correct chat session.
+            reply_to_user_id=message.user_id,
         )
         await _publish_response(
             connection,
@@ -273,7 +278,7 @@ async def _handle_cron_event(
 
     user_message = CRON_PROMPT_TEMPLATE.format(
         job_name=message.job_name,
-        triggered_at=message.triggered_at,
+        triggered_at=str(message.triggered_at),
     )
 
     task = asyncio.create_task(
@@ -290,7 +295,7 @@ async def _handle_cron_event(
     if result is not None:
         response_msg = TextMessage(
             content=result.text,
-            publisher=agent_name,
+            publisher_id=agent_name,
         )
         await _publish_response(
             connection,
@@ -315,10 +320,10 @@ async def _handle_skill_invocation(
     Publishes SkillProgress within 2s before Claude API call (AC-06).
     """
     # Drop invocations addressed to other agents (exact match, case-sensitive)
-    if message.target_agent != agent_name:
+    if message.agent_id != agent_name:
         logger.debug(
-            "SkillInvocation dropped: target_agent=%s (not us: %s) stream=%s",
-            message.target_agent,
+            "SkillInvocation dropped: agent_id=%s (not us: %s) stream=%s",
+            message.agent_id,
             agent_name,
             stream_name,
         )
@@ -327,9 +332,8 @@ async def _handle_skill_invocation(
     # Publish SkillProgress immediately (within 2s, AC-06)
     progress = SkillProgress(
         invocation_id=message.invocation_id,
-        status="IN_PROGRESS",
-        message="Processing...",
-        publisher=agent_name,
+        skill_name=message.skill_name,
+        status_message="Processing...",
     )
     await connection.publish(stream_name, progress)
     logger.debug(
@@ -342,9 +346,12 @@ async def _handle_skill_invocation(
     persona.reload_memory(persona_path)
     system_prompt = persona.build_system_prompt()
 
+    # Format parameters dict as JSON string for the prompt
+    input_payload = json.dumps(dict(message.parameters)) if message.parameters else "{}"
+
     user_message = SKILL_PROMPT_TEMPLATE.format(
         skill_name=message.skill_name,
-        input_payload=message.input_payload,
+        input_payload=input_payload,
     )
 
     task = asyncio.create_task(
@@ -361,9 +368,9 @@ async def _handle_skill_invocation(
     if result is not None:
         skill_result = SkillResult(
             invocation_id=message.invocation_id,
+            skill_name=message.skill_name,
             success=True,
-            payload=result.text,
-            publisher=agent_name,
+            output=result.text,
         )
         await _publish_response(
             connection,
@@ -375,9 +382,9 @@ async def _handle_skill_invocation(
         # Publish failure SkillResult so the caller is not left hanging
         skill_result = SkillResult(
             invocation_id=message.invocation_id,
+            skill_name=message.skill_name,
             success=False,
-            payload="Claude API call failed",
-            publisher=agent_name,
+            error_message="Claude API call failed",
         )
         await _publish_response(
             connection,
