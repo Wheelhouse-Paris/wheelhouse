@@ -62,6 +62,9 @@ pub struct Topology {
     pub agents: Vec<Agent>,
     #[serde(default)]
     pub streams: Vec<Stream>,
+    /// Surface declarations (Telegram, CLI, etc.).
+    #[serde(default)]
+    pub surfaces: Vec<Surface>,
     /// Optional guardrails for safety constraints (e.g., max_replicas).
     #[serde(default)]
     pub guardrails: Option<Guardrails>,
@@ -92,6 +95,24 @@ pub struct Stream {
     pub name: String,
     #[serde(default)]
     pub retention: Option<String>,
+}
+
+/// A surface declaration within a topology.
+///
+/// Surfaces connect external channels (Telegram, CLI, etc.) to streams.
+/// Each surface is provisioned as a Podman container alongside agents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Surface {
+    pub name: String,
+    /// Surface type: "telegram" or "cli".
+    pub kind: String,
+    /// Container image reference (e.g., `ghcr.io/wheelhouse-paris/wh-telegram:latest`).
+    pub image: String,
+    /// Stream name this surface connects to.
+    pub stream: String,
+    /// Optional environment variables passed to the surface container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// A single change detected between current and desired topology state.
@@ -212,6 +233,7 @@ pub fn load_topology(path: &std::path::Path) -> Result<Topology, DeployError> {
 pub fn canonicalize_topology(mut topology: Topology) -> Topology {
     topology.agents.sort();
     topology.streams.sort();
+    topology.surfaces.sort();
     topology
 }
 
@@ -312,6 +334,7 @@ agents:
                     retention: None,
                 },
             ],
+            surfaces: vec![],
             guardrails: None,
         };
         let canonical = canonicalize_topology(topo);
@@ -355,5 +378,97 @@ streams:
     fn persona_load_failed_error_code() {
         let err = DeployError::PersonaLoadFailed("test".to_string());
         assert_eq!(err.code(), "PERSONA_LOAD_FAILED");
+    }
+
+    #[test]
+    fn parse_topology_with_surfaces() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+streams:
+  - name: main
+surfaces:
+  - name: telegram
+    kind: telegram
+    image: wh-telegram:latest
+    stream: main
+  - name: cli
+    kind: cli
+    image: wh-cli:latest
+    stream: main
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.surfaces.len(), 2);
+        assert_eq!(topo.surfaces[0].name, "telegram");
+        assert_eq!(topo.surfaces[0].kind, "telegram");
+        assert_eq!(topo.surfaces[0].image, "wh-telegram:latest");
+        assert_eq!(topo.surfaces[0].stream, "main");
+        assert_eq!(topo.surfaces[1].name, "cli");
+    }
+
+    #[test]
+    fn parse_topology_with_surface_env() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+surfaces:
+  - name: telegram
+    kind: telegram
+    image: wh-telegram:latest
+    stream: main
+    env:
+      TELEGRAM_BOT_TOKEN: "tok123"
+      CHAT_ID: "456"
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        let env = topo.surfaces[0].env.as_ref().unwrap();
+        assert_eq!(env.get("TELEGRAM_BOT_TOKEN").unwrap(), "tok123");
+        assert_eq!(env.get("CHAT_ID").unwrap(), "456");
+    }
+
+    #[test]
+    fn parse_topology_without_surfaces_defaults_empty() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert!(topo.surfaces.is_empty());
+    }
+
+    #[test]
+    fn canonicalize_sorts_surfaces() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![],
+            streams: vec![],
+            surfaces: vec![
+                Surface {
+                    name: "zeta-surface".to_string(),
+                    kind: "cli".to_string(),
+                    image: "cli:latest".to_string(),
+                    stream: "main".to_string(),
+                    env: None,
+                },
+                Surface {
+                    name: "alpha-surface".to_string(),
+                    kind: "telegram".to_string(),
+                    image: "tg:latest".to_string(),
+                    stream: "main".to_string(),
+                    env: None,
+                },
+            ],
+            guardrails: None,
+        };
+        let canonical = canonicalize_topology(topo);
+        assert_eq!(canonical.surfaces[0].name, "alpha-surface");
+        assert_eq!(canonical.surfaces[1].name, "zeta-surface");
     }
 }

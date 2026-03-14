@@ -75,6 +75,7 @@ fn setup_deployed_repo() -> tempfile::TempDir {
             name: "main".to_string(),
             retention: Some("7d".to_string()),
         }],
+        surfaces: vec![],
         guardrails: None,
     };
     std::fs::write(
@@ -245,6 +246,7 @@ fn destroy_on_empty_deployed_state_is_noop() {
         name: "dev".to_string(),
         agents: vec![],
         streams: vec![],
+        surfaces: vec![],
         guardrails: None,
     };
     std::fs::write(
@@ -293,6 +295,7 @@ fn destroy_result_display() {
     let result = wh_broker::deploy::apply::DestroyResult {
         destroyed: 2,
         streams_removed: 1,
+        surfaces_destroyed: 0,
     };
     let display = result.to_string();
     assert!(

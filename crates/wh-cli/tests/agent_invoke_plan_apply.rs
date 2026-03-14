@@ -91,6 +91,7 @@ fn test_agent_apply_commit_with_agent_name() {
         name: "dev".to_string(),
         agents: vec![],
         streams: vec![],
+        surfaces: vec![],
         guardrails: None,
     };
     std::fs::write(

@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use crate::deploy::lint::LintedFile;
-use crate::deploy::{canonicalize_topology, Agent, Change, DeployError, Stream, Topology};
+use crate::deploy::{canonicalize_topology, Agent, Change, DeployError, Stream, Surface, Topology};
 
 /// The output of a deploy plan operation.
 ///
@@ -294,6 +294,81 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
         }
     }
 
+    // Diff surfaces
+    let current_surfaces: std::collections::BTreeMap<&str, &Surface> = current
+        .surfaces
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
+    let desired_surfaces: std::collections::BTreeMap<&str, &Surface> = desired
+        .surfaces
+        .iter()
+        .map(|s| (s.name.as_str(), s))
+        .collect();
+
+    // Added surfaces
+    for (name, surface) in &desired_surfaces {
+        if !current_surfaces.contains_key(name) {
+            changes.push(Change {
+                op: "+".to_string(),
+                component: format!("surface {name}"),
+                field: None,
+                from: None,
+                to: Some(serde_json::json!({
+                    "kind": surface.kind,
+                    "image": surface.image,
+                    "stream": surface.stream,
+                })),
+            });
+        }
+    }
+
+    // Removed surfaces
+    for name in current_surfaces.keys() {
+        if !desired_surfaces.contains_key(name) {
+            changes.push(Change {
+                op: "-".to_string(),
+                component: format!("surface {name}"),
+                field: None,
+                from: None,
+                to: None,
+            });
+        }
+    }
+
+    // Modified surfaces
+    for (name, desired_surface) in &desired_surfaces {
+        if let Some(current_surface) = current_surfaces.get(name) {
+            if current_surface.stream != desired_surface.stream {
+                changes.push(Change {
+                    op: "~".to_string(),
+                    component: format!("surface {name}"),
+                    field: Some("stream".to_string()),
+                    from: Some(serde_json::json!(current_surface.stream)),
+                    to: Some(serde_json::json!(desired_surface.stream)),
+                });
+            }
+            if current_surface.image != desired_surface.image {
+                changes.push(Change {
+                    op: "~".to_string(),
+                    component: format!("surface {name}"),
+                    field: Some("image".to_string()),
+                    from: Some(serde_json::json!(current_surface.image)),
+                    to: Some(serde_json::json!(desired_surface.image)),
+                });
+            }
+            if current_surface.kind != desired_surface.kind {
+                changes.push(Change {
+                    op: "~".to_string(),
+                    component: format!("surface {name}"),
+                    field: Some("kind".to_string()),
+                    from: Some(serde_json::json!(current_surface.kind)),
+                    to: Some(serde_json::json!(desired_surface.kind)),
+                });
+            }
+        }
+    }
+
     changes
 }
 
@@ -362,6 +437,7 @@ pub fn plan_with_options(
                 name: desired.name.clone(),
                 agents: vec![],
                 streams: vec![],
+                surfaces: vec![],
                 guardrails: None,
             };
             diff_topologies(&empty, &desired)
@@ -514,6 +590,7 @@ mod tests {
                 name: "main".to_string(),
                 retention: Some("7d".to_string()),
             }],
+            surfaces: vec![],
             guardrails: None,
         };
         std::fs::write(
@@ -553,6 +630,7 @@ mod tests {
                 persona: None,
             }],
             streams: vec![],
+            surfaces: vec![],
             guardrails: None,
         };
         std::fs::write(
@@ -631,6 +709,7 @@ mod tests {
             name: "dev".to_string(),
             agents: vec![],
             streams: vec![],
+            surfaces: vec![],
             guardrails: None,
         };
         std::fs::write(
@@ -670,6 +749,7 @@ mod tests {
                 persona: None,
             }],
             streams: vec![],
+            surfaces: vec![],
             guardrails: None,
         };
         std::fs::write(
@@ -710,6 +790,7 @@ mod tests {
                 persona: None,
             }],
             streams: vec![],
+            surfaces: vec![],
             guardrails: None,
         };
         std::fs::write(
@@ -756,6 +837,7 @@ mod tests {
                 persona: None,
             }],
             streams: vec![],
+            surfaces: vec![],
             guardrails: None,
         };
         std::fs::write(
@@ -883,5 +965,176 @@ mod tests {
             output.contains("1 to destroy"),
             "should show destroy count: {output}"
         );
+    }
+
+    #[test]
+    fn plan_detects_surface_addition() {
+        let dir = tempfile::tempdir().unwrap();
+        let wh_dir = dir.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        // Current state: no surfaces
+        let topology = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![Agent {
+                name: "researcher".to_string(),
+                image: "r:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+                persona: None,
+            }],
+            streams: vec![Stream {
+                name: "main".to_string(),
+                retention: None,
+            }],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        std::fs::write(
+            wh_dir.join("state.json"),
+            serde_json::to_string(&topology).unwrap(),
+        )
+        .unwrap();
+
+        // Desired state: add a surface
+        let wh_path = dir.path().join("topology.wh");
+        std::fs::write(
+            &wh_path,
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\nsurfaces:\n  - name: telegram\n    kind: telegram\n    image: wh-telegram:latest\n    stream: main\n",
+        )
+        .unwrap();
+
+        let linted = crate::deploy::lint::lint(&wh_path).unwrap();
+        let plan_output = plan(linted).unwrap();
+
+        assert!(plan_output.has_changes());
+        let surface_changes: Vec<_> = plan_output
+            .changes()
+            .iter()
+            .filter(|c| c.component.starts_with("surface "))
+            .collect();
+        assert_eq!(surface_changes.len(), 1);
+        assert_eq!(surface_changes[0].op, "+");
+        assert_eq!(surface_changes[0].component, "surface telegram");
+    }
+
+    #[test]
+    fn plan_detects_surface_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let wh_dir = dir.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        // Current state: has a surface
+        let topology = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![Agent {
+                name: "researcher".to_string(),
+                image: "r:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+                persona: None,
+            }],
+            streams: vec![],
+            surfaces: vec![Surface {
+                name: "telegram".to_string(),
+                kind: "telegram".to_string(),
+                image: "wh-telegram:latest".to_string(),
+                stream: "main".to_string(),
+                env: None,
+            }],
+            guardrails: None,
+        };
+        std::fs::write(
+            wh_dir.join("state.json"),
+            serde_json::to_string(&topology).unwrap(),
+        )
+        .unwrap();
+
+        // Desired state: no surfaces
+        let wh_path = dir.path().join("topology.wh");
+        std::fs::write(
+            &wh_path,
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\n",
+        )
+        .unwrap();
+
+        let linted = crate::deploy::lint::lint(&wh_path).unwrap();
+        let plan_output = plan(linted).unwrap();
+
+        assert!(plan_output.has_changes());
+        let surface_changes: Vec<_> = plan_output
+            .changes()
+            .iter()
+            .filter(|c| c.component.starts_with("surface "))
+            .collect();
+        assert_eq!(surface_changes.len(), 1);
+        assert_eq!(surface_changes[0].op, "-");
+        assert_eq!(surface_changes[0].component, "surface telegram");
+    }
+
+    #[test]
+    fn plan_detects_surface_modification() {
+        let dir = tempfile::tempdir().unwrap();
+        let wh_dir = dir.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        // Current state: surface connected to stream "main"
+        let topology = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![Agent {
+                name: "researcher".to_string(),
+                image: "r:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+                persona: None,
+            }],
+            streams: vec![
+                Stream { name: "main".to_string(), retention: None },
+                Stream { name: "alt".to_string(), retention: None },
+            ],
+            surfaces: vec![Surface {
+                name: "telegram".to_string(),
+                kind: "telegram".to_string(),
+                image: "wh-telegram:latest".to_string(),
+                stream: "main".to_string(),
+                env: None,
+            }],
+            guardrails: None,
+        };
+        std::fs::write(
+            wh_dir.join("state.json"),
+            serde_json::to_string(&topology).unwrap(),
+        )
+        .unwrap();
+
+        // Desired state: surface connected to stream "alt" with new image
+        let wh_path = dir.path().join("topology.wh");
+        std::fs::write(
+            &wh_path,
+            "api_version: wheelhouse.dev/v1\nname: dev\nagents:\n  - name: researcher\n    image: r:latest\nstreams:\n  - name: main\n  - name: alt\nsurfaces:\n  - name: telegram\n    kind: telegram\n    image: wh-telegram:v2\n    stream: alt\n",
+        )
+        .unwrap();
+
+        let linted = crate::deploy::lint::lint(&wh_path).unwrap();
+        let plan_output = plan(linted).unwrap();
+
+        assert!(plan_output.has_changes());
+        let surface_changes: Vec<_> = plan_output
+            .changes()
+            .iter()
+            .filter(|c| c.component == "surface telegram")
+            .collect();
+        // Should have both stream and image modifications
+        assert!(
+            surface_changes.len() >= 2,
+            "expected at least 2 surface changes (stream + image), got: {:?}",
+            surface_changes
+        );
+        let fields: Vec<_> = surface_changes.iter().filter_map(|c| c.field.as_deref()).collect();
+        assert!(fields.contains(&"stream"), "should detect stream change");
+        assert!(fields.contains(&"image"), "should detect image change");
     }
 }
