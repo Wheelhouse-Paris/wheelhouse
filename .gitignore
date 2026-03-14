@@ -13,7 +13,11 @@ docs/.astro/
 *.wh.lock
 
 # Python SDK generated proto files (FP-02)
-sdk/python/wheelhouse/_proto/
+# The top-level _proto/__init__.py stub is excluded, but the versioned sub-package
+# (wheelhouse/v1/__init__.py) is committed so Docker builds work without grpcio-tools.
+# Regenerate with: cd sdk/python && make proto-python
+sdk/python/wheelhouse/_proto/__init__.py
+!sdk/python/wheelhouse/_proto/wheelhouse/
 sdk/python/.venv/
 agent-claude/.venv/
 .venv/

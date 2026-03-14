@@ -1,7 +1,9 @@
-# Generated proto files
-wheelhouse/_proto/*.py
-wheelhouse/_proto/*.pyi
-!wheelhouse/_proto/.gitkeep
+# Generated proto files — top-level _proto stubs excluded, but versioned sub-packages committed
+# The wheelhouse/_proto/wheelhouse/v1/__init__.py is generated from proto/*.proto and
+# must be committed for the Docker build (no grpcio-tools in the runtime image).
+# Regenerate with: cd sdk/python && make proto-python
+wheelhouse/_proto/__init__.py
+!wheelhouse/_proto/wheelhouse/
 
 # Python
 __pycache__/
