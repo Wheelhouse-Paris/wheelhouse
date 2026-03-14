@@ -96,9 +96,23 @@ async fn main() {
         }
         Commands::Surface { command } => match command {
             SurfaceCommand::Cli { stream, format } => {
-                if let Err(e) = surface::run_cli(&stream, &format).await {
-                    eprintln!("{e}");
-                    std::process::exit(1);
+                let output_format = OutputFormat::from_str_value(&format).unwrap_or_default();
+                if let Err(e) = surface::run_cli(&stream, output_format).await {
+                    match output_format {
+                        OutputFormat::Json => {
+                            let envelope =
+                                OutputEnvelope::<()>::error(e.error_code(), e.to_string());
+                            if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                                eprintln!("{json}");
+                            } else {
+                                eprintln!("Error: {e}");
+                            }
+                        }
+                        OutputFormat::Human => {
+                            // Error already printed to stderr in run_cli for human format
+                        }
+                    }
+                    std::process::exit(e.exit_code());
                 }
             }
         },

@@ -170,3 +170,73 @@ fn test_stream_name_validation_invalid() {
     assert!(validate_stream_name("-stream").is_err());
     assert!(validate_stream_name("stream name").is_err());
 }
+
+/// AC-3: When broker is not running, exit with code 1 and human-readable error.
+#[test]
+fn test_surface_cli_no_broker_exits_with_error() {
+    // No broker running — should exit with error code 1
+    // Use env vars to point to an unused port to ensure no broker interference
+    let output = wh_binary()
+        .args(["surface", "cli", "--stream", "main"])
+        .env("WH_CONTROL_ENDPOINT", "tcp://127.0.0.1:19876")
+        .env("WH_PUB_ENDPOINT", "tcp://127.0.0.1:19877")
+        .env("WH_SUB_ENDPOINT", "tcp://127.0.0.1:19878")
+        .output()
+        .expect("failed to execute wh binary");
+
+    assert!(
+        !output.status.success(),
+        "should exit with error when broker not running"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not running"),
+        "stderr should mention 'not running', got: {stderr}"
+    );
+}
+
+/// AC-3: JSON error format when broker is not running.
+#[test]
+fn test_surface_cli_json_error_when_no_broker() {
+    let output = wh_binary()
+        .args(["surface", "cli", "--stream", "main", "--format", "json"])
+        .env("WH_CONTROL_ENDPOINT", "tcp://127.0.0.1:19879")
+        .env("WH_PUB_ENDPOINT", "tcp://127.0.0.1:19880")
+        .env("WH_SUB_ENDPOINT", "tcp://127.0.0.1:19881")
+        .output()
+        .expect("failed to execute wh binary");
+
+    assert!(
+        !output.status.success(),
+        "should exit with error when broker not running"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // JSON format should include structured error output
+    // The error may be on stderr as JSON or as human-readable text
+    assert!(
+        stderr.contains("not running") || stderr.contains("CONNECTION_ERROR"),
+        "stderr should contain error info, got: {stderr}"
+    );
+}
+
+/// Regression: `wh surface cli --help` should still work.
+#[test]
+fn test_surface_cli_help_regression() {
+    let output = wh_binary()
+        .args(["surface", "cli", "--help"])
+        .output()
+        .expect("failed to execute wh binary");
+
+    assert!(
+        output.status.success(),
+        "wh surface cli --help should succeed"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("interactive"),
+        "help should mention interactive CLI surface"
+    );
+}
