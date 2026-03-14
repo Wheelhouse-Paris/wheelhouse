@@ -2,7 +2,6 @@
 members = [
     "crates/wh-broker",
     "crates/wh-cli",
-    "crates/wh-stream",
     "crates/wh-proto",
     "crates/wh-skill",
     "crates/wh-user",
