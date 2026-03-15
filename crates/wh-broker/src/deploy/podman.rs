@@ -267,7 +267,7 @@ fn register_stream_with_broker(name: &str, retention: Option<&str>) {
 ///
 /// Replaces non-alphanumeric chars (except `-`) with `-`,
 /// collapses multiple `-`, and trims leading/trailing `-`.
-fn sanitize_name(name: &str) -> String {
+pub fn sanitize_name(name: &str) -> String {
     let mut result: String = name
         .chars()
         .map(|c| {
@@ -297,7 +297,7 @@ pub fn container_name(topology_name: &str, agent_name: &str) -> String {
 /// Path to the PID file for a surface process.
 ///
 /// Format: `~/.wh/pids/<topology>-<surface>.pid`
-fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
+pub fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let topo = sanitize_name(topology_name);
     let surf = sanitize_name(surface_name);

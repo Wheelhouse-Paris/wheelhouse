@@ -316,7 +316,7 @@ impl std::fmt::Display for DestroyResult {
 
 /// Load the current applied state from `.wh/state.json`.
 /// Returns `None` if no state file exists (nothing deployed).
-fn load_state(workspace_root: &Path) -> Result<Option<Topology>, DeployError> {
+pub fn load_state(workspace_root: &Path) -> Result<Option<Topology>, DeployError> {
     let state_path = workspace_root.join(".wh").join("state.json");
     if !state_path.exists() {
         return Ok(None);
