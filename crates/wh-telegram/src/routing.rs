@@ -6,6 +6,17 @@
 //! Built from the topology `chats` config + resolved state (`TelegramState`).
 
 use std::collections::HashMap;
+use std::path::Path;
+
+use serde::Deserialize;
+
+/// A single entry in the flat routing table JSON file.
+#[derive(Debug, Deserialize)]
+struct RoutingEntry {
+    chat_id: i64,
+    thread_id: Option<i32>,
+    stream: String,
+}
 
 /// Routing table for multi-chat Telegram surfaces.
 ///
@@ -86,6 +97,29 @@ impl RoutingTable {
     /// Returns `(chat_id, Option<thread_id>)` from the user's last-seen location.
     pub fn resolve_outbound(&self, user_id: &str) -> Option<(i64, Option<i32>)> {
         self.outbound.get(user_id).copied()
+    }
+
+    /// Builds a multi-chat routing table from the JSON file written by `resolve_telegram_surfaces`.
+    pub fn from_file(path: &Path) -> Result<Self, String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read routing file {}: {e}", path.display()))?;
+        let entries: Vec<RoutingEntry> = serde_json::from_str(&content)
+            .map_err(|e| format!("failed to parse routing file: {e}"))?;
+        let mut table = Self::multi_chat();
+        for entry in entries {
+            table.add_route(entry.chat_id, entry.thread_id, &entry.stream);
+        }
+        Ok(table)
+    }
+
+    /// Returns all unique stream names in the routing table.
+    pub fn all_stream_names(&self) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        self.inbound
+            .values()
+            .filter(|s| seen.insert((*s).clone()))
+            .cloned()
+            .collect()
     }
 
     /// Returns whether this is operating in single-stream mode.

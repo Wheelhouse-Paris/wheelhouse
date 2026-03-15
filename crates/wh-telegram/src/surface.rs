@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use teloxide::prelude::*;
-use teloxide::types::{ChatAction, ChatId};
+use teloxide::types::{ChatAction, ChatId, MessageId, ThreadId};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{error, instrument};
 
@@ -21,12 +21,15 @@ use wh_user::UserStore;
 use crate::config::TelegramConfig;
 use crate::error::{sanitize_for_user, TelegramError};
 use crate::mapping::ChatMapping;
+use crate::routing::RoutingTable;
 
 /// The Telegram surface connects Telegram users to Wheelhouse streams.
 pub struct TelegramSurface {
     config: TelegramConfig,
     user_store: Arc<UserStore>,
     chat_mapping: Arc<Mutex<ChatMapping>>,
+    /// Routing table for multi-chat mode: tracks user -> (chat_id, thread_id).
+    routing: Arc<Mutex<RoutingTable>>,
     /// Per-user cancellation senders for the typing indicator loop.
     typing_cancel: Arc<Mutex<HashMap<String, oneshot::Sender<()>>>>,
     /// Channel for outbound messages (TextMessages to publish to stream).
@@ -39,13 +42,19 @@ pub struct TelegramSurface {
 impl TelegramSurface {
     /// Creates a new Telegram surface.
     #[instrument(skip_all)]
-    pub fn new(config: TelegramConfig, user_store: UserStore, chat_mapping: ChatMapping) -> Self {
+    pub fn new(
+        config: TelegramConfig,
+        user_store: UserStore,
+        chat_mapping: ChatMapping,
+        routing: RoutingTable,
+    ) -> Self {
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
 
         Self {
             config,
             user_store: Arc::new(user_store),
             chat_mapping: Arc::new(Mutex::new(chat_mapping)),
+            routing: Arc::new(Mutex::new(routing)),
             typing_cancel: Arc::new(Mutex::new(HashMap::new())),
             outbound_tx,
             outbound_rx: Arc::new(Mutex::new(Some(outbound_rx))),
@@ -104,9 +113,14 @@ impl TelegramSurface {
             })?;
 
         // Record chat mapping for response routing
+        let thread_id: Option<i32> = msg.thread_id.map(|t| t.0 .0);
         {
             let mut mapping = self.chat_mapping.lock().await;
             mapping.register(&profile.user_id, chat_id)?;
+        }
+        {
+            let mut routing = self.routing.lock().await;
+            routing.record_user_location(&profile.user_id, chat_id, thread_id);
         }
 
         // Create TextMessage for stream publication
@@ -178,22 +192,29 @@ impl TelegramSurface {
             let _ = cancel.send(());
         }
 
-        // Look up chat_id
-        let chat_id = {
-            let mapping = self.chat_mapping.lock().await;
-            mapping.lookup_chat_id(target_user_id)
+        // Look up (chat_id, thread_id) from routing table (preferred) or chat mapping.
+        let (chat_id, thread_id) = {
+            let routing = self.routing.lock().await;
+            if let Some((cid, tid)) = routing.resolve_outbound(target_user_id) {
+                (cid, tid)
+            } else {
+                let mapping = self.chat_mapping.lock().await;
+                let cid = mapping.lookup_chat_id(target_user_id).ok_or_else(|| {
+                    TelegramError::SendFailed("no chat mapping found for user".into())
+                })?;
+                (cid, None)
+            }
         };
 
-        let chat_id = chat_id
-            .ok_or_else(|| TelegramError::SendFailed("no chat mapping found for user".into()))?;
-
-        // Send to Telegram
-        bot.send_message(ChatId(chat_id), &text_msg.content)
-            .await
-            .map_err(|e| {
-                error!(error = %e, "failed to send Telegram message");
-                TelegramError::SendFailed("message delivery failed".into())
-            })?;
+        // Send to Telegram, routing to the correct topic thread when known.
+        let mut req = bot.send_message(ChatId(chat_id), &text_msg.content);
+        if let Some(tid) = thread_id {
+            req = req.message_thread_id(ThreadId(MessageId(tid)));
+        }
+        req.await.map_err(|e| {
+            error!(error = %e, "failed to send Telegram message");
+            TelegramError::SendFailed("message delivery failed".into())
+        })?;
 
         Ok(())
     }
