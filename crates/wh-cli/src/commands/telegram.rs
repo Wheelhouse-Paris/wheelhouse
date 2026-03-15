@@ -1,11 +1,18 @@
 //! `wh telegram` subcommands.
+//!
+//! Also provides [`resolve_telegram_surfaces`] for deploy-time name resolution
+//! (Task 3: resolves group display names to `chat_id` values and creates forum
+//! topics, writing results to `.wh/telegram-state.json`).
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use clap::Subcommand;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 use crate::commands::secrets;
+use crate::model::WhFile;
 use crate::output::error::WhError;
 use crate::output::{OutputEnvelope, OutputFormat};
 
@@ -216,6 +223,293 @@ fn url_encode(s: &str) -> String {
         .replace(',', "%2C")
 }
 
+// ---------------------------------------------------------------------------
+// Deploy-time Telegram name resolution (Task 3)
+// ---------------------------------------------------------------------------
+
+/// Serialization format matching `wh-telegram/src/state.rs::StateFile`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct TelegramStateFile {
+    #[serde(default)]
+    groups: HashMap<String, i64>,
+    #[serde(default)]
+    topics: HashMap<String, i32>,
+}
+
+/// Returns true if `id` is a plain display name (not `@username` and not numeric).
+fn is_display_name(id: &str) -> bool {
+    !id.starts_with('@') && id.parse::<i64>().is_err()
+}
+
+/// Format a topic key the same way `wh-telegram/src/state.rs` does: `"chat_id:topic_name"`.
+fn topic_key(chat_id: i64, topic_name: &str) -> String {
+    format!("{chat_id}:{topic_name}")
+}
+
+/// Resolve Telegram group names and create topics at deploy time.
+///
+/// Called from `execute_apply()` before container provisioning. For every
+/// telegram surface that declares a `chats` block with display-name IDs,
+/// this function:
+///
+/// 1. Calls `getUpdates` to discover the bot's chats and resolve names → `chat_id`.
+/// 2. Creates forum topics via `createForumTopic` if not already in state.
+/// 3. Writes the updated state to `.wh/telegram-state.json`.
+///
+/// Returns `Ok(())` if there are no telegram surfaces with `chats`, or if
+/// the bot token is unavailable (backward compat — skip silently).
+pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
+    // Parse the topology to find telegram surfaces with chats.
+    let content = std::fs::read_to_string(topology_path)
+        .map_err(|e| format!("cannot read topology file: {e}"))?;
+    let wh_file: WhFile =
+        serde_yaml::from_str(&content).map_err(|e| format!("cannot parse topology: {e}"))?;
+
+    let surfaces = match &wh_file.surfaces {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+
+    // Collect telegram surfaces that have a `chats` block.
+    let telegram_surfaces: Vec<_> = surfaces
+        .iter()
+        .filter(|s| s.kind.as_deref() == Some("telegram") && s.chats.is_some())
+        .collect();
+
+    if telegram_surfaces.is_empty() {
+        return Ok(());
+    }
+
+    // Check if any surface has display-name chat IDs that need resolution.
+    let needs_resolution = telegram_surfaces.iter().any(|s| {
+        s.chats.as_ref().is_some_and(|chats| {
+            chats
+                .iter()
+                .any(|c| c.id.as_ref().is_some_and(|id| is_display_name(id)))
+        })
+    });
+
+    let has_threads = telegram_surfaces.iter().any(|s| {
+        s.chats
+            .as_ref()
+            .is_some_and(|chats| chats.iter().any(|c| c.threads.is_some()))
+    });
+
+    if !needs_resolution && !has_threads {
+        debug!("No display-name chat IDs or threads to resolve — skipping Telegram resolution");
+        return Ok(());
+    }
+
+    // Resolve bot token: surface env > keychain. Skip if unavailable (backward compat).
+    let bot_token = resolve_bot_token(&telegram_surfaces);
+    let bot_token = match bot_token {
+        Some(t) => t,
+        None => {
+            warn!("Telegram bot token not found in keychain or surface env — skipping name resolution");
+            return Ok(());
+        }
+    };
+
+    // Load existing state.
+    let state_dir = topology_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".wh");
+    let mut state = load_state_file(&state_dir);
+
+    // Call getUpdates once to discover chats.
+    let discovered_chats = call_get_updates_blocking(&bot_token)?;
+
+    // Build a lookup: title -> chat_id from discovered chats.
+    let title_to_id: HashMap<String, i64> = discovered_chats
+        .iter()
+        .map(|c| (c.title.clone(), c.chat_id))
+        .collect();
+
+    // Resolve each surface's chats.
+    for surface in &telegram_surfaces {
+        let chats = match &surface.chats {
+            Some(c) => c,
+            None => continue,
+        };
+
+        for chat_spec in chats {
+            let chat_id_str = match &chat_spec.id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            // Determine the numeric chat_id.
+            let chat_id: i64 = if chat_id_str.starts_with('@') {
+                // DMs by @username don't need numeric resolution for routing.
+                debug!("Skipping @username chat '{chat_id_str}' — no numeric resolution needed");
+                continue;
+            } else if let Ok(numeric_id) = chat_id_str.parse::<i64>() {
+                numeric_id
+            } else {
+                // Display name — resolve via getUpdates or existing state.
+                if let Some(&id) = state.groups.get(chat_id_str) {
+                    debug!("Group '{chat_id_str}' already in state: {id}");
+                    id
+                } else if let Some(&id) = title_to_id.get(chat_id_str) {
+                    info!("Resolved group '{chat_id_str}' to chat_id {id}");
+                    state.groups.insert(chat_id_str.clone(), id);
+                    id
+                } else {
+                    return Err(format!(
+                        "Bot has not been added to group '{}' \u{2014} add it as admin with Manage Topics permission",
+                        chat_id_str
+                    ));
+                }
+            };
+
+            // Create forum topics for any declared threads.
+            if let Some(threads) = &chat_spec.threads {
+                for thread_spec in threads {
+                    let topic_name = match &thread_spec.id {
+                        Some(name) => name,
+                        None => continue,
+                    };
+
+                    let key = topic_key(chat_id, topic_name);
+                    if state.topics.contains_key(&key) {
+                        debug!("Topic '{topic_name}' in chat {chat_id} already in state — skipping creation");
+                        continue;
+                    }
+
+                    // Create the forum topic via Telegram API.
+                    let thread_id = create_forum_topic_blocking(&bot_token, chat_id, topic_name)?;
+                    info!("Created topic '{topic_name}' in chat {chat_id} → thread_id {thread_id}");
+                    state.topics.insert(key, thread_id);
+                }
+            }
+        }
+    }
+
+    // Persist updated state.
+    save_state_file(&state_dir, &state)?;
+    info!(
+        "Telegram state saved to {}",
+        state_dir.join("telegram-state.json").display()
+    );
+
+    Ok(())
+}
+
+/// Try to find the bot token from surface env vars or keychain.
+fn resolve_bot_token(surfaces: &[&crate::model::SurfaceSpec]) -> Option<String> {
+    // Check surface env blocks first.
+    for surface in surfaces {
+        if let Some(env) = &surface.env {
+            if let Some(token) = env.get("TELEGRAM_BOT_TOKEN") {
+                return Some(token.clone());
+            }
+        }
+    }
+    // Fall back to keychain.
+    secrets::read_secret("telegram_bot_token").ok()
+}
+
+/// Load the state file from `.wh/telegram-state.json`, or return a default if absent.
+fn load_state_file(state_dir: &Path) -> TelegramStateFile {
+    let path = state_dir.join("telegram-state.json");
+    if !path.exists() {
+        return TelegramStateFile::default();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => TelegramStateFile::default(),
+    }
+}
+
+/// Save the state file to `.wh/telegram-state.json`.
+fn save_state_file(state_dir: &Path, state: &TelegramStateFile) -> Result<(), String> {
+    std::fs::create_dir_all(state_dir).map_err(|e| format!("failed to create state dir: {e}"))?;
+    let json = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("failed to serialize state: {e}"))?;
+    let path = state_dir.join("telegram-state.json");
+    std::fs::write(&path, json).map_err(|e| format!("failed to write state file: {e}"))?;
+    Ok(())
+}
+
+/// Call Telegram `getUpdates` using blocking reqwest. Returns discovered chats.
+fn call_get_updates_blocking(bot_token: &str) -> Result<Vec<ResolvedChat>, String> {
+    let url = format!(
+        "https://api.telegram.org/bot{}/getUpdates?limit=100&allowed_updates={}",
+        bot_token,
+        url_encode("[\"my_chat_member\",\"message\",\"channel_post\"]"),
+    );
+
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(&url)
+        .send()
+        .map_err(|e| format!("Telegram API request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_else(|_| "unknown".to_string());
+        return Err(format!("Telegram API returned HTTP {status}: {body}"));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .map_err(|e| format!("Failed to parse Telegram response: {e}"))?;
+
+    if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let description = body
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(format!("Telegram API error: {description}"));
+    }
+
+    Ok(extract_chats(&body))
+}
+
+/// Call Telegram `createForumTopic` using blocking reqwest. Returns the new `message_thread_id`.
+fn create_forum_topic_blocking(
+    bot_token: &str,
+    chat_id: i64,
+    topic_name: &str,
+) -> Result<i32, String> {
+    let url = format!("https://api.telegram.org/bot{}/createForumTopic", bot_token,);
+
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post(&url)
+        .json(&serde_json::json!({
+            "chat_id": chat_id,
+            "name": topic_name,
+        }))
+        .send()
+        .map_err(|e| format!("createForumTopic request failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().unwrap_or_else(|_| "unknown".to_string());
+        return Err(format!("createForumTopic returned HTTP {status}: {body}"));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .map_err(|e| format!("Failed to parse createForumTopic response: {e}"))?;
+
+    if body.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let description = body
+            .get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        return Err(format!("createForumTopic API error: {description}"));
+    }
+
+    body.get("result")
+        .and_then(|r| r.get("message_thread_id"))
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32)
+        .ok_or_else(|| "createForumTopic response missing message_thread_id".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +631,48 @@ mod tests {
         assert!(json.contains("\"chat_id\":-1001234567890"));
         assert!(json.contains("\"title\":\"Ops Group\""));
         assert!(json.contains("\"type\":\"supergroup\""));
+    }
+
+    #[test]
+    fn is_display_name_classification() {
+        // @username → not display name
+        assert!(!is_display_name("@ndohuu"));
+        // Numeric → not display name
+        assert!(!is_display_name("-1001234567890"));
+        assert!(!is_display_name("42"));
+        // Plain display name → is display name
+        assert!(is_display_name("Wheelhouse Ops"));
+        assert!(is_display_name("My Group"));
+    }
+
+    #[test]
+    fn topic_key_format() {
+        assert_eq!(topic_key(-100123, "General"), "-100123:General");
+        assert_eq!(topic_key(42, "Topic: Sub"), "42:Topic: Sub");
+    }
+
+    #[test]
+    fn state_file_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join(".wh");
+
+        let mut state = TelegramStateFile::default();
+        state.groups.insert("Test Group".to_string(), -100123);
+        state.topics.insert(topic_key(-100123, "General"), 42);
+
+        save_state_file(&state_dir, &state).unwrap();
+
+        let loaded = load_state_file(&state_dir);
+        assert_eq!(loaded.groups.get("Test Group"), Some(&-100123));
+        assert_eq!(loaded.topics.get(&topic_key(-100123, "General")), Some(&42));
+    }
+
+    #[test]
+    fn load_state_file_missing_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = load_state_file(&dir.path().join(".wh"));
+        assert!(state.groups.is_empty());
+        assert!(state.topics.is_empty());
     }
 
     #[test]
