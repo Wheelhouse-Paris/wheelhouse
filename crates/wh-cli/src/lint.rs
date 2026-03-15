@@ -421,32 +421,174 @@ fn validate_surfaces(wh_file: &WhFile, filename: &str, errors: &mut Vec<LintDiag
             }
         }
 
-        // Validate stream reference
-        match &surface.stream {
-            None => {
-                errors.push(LintDiagnostic {
-                    file: filename.to_string(),
-                    line: None,
-                    level: DiagnosticLevel::Error,
-                    message: format!("field 'stream' is required on {surface_label}"),
-                    hint: "add stream name this surface connects to".to_string(),
-                });
-            }
-            Some(stream_ref) => {
-                if !declared_streams.contains(stream_ref) {
+        // Validate stream vs chats (mutually exclusive)
+        let has_stream = surface.stream.is_some();
+        let has_chats = surface.chats.as_ref().is_some_and(|c| !c.is_empty());
+
+        if has_stream && has_chats {
+            errors.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Error,
+                message: format!(
+                    "{surface_label} has both 'stream' and 'chats' — they are mutually exclusive"
+                ),
+                hint: "use either 'stream' (single-stream) or 'chats' (multi-chat), not both"
+                    .to_string(),
+            });
+        } else if has_chats {
+            // Validate each chat entry in the chats block
+            validate_surface_chats(
+                surface.chats.as_ref().unwrap(),
+                &surface_label,
+                filename,
+                &declared_streams,
+                errors,
+            );
+        } else {
+            // Single-stream mode: stream is required when chats is absent
+            match &surface.stream {
+                None => {
                     errors.push(LintDiagnostic {
                         file: filename.to_string(),
                         line: None,
                         level: DiagnosticLevel::Error,
-                        message: format!(
-                            "{surface_label} references undeclared stream '{stream_ref}'"
-                        ),
-                        hint: format!(
-                            "declare stream '{stream_ref}' in the streams section or fix the reference"
-                        ),
+                        message: format!("field 'stream' is required on {surface_label}"),
+                        hint: "add stream name this surface connects to".to_string(),
                     });
                 }
+                Some(stream_ref) => {
+                    if !declared_streams.contains(stream_ref) {
+                        errors.push(LintDiagnostic {
+                            file: filename.to_string(),
+                            line: None,
+                            level: DiagnosticLevel::Error,
+                            message: format!(
+                                "{surface_label} references undeclared stream '{stream_ref}'"
+                            ),
+                            hint: format!(
+                                "declare stream '{stream_ref}' in the streams section or fix the reference"
+                            ),
+                        });
+                    }
+                }
             }
+        }
+    }
+}
+
+/// Validates the `chats` block entries within a Telegram surface.
+fn validate_surface_chats(
+    chats: &[crate::model::TelegramChatSpec],
+    surface_label: &str,
+    filename: &str,
+    declared_streams: &HashSet<String>,
+    errors: &mut Vec<LintDiagnostic>,
+) {
+    for (ci, chat) in chats.iter().enumerate() {
+        let chat_label = chat
+            .id
+            .as_deref()
+            .map(|id| format!("{surface_label} chat '{id}'"))
+            .unwrap_or_else(|| format!("{surface_label} chat at index {ci}"));
+
+        // Chat must have an id
+        if chat.id.is_none() {
+            errors.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Error,
+                message: format!("field 'id' is required on {chat_label}"),
+                hint: "add chat id (e.g., '@username' for DMs or group name for supergroups)"
+                    .to_string(),
+            });
+        }
+
+        let has_stream = chat.stream.is_some();
+        let has_threads = chat.threads.as_ref().is_some_and(|t| !t.is_empty());
+
+        if has_stream && has_threads {
+            errors.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Error,
+                message: format!(
+                    "{chat_label} has both 'stream' and 'threads' — use one or the other"
+                ),
+                hint: "DM chats use 'stream'; supergroup chats use 'threads'".to_string(),
+            });
+        } else if has_threads {
+            // Validate each thread entry
+            for (ti, thread) in chat.threads.as_ref().unwrap().iter().enumerate() {
+                let thread_label = thread
+                    .id
+                    .as_deref()
+                    .map(|id| format!("{chat_label} thread '{id}'"))
+                    .unwrap_or_else(|| format!("{chat_label} thread at index {ti}"));
+
+                if thread.id.is_none() {
+                    errors.push(LintDiagnostic {
+                        file: filename.to_string(),
+                        line: None,
+                        level: DiagnosticLevel::Error,
+                        message: format!("field 'id' is required on {thread_label}"),
+                        hint: "add topic name for this thread".to_string(),
+                    });
+                }
+
+                match &thread.stream {
+                    None => {
+                        errors.push(LintDiagnostic {
+                            file: filename.to_string(),
+                            line: None,
+                            level: DiagnosticLevel::Error,
+                            message: format!("field 'stream' is required on {thread_label}"),
+                            hint: "add stream name this topic is bridged to".to_string(),
+                        });
+                    }
+                    Some(stream_ref) => {
+                        if !declared_streams.contains(stream_ref) {
+                            errors.push(LintDiagnostic {
+                                file: filename.to_string(),
+                                line: None,
+                                level: DiagnosticLevel::Error,
+                                message: format!(
+                                    "{thread_label} references undeclared stream '{stream_ref}'"
+                                ),
+                                hint: format!(
+                                    "declare stream '{stream_ref}' in the streams section or fix the reference"
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        } else if has_stream {
+            // DM chat with single stream — validate stream reference
+            let stream_ref = chat.stream.as_ref().unwrap();
+            if !declared_streams.contains(stream_ref) {
+                errors.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    level: DiagnosticLevel::Error,
+                    message: format!("{chat_label} references undeclared stream '{stream_ref}'"),
+                    hint: format!(
+                        "declare stream '{stream_ref}' in the streams section or fix the reference"
+                    ),
+                });
+            }
+        } else {
+            // Neither stream nor threads set
+            errors.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Error,
+                message: format!(
+                    "{chat_label} must have either 'stream' (DM) or 'threads' (supergroup)"
+                ),
+                hint: "add 'stream' for DM chats or 'threads' for supergroup topic routing"
+                    .to_string(),
+            });
         }
     }
 }
@@ -904,6 +1046,170 @@ surfaces:
             .errors
             .iter()
             .any(|e| e.message.contains("duplicate")));
+    }
+
+    // ── Multi-chat topology tests (Story 9.6) ──
+
+    #[test]
+    fn valid_multi_chat_topology_produces_no_errors() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: direct
+    compaction_cron: "0 2 * * *"
+  - name: general
+    compaction_cron: "0 2 * * *"
+  - name: project-x
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    chats:
+      - id: "@ndohuu"
+        stream: direct
+      - id: "Wheelhouse Ops"
+        threads:
+          - id: "General"
+            stream: general
+          - id: "Project X"
+            stream: project-x
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+    }
+
+    #[test]
+    fn chat_missing_id_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: direct
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    chats:
+      - stream: direct
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("'id' is required")));
+    }
+
+    #[test]
+    fn thread_missing_stream_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: general
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    chats:
+      - id: "Wheelhouse Ops"
+        threads:
+          - id: "General"
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("'stream' is required")));
+    }
+
+    #[test]
+    fn thread_undeclared_stream_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: general
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    chats:
+      - id: "Wheelhouse Ops"
+        threads:
+          - id: "General"
+            stream: nonexistent
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("nonexistent")));
+    }
+
+    #[test]
+    fn surface_stream_and_chats_mutually_exclusive() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+  - name: direct
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    stream: main
+    chats:
+      - id: "@ndohuu"
+        stream: direct
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("mutually exclusive")));
+    }
+
+    #[test]
+    fn chat_with_neither_stream_nor_threads_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    chats:
+      - id: "@ndohuu"
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("must have either")));
+    }
+
+    #[test]
+    fn thread_missing_id_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+streams:
+  - name: general
+    compaction_cron: "0 2 * * *"
+surfaces:
+  - name: telegram
+    kind: telegram
+    chats:
+      - id: "Wheelhouse Ops"
+        threads:
+          - stream: general
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(result.errors.iter().any(|e| e.message.contains("'id' is required")));
     }
 
     #[test]

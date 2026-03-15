@@ -17,6 +17,8 @@ pub mod bridge;
 pub mod config;
 pub mod error;
 pub mod mapping;
+pub mod routing;
+pub mod state;
 pub mod surface;
 
 pub use ack::AckTracker;
@@ -24,4 +26,6 @@ pub use bridge::{ZmqBridge, ZmqPublisher, ZmqSubscriber};
 pub use config::TelegramConfig;
 pub use error::{sanitize_for_user, TelegramError};
 pub use mapping::ChatMapping;
+pub use routing::RoutingTable;
+pub use state::TelegramState;
 pub use surface::TelegramSurface;
