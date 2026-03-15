@@ -22,6 +22,7 @@ use commands::ps::PsArgs;
 use commands::secrets::SecretsCmd;
 use commands::stream::StreamCommand;
 use commands::surface::SurfaceCommand;
+use commands::telegram::TelegramCommand;
 use output::OutputFormat;
 
 /// wh — the Wheelhouse CLI.
@@ -85,4 +86,9 @@ pub enum Commands {
     Completion(CompletionArgs),
     /// Check git repository health and secrets exclusion (FM-07).
     Doctor(DoctorArgs),
+    /// Telegram bot utilities.
+    Telegram {
+        #[command(subcommand)]
+        command: TelegramCommand,
+    },
 }
