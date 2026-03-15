@@ -118,7 +118,7 @@ async fn resolve(token: Option<&str>, format: OutputFormat) -> Result<(), WhErro
     match format {
         OutputFormat::Human => {
             // Print table header.
-            println!("{:<15} {:<30} {}", "CHAT_ID", "TITLE", "TYPE");
+            println!("{:<15} {:<30} TYPE", "CHAT_ID", "TITLE");
             println!("{}", "-".repeat(60));
             for chat in &chats {
                 println!("{:<15} {:<30} {}", chat.chat_id, chat.title, chat.chat_type);
@@ -357,8 +357,7 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
                     id
                 } else {
                     return Err(format!(
-                        "Bot has not been added to group '{}' \u{2014} add it as admin with Manage Topics permission",
-                        chat_id_str
+                        "Bot has not been added to group '{chat_id_str}' \u{2014} add it as admin with Manage Topics permission"
                     ));
                 }
             };
@@ -473,7 +472,7 @@ fn create_forum_topic_blocking(
     chat_id: i64,
     topic_name: &str,
 ) -> Result<i32, String> {
-    let url = format!("https://api.telegram.org/bot{}/createForumTopic", bot_token,);
+    let url = format!("https://api.telegram.org/bot{bot_token}/createForumTopic");
 
     let client = reqwest::blocking::Client::new();
     let response = client
