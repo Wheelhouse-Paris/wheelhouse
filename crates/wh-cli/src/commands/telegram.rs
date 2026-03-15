@@ -378,19 +378,25 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
 
                     // Create the forum topic via Telegram API.
                     // Handle group→supergroup migration: Telegram returns the new chat_id.
-                    let (thread_id, effective_chat_id) =
-                        match create_forum_topic_blocking(&bot_token, chat_id, topic_name)? {
-                            (0, Some(new_id)) => {
-                                info!("Group '{chat_id_str}' migrated to supergroup {new_id} — retrying");
-                                // Update state so future lookups use the new id.
-                                state.groups.insert(chat_id_str.clone(), new_id);
-                                let (tid, _) = create_forum_topic_blocking(&bot_token, new_id, topic_name)?;
-                                (tid, new_id)
-                            }
-                            (tid, _) => (tid, chat_id),
-                        };
+                    let (thread_id, effective_chat_id) = match create_forum_topic_blocking(
+                        &bot_token, chat_id, topic_name,
+                    )? {
+                        (0, Some(new_id)) => {
+                            info!(
+                                "Group '{chat_id_str}' migrated to supergroup {new_id} — retrying"
+                            );
+                            // Update state so future lookups use the new id.
+                            state.groups.insert(chat_id_str.clone(), new_id);
+                            let (tid, _) =
+                                create_forum_topic_blocking(&bot_token, new_id, topic_name)?;
+                            (tid, new_id)
+                        }
+                        (tid, _) => (tid, chat_id),
+                    };
                     info!("Created topic '{topic_name}' in chat {effective_chat_id} → thread_id {thread_id}");
-                    state.topics.insert(topic_key(effective_chat_id, topic_name), thread_id);
+                    state
+                        .topics
+                        .insert(topic_key(effective_chat_id, topic_name), thread_id);
                 }
             }
         }
@@ -512,7 +518,9 @@ fn create_forum_topic_blocking(
                 return Ok((0, Some(new_id)));
             }
         }
-        return Err(format!("createForumTopic returned HTTP {status}: {body_text}"));
+        return Err(format!(
+            "createForumTopic returned HTTP {status}: {body_text}"
+        ));
     }
 
     let body: serde_json::Value = response
