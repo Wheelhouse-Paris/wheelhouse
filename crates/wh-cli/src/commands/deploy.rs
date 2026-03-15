@@ -286,6 +286,17 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
         }
     };
 
+    // Resolve Telegram surfaces regardless of topology changes — state may be missing
+    // (e.g. first deploy after state file was deleted, or group migrated to supergroup).
+    let telegram_routing_file = match crate::commands::telegram::resolve_telegram_surfaces(file) {
+        Ok(path) => path,
+        Err(e) => {
+            let msg = output::format_error("TELEGRAM_RESOLVE_ERROR", &e, format);
+            eprintln!("{msg}");
+            return error::EXIT_ERROR;
+        }
+    };
+
     if !plan_output.has_changes() {
         match format {
             OutputFormat::Human => println!("No changes to apply. Topology is up to date."),
@@ -323,21 +334,17 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
 
     // Collect secrets to inject into agent containers
     let mut extra_env: Vec<(String, String)> = Vec::new();
+    if let Some(routing_path) = telegram_routing_file {
+        extra_env.push((
+            "WH_TELEGRAM_ROUTING_FILE".to_string(),
+            routing_path.to_string_lossy().to_string(),
+        ));
+    }
     for cred in crate::commands::secrets::CREDENTIALS {
         if let Ok(value) = crate::commands::secrets::read_secret(cred.name) {
             extra_env.push((cred.env_var.to_string(), value));
         }
     }
-
-    // Task 3: Resolve Telegram group names and create topics before provisioning.
-    progress_step("Resolving Telegram surfaces...", tty);
-    if let Err(e) = crate::commands::telegram::resolve_telegram_surfaces(file) {
-        progress_done("", tty);
-        let msg = output::format_error("TELEGRAM_RESOLVE_ERROR", &e, format);
-        eprintln!("{msg}");
-        return error::EXIT_ERROR;
-    }
-    progress_done("Telegram resolution complete.", tty);
 
     // AC #1: Spinner during provisioning
     progress_step("Provisioning containers...", tty);

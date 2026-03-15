@@ -5,7 +5,7 @@
 //! topics, writing results to `.wh/telegram-state.json`).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
@@ -258,7 +258,19 @@ fn topic_key(chat_id: i64, topic_name: &str) -> String {
 ///
 /// Returns `Ok(())` if there are no telegram surfaces with `chats`, or if
 /// the bot token is unavailable (backward compat — skip silently).
-pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
+/// A single entry in the flat routing table written to `telegram-routing.json`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TelegramRoutingEntry {
+    pub chat_id: i64,
+    pub thread_id: Option<i32>,
+    pub stream: String,
+}
+
+/// Resolve Telegram group names and create topics at deploy time.
+///
+/// Returns the path to `telegram-routing.json` when chats are resolved,
+/// or `None` when the surface uses legacy single-stream mode.
+pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<Option<PathBuf>, String> {
     // Parse the topology to find telegram surfaces with chats.
     let content = std::fs::read_to_string(topology_path)
         .map_err(|e| format!("cannot read topology file: {e}"))?;
@@ -267,7 +279,7 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
 
     let surfaces = match &wh_file.surfaces {
         Some(s) => s,
-        None => return Ok(()),
+        None => return Ok(None),
     };
 
     // Collect telegram surfaces that have a `chats` block.
@@ -277,7 +289,7 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
         .collect();
 
     if telegram_surfaces.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     // Check if any surface has display-name chat IDs that need resolution.
@@ -297,7 +309,7 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
 
     if !needs_resolution && !has_threads {
         debug!("No display-name chat IDs or threads to resolve — skipping Telegram resolution");
-        return Ok(());
+        return Ok(None);
     }
 
     // Resolve bot token: surface env > keychain. Skip if unavailable (backward compat).
@@ -306,7 +318,7 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
         Some(t) => t,
         None => {
             warn!("Telegram bot token not found in keychain or surface env — skipping name resolution");
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -325,6 +337,9 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
         .iter()
         .map(|c| (c.title.clone(), c.chat_id))
         .collect();
+
+    // Accumulate flat routing entries: (chat_id, thread_id) -> stream.
+    let mut routing_entries: Vec<TelegramRoutingEntry> = Vec::new();
 
     // Resolve each surface's chats.
     for surface in &telegram_surfaces {
@@ -373,6 +388,14 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
                     let key = topic_key(chat_id, topic_name);
                     if state.topics.contains_key(&key) {
                         debug!("Topic '{topic_name}' in chat {chat_id} already in state — skipping creation");
+                        // Still add routing entry from existing state.
+                        if let Some(&thread_id) = state.topics.get(&key) {
+                            routing_entries.push(TelegramRoutingEntry {
+                                chat_id,
+                                thread_id: Some(thread_id),
+                                stream: thread_spec.stream.clone().unwrap_or_default(),
+                            });
+                        }
                         continue;
                     }
 
@@ -396,6 +419,11 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
                     state
                         .topics
                         .insert(topic_key(effective_chat_id, topic_name), thread_id);
+                    routing_entries.push(TelegramRoutingEntry {
+                        chat_id: effective_chat_id,
+                        thread_id: Some(thread_id),
+                        stream: thread_spec.stream.clone().unwrap_or_default(),
+                    });
                 }
             }
         }
@@ -408,7 +436,19 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
         state_dir.join("telegram-state.json").display()
     );
 
-    Ok(())
+    // Write flat routing table so wh-telegram can build its RoutingTable at startup.
+    let routing_path = state_dir.join("telegram-routing.json");
+    let routing_json = serde_json::to_string_pretty(&routing_entries)
+        .map_err(|e| format!("failed to serialize routing table: {e}"))?;
+    std::fs::create_dir_all(&state_dir).map_err(|e| format!("failed to create state dir: {e}"))?;
+    std::fs::write(&routing_path, routing_json)
+        .map_err(|e| format!("failed to write routing file: {e}"))?;
+    info!(
+        "Telegram routing table written to {}",
+        routing_path.display()
+    );
+
+    Ok(Some(routing_path))
 }
 
 /// Try to find the bot token from surface env vars or keychain.

@@ -720,7 +720,9 @@ pub fn provision_containers(
             // Build env: extra_env + WH_SURFACE_NAME + WH_STREAM + surface-specific env
             let mut surface_env = extra_env.to_vec();
             surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
-            surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+            if !surface.stream.is_empty() {
+                surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+            }
             if let Some(env_map) = &surface.env {
                 for (key, value) in env_map {
                     surface_env.push((key.clone(), value.clone()));
@@ -1156,7 +1158,9 @@ mod tests {
         // Reproduce the merge logic from provision_containers
         let mut surface_env = extra_env.to_vec();
         surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
-        surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+        if !surface.stream.is_empty() {
+            surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+        }
         if let Some(env_map) = &surface.env {
             for (key, value) in env_map {
                 surface_env.push((key.clone(), value.clone()));
