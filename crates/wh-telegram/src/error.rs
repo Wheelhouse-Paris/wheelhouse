@@ -35,6 +35,10 @@ pub enum TelegramError {
     /// Chat mapping error.
     #[error("chat mapping error: {0}")]
     MappingError(String),
+
+    /// State persistence error.
+    #[error("state error: {0}")]
+    StateError(String),
 }
 
 /// Sanitizes any error to a user-safe message.
@@ -63,6 +67,7 @@ mod tests {
             TelegramError::SendFailed("network timeout after 30s".into()),
             TelegramError::InvalidToken,
             TelegramError::MappingError("corrupt YAML".into()),
+            TelegramError::StateError("file not found".into()),
         ];
         for err in &errors {
             assert_eq!(

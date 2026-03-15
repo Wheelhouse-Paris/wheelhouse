@@ -119,17 +119,45 @@ pub struct Stream {
 ///
 /// Surfaces connect external channels (Telegram, CLI, etc.) to streams.
 /// Each surface is provisioned as a native process (not a container).
-/// The binary is resolved from `kind`: `kind: telegram` → `wh-telegram`.
+/// The binary is resolved from `kind`: `kind: telegram` -> `wh-telegram`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Surface {
     pub name: String,
     /// Surface type: "telegram" or "cli".
     pub kind: String,
-    /// Stream name this surface connects to.
+    /// Stream name this surface connects to (single-stream mode).
+    /// Mutually exclusive with `chats`.
+    #[serde(default)]
     pub stream: String,
     /// Optional environment variables passed to the surface process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::BTreeMap<String, String>>,
+    /// Multi-chat configuration (Telegram surfaces only).
+    /// Each entry maps a chat (DM or supergroup) to one or more streams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chats: Option<Vec<SurfaceChatConfig>>,
+}
+
+/// A chat entry within a surface's `chats` block.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SurfaceChatConfig {
+    /// Chat identifier: `@username` for DMs, or group display name for supergroups.
+    pub id: String,
+    /// Stream name for DM chats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
+    /// Thread (topic) list for supergroup chats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<Vec<SurfaceThreadConfig>>,
+}
+
+/// A thread/topic entry within a chat configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SurfaceThreadConfig {
+    /// Topic name (human-readable).
+    pub id: String,
+    /// Stream name this topic is bridged to.
+    pub stream: String,
 }
 
 /// A single change detected between current and desired topology state.
@@ -545,12 +573,14 @@ agents:
                     kind: "cli".to_string(),
                     stream: "main".to_string(),
                     env: None,
+                    chats: None,
                 },
                 Surface {
                     name: "alpha-surface".to_string(),
                     kind: "telegram".to_string(),
                     stream: "main".to_string(),
                     env: None,
+                    chats: None,
                 },
             ],
             guardrails: None,

@@ -1052,6 +1052,7 @@ mod tests {
                 kind: "telegram".to_string(),
                 stream: "main".to_string(),
                 env: None,
+                chats: None,
             }],
             guardrails: None,
         };
@@ -1117,6 +1118,7 @@ mod tests {
                 kind: "telegram".to_string(),
                 stream: "main".to_string(),
                 env: None,
+                chats: None,
             }],
             guardrails: None,
         };
@@ -1185,6 +1187,7 @@ mod tests {
                     "TELEGRAM_BOT_TOKEN".to_string(),
                     "old-token".to_string(),
                 )])),
+                chats: None,
             }],
             guardrails: None,
         };

@@ -1150,6 +1150,7 @@ mod tests {
                 ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
                 ("CHAT_ID".to_string(), "456".to_string()),
             ])),
+            chats: None,
         };
 
         // Reproduce the merge logic from provision_containers
