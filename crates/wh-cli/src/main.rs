@@ -11,6 +11,7 @@ use wh_cli::commands::ps;
 use wh_cli::commands::status;
 use wh_cli::commands::stream;
 use wh_cli::commands::surface::{self, SurfaceCommand};
+use wh_cli::commands::telegram;
 use wh_cli::output::{OutputEnvelope, OutputFormat};
 use wh_cli::{Cli, Commands, GETTING_STARTED_HINT};
 
@@ -136,6 +137,27 @@ async fn main() {
         Commands::Doctor(args) => {
             let exit_code = args.execute();
             std::process::exit(exit_code);
+        }
+        Commands::Telegram { command } => {
+            if let Err(e) = telegram::execute(&command).await {
+                let fmt = match &command {
+                    telegram::TelegramCommand::Resolve { format, .. } => *format,
+                };
+                match fmt {
+                    OutputFormat::Json => {
+                        let envelope = OutputEnvelope::<()>::error(e.error_code(), e.to_string());
+                        if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                            eprintln!("{json}");
+                        } else {
+                            eprintln!("Error: {e}");
+                        }
+                    }
+                    OutputFormat::Human => {
+                        eprintln!("Error: {e}");
+                    }
+                }
+                std::process::exit(1);
+            }
         }
     }
 }
