@@ -377,9 +377,20 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<(), String> {
                     }
 
                     // Create the forum topic via Telegram API.
-                    let thread_id = create_forum_topic_blocking(&bot_token, chat_id, topic_name)?;
-                    info!("Created topic '{topic_name}' in chat {chat_id} → thread_id {thread_id}");
-                    state.topics.insert(key, thread_id);
+                    // Handle group→supergroup migration: Telegram returns the new chat_id.
+                    let (thread_id, effective_chat_id) =
+                        match create_forum_topic_blocking(&bot_token, chat_id, topic_name)? {
+                            (0, Some(new_id)) => {
+                                info!("Group '{chat_id_str}' migrated to supergroup {new_id} — retrying");
+                                // Update state so future lookups use the new id.
+                                state.groups.insert(chat_id_str.clone(), new_id);
+                                let (tid, _) = create_forum_topic_blocking(&bot_token, new_id, topic_name)?;
+                                (tid, new_id)
+                            }
+                            (tid, _) => (tid, chat_id),
+                        };
+                    info!("Created topic '{topic_name}' in chat {effective_chat_id} → thread_id {thread_id}");
+                    state.topics.insert(topic_key(effective_chat_id, topic_name), thread_id);
                 }
             }
         }
@@ -466,12 +477,16 @@ fn call_get_updates_blocking(bot_token: &str) -> Result<Vec<ResolvedChat>, Strin
     Ok(extract_chats(&body))
 }
 
-/// Call Telegram `createForumTopic` using blocking reqwest. Returns the new `message_thread_id`.
+/// Call Telegram `createForumTopic` using blocking reqwest.
+///
+/// Returns `Ok((thread_id, None))` on success.
+/// Returns `Ok((0, Some(new_chat_id)))` when Telegram signals a group→supergroup migration
+/// via `migrate_to_chat_id` in the 400 response body — the caller should update state and retry.
 fn create_forum_topic_blocking(
     bot_token: &str,
     chat_id: i64,
     topic_name: &str,
-) -> Result<i32, String> {
+) -> Result<(i32, Option<i64>), String> {
     let url = format!("https://api.telegram.org/bot{bot_token}/createForumTopic");
 
     let client = reqwest::blocking::Client::new();
@@ -486,8 +501,18 @@ fn create_forum_topic_blocking(
 
     if !response.status().is_success() {
         let status = response.status();
-        let body = response.text().unwrap_or_else(|_| "unknown".to_string());
-        return Err(format!("createForumTopic returned HTTP {status}: {body}"));
+        let body_text = response.text().unwrap_or_else(|_| "unknown".to_string());
+        // Telegram returns migrate_to_chat_id when a group was upgraded to a supergroup.
+        if let Ok(body) = serde_json::from_str::<serde_json::Value>(&body_text) {
+            if let Some(new_id) = body
+                .get("parameters")
+                .and_then(|p| p.get("migrate_to_chat_id"))
+                .and_then(|v| v.as_i64())
+            {
+                return Ok((0, Some(new_id)));
+            }
+        }
+        return Err(format!("createForumTopic returned HTTP {status}: {body_text}"));
     }
 
     let body: serde_json::Value = response
@@ -502,11 +527,14 @@ fn create_forum_topic_blocking(
         return Err(format!("createForumTopic API error: {description}"));
     }
 
-    body.get("result")
+    let thread_id = body
+        .get("result")
         .and_then(|r| r.get("message_thread_id"))
         .and_then(|v| v.as_i64())
         .map(|v| v as i32)
-        .ok_or_else(|| "createForumTopic response missing message_thread_id".to_string())
+        .ok_or_else(|| "createForumTopic response missing message_thread_id".to_string())?;
+
+    Ok((thread_id, None))
 }
 
 #[cfg(test)]
