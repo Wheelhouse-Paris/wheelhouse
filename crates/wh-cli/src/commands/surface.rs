@@ -44,6 +44,11 @@ pub enum SurfaceCommand {
         /// Name of the surface to restart (as declared in the topology).
         name: String,
     },
+    /// Stop a deployed surface process without respawning it.
+    Stop {
+        /// Name of the surface to stop (as declared in the topology).
+        name: String,
+    },
 }
 
 /// Validate a stream name matches the allowed pattern: `[a-z][a-z0-9-]*`.
@@ -546,6 +551,39 @@ pub fn execute_restart(name: &str) -> Result<(), WhError> {
 
     // AC-4: Success message
     println!("Restarted surface '{name}'.");
+    Ok(())
+}
+
+/// Execute `wh surface stop <name>`.
+///
+/// Loads the committed topology from `.wh/state.json`, verifies the surface
+/// exists, and kills the process (if running). Does not respawn.
+pub fn execute_stop(name: &str) -> Result<(), WhError> {
+    let state_path = Path::new(".wh/state.json");
+    if !state_path.exists() {
+        return Err(WhError::Other(
+            "no deployed topology found (.wh/state.json missing). Run 'wh deploy apply' first."
+                .to_string(),
+        ));
+    }
+
+    let content = std::fs::read_to_string(state_path)
+        .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+    let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+        .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
+
+    let topology_name = topology.name.clone();
+
+    if !topology.surfaces.iter().any(|s| s.name == name) {
+        return Err(WhError::Other(format!(
+            "surface '{name}' not found in deployed topology"
+        )));
+    }
+
+    wh_broker::deploy::podman::kill_surface_process(&topology_name, name)
+        .map_err(|e| WhError::Other(format!("failed to stop surface: {e}")))?;
+
+    println!("Stopped surface '{name}'.");
     Ok(())
 }
 

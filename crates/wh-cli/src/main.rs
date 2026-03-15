@@ -122,6 +122,12 @@ async fn main() {
                     std::process::exit(e.exit_code());
                 }
             }
+            SurfaceCommand::Stop { name } => {
+                if let Err(e) = surface::execute_stop(&name) {
+                    eprintln!("Error: {e}");
+                    std::process::exit(e.exit_code());
+                }
+            }
         },
         Commands::Memory { command } => {
             let exit_code = command.execute();
