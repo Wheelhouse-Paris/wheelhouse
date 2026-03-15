@@ -95,17 +95,19 @@ test: test-rust test-python
 
 CARGO ?= $(HOME)/.cargo/bin/cargo
 
+.DEFAULT_GOAL := build
+
 ## Run the same checks as CI (fmt + clippy)
 check:
 	$(CARGO) fmt --check
 	$(CARGO) clippy --workspace -- -D warnings
 
-## Build release binaries
+## Build release binaries (default target)
 build:
 	$(CARGO) build --release -p wh-cli -p wh-telegram
 
-## Build and install binaries to INSTALL_PREFIX (default: /opt/homebrew/bin)
-install: build
+## Copy built binaries to INSTALL_PREFIX (run with sudo if needed)
+install:
 	cp target/release/wh $(INSTALL_PREFIX)/wh
 	cp target/release/wh-telegram $(INSTALL_PREFIX)/wh-telegram
 	@echo "Installed to $(INSTALL_PREFIX)"
