@@ -329,6 +329,16 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
         }
     }
 
+    // Task 3: Resolve Telegram group names and create topics before provisioning.
+    progress_step("Resolving Telegram surfaces...", tty);
+    if let Err(e) = crate::commands::telegram::resolve_telegram_surfaces(file) {
+        progress_done("", tty);
+        let msg = output::format_error("TELEGRAM_RESOLVE_ERROR", &e, format);
+        eprintln!("{msg}");
+        return error::EXIT_ERROR;
+    }
+    progress_done("Telegram resolution complete.", tty);
+
     // AC #1: Spinner during provisioning
     progress_step("Provisioning containers...", tty);
     let apply_result = match apply::apply(committed, &extra_env) {
