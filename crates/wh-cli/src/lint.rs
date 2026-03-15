@@ -1098,7 +1098,10 @@ surfaces:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("'id' is required")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("'id' is required")));
     }
 
     #[test]
@@ -1120,7 +1123,10 @@ surfaces:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("'stream' is required")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("'stream' is required")));
     }
 
     #[test]
@@ -1143,7 +1149,10 @@ surfaces:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("nonexistent")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("nonexistent")));
     }
 
     #[test]
@@ -1167,7 +1176,10 @@ surfaces:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("mutually exclusive")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("mutually exclusive")));
     }
 
     #[test]
@@ -1187,7 +1199,10 @@ surfaces:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("must have either")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("must have either")));
     }
 
     #[test]
@@ -1209,7 +1224,10 @@ surfaces:
         );
         let (result, _) = lint_file(f.path()).unwrap();
         assert!(result.has_errors());
-        assert!(result.errors.iter().any(|e| e.message.contains("'id' is required")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.message.contains("'id' is required")));
     }
 
     #[test]
