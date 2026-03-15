@@ -66,10 +66,12 @@ impl TelegramState {
         let file_path = state_dir.join("telegram-state.json");
 
         let (groups, topics) = if file_path.exists() {
-            let content = std::fs::read_to_string(&file_path)
-                .map_err(|e| TelegramError::StateError(format!("failed to read state file: {e}")))?;
-            let state_file: StateFile = serde_json::from_str(&content)
-                .map_err(|e| TelegramError::StateError(format!("failed to parse state file: {e}")))?;
+            let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                TelegramError::StateError(format!("failed to read state file: {e}"))
+            })?;
+            let state_file: StateFile = serde_json::from_str(&content).map_err(|e| {
+                TelegramError::StateError(format!("failed to parse state file: {e}"))
+            })?;
 
             let mut topics = HashMap::new();
             for (key, thread_id) in state_file.topics {

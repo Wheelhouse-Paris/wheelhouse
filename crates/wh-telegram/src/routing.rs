@@ -69,22 +69,14 @@ impl RoutingTable {
     pub fn resolve_inbound(&self, chat_id: i64, thread_id: Option<i32>) -> Option<&str> {
         match &self.mode {
             RoutingMode::SingleStream(stream) => Some(stream.as_str()),
-            RoutingMode::MultiChat => self
-                .inbound
-                .get(&(chat_id, thread_id))
-                .map(|s| s.as_str()),
+            RoutingMode::MultiChat => self.inbound.get(&(chat_id, thread_id)).map(|s| s.as_str()),
         }
     }
 
     /// Records a user's last-seen location for outbound routing.
     ///
     /// Called on every inbound message to track where to send replies.
-    pub fn record_user_location(
-        &mut self,
-        user_id: &str,
-        chat_id: i64,
-        thread_id: Option<i32>,
-    ) {
+    pub fn record_user_location(&mut self, user_id: &str, chat_id: i64, thread_id: Option<i32>) {
         self.outbound
             .insert(user_id.to_string(), (chat_id, thread_id));
     }
