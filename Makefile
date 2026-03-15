@@ -5,7 +5,13 @@
 
 .PHONY: proto-rust proto-python proto proto-check \
         test-rust test-python test-e2e test \
+        check build install \
         vendor clean
+
+# ──────────────────────────────────────────────
+# Install config (override via env or make INSTALL_PREFIX=...)
+# ──────────────────────────────────────────────
+INSTALL_PREFIX ?= /opt/homebrew/bin
 
 PROTO_DIR := proto
 PROTO_FILES := $(shell find $(PROTO_DIR) -name '*.proto' 2>/dev/null)
@@ -86,6 +92,23 @@ test: test-rust test-python
 # ──────────────────────────────────────────────
 # Build targets
 # ──────────────────────────────────────────────
+
+CARGO ?= $(HOME)/.cargo/bin/cargo
+
+## Run the same checks as CI (fmt + clippy)
+check:
+	$(CARGO) fmt --check
+	$(CARGO) clippy --workspace -- -D warnings
+
+## Build release binaries
+build:
+	$(CARGO) build --release -p wh-cli -p wh-telegram
+
+## Build and install binaries to INSTALL_PREFIX (default: /opt/homebrew/bin)
+install: build
+	cp target/release/wh $(INSTALL_PREFIX)/wh
+	cp target/release/wh-telegram $(INSTALL_PREFIX)/wh-telegram
+	@echo "Installed to $(INSTALL_PREFIX)"
 
 ## Vendor dependencies for air-gapped builds (WI-03)
 vendor:
