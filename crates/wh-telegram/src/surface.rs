@@ -131,6 +131,8 @@ impl TelegramSurface {
             timestamp_ms,
             user_id: profile.user_id.clone(),
             reply_to_user_id: String::new(),
+            source_stream: String::new(),
+            source_topic: String::new(),
         };
 
         // Queue for stream publication

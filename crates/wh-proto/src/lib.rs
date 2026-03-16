@@ -100,6 +100,8 @@ mod tests {
             timestamp_ms: 1710000000000,
             user_id: String::new(),
             reply_to_user_id: String::new(),
+            source_stream: String::new(),
+            source_topic: String::new(),
         };
         let encoded = original.encode_to_vec();
         let decoded = TextMessage::decode(encoded.as_slice()).unwrap();

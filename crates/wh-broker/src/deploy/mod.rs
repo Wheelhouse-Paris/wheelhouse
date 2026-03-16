@@ -113,6 +113,10 @@ pub struct Stream {
     pub name: String,
     #[serde(default)]
     pub retention: Option<String>,
+    /// Optional human-readable description. When present, `wh deploy apply` creates
+    /// `.wh/context/<stream_name>/CONTEXT.md` with this content (FR-NEW-04).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// A surface declaration within a topology.
@@ -377,10 +381,12 @@ agents:
                 Stream {
                     name: "z-stream".to_string(),
                     retention: None,
+                    description: None,
                 },
                 Stream {
                     name: "a-stream".to_string(),
                     retention: None,
+                    description: None,
                 },
             ],
             surfaces: vec![],
@@ -588,5 +594,77 @@ agents:
         let canonical = canonicalize_topology(topo);
         assert_eq!(canonical.surfaces[0].name, "alpha-surface");
         assert_eq!(canonical.surfaces[1].name, "zeta-surface");
+    }
+
+    #[test]
+    fn parse_topology_with_stream_description() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+streams:
+  - name: main
+    description: "Main conversation stream"
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(
+            topo.streams[0].description,
+            Some("Main conversation stream".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_topology_without_stream_description_defaults_to_none() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+streams:
+  - name: main
+    retention: 7d
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.streams[0].description, None);
+    }
+
+    #[test]
+    fn stream_description_yaml_roundtrip() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![],
+            streams: vec![Stream {
+                name: "main".to_string(),
+                retention: None,
+                description: Some("Test context".to_string()),
+            }],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(
+            parsed.streams[0].description,
+            Some("Test context".to_string())
+        );
+    }
+
+    #[test]
+    fn stream_description_none_not_serialized() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![],
+            streams: vec![Stream {
+                name: "main".to_string(),
+                retention: None,
+                description: None,
+            }],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        assert!(
+            !yaml.contains("description"),
+            "description: None should be omitted from YAML: {yaml}"
+        );
     }
 }

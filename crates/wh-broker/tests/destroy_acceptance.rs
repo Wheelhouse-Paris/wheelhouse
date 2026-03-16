@@ -76,6 +76,7 @@ fn setup_deployed_repo() -> tempfile::TempDir {
         streams: vec![wh_broker::deploy::Stream {
             name: "main".to_string(),
             retention: Some("7d".to_string()),
+            description: None,
         }],
         surfaces: vec![],
         guardrails: None,
