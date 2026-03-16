@@ -1,9 +1,10 @@
-//! `wh surface cli` — interactive terminal surface for agent interaction.
+//! `wh surface` — surface lifecycle commands.
 //!
-//! Publishes user input as `TextMessage` to a stream via ZMQ and displays
-//! incoming messages from agents in real time. Connects to the broker's
-//! PUB/SUB data plane (Story 9.4, FR27).
+//! Subcommands:
+//! - `cli` — interactive terminal surface for agent interaction (Story 9.4).
+//! - `restart <name>` — kill and respawn a deployed surface process (Story 9.7).
 
+use std::path::Path;
 use std::sync::LazyLock;
 
 use crate::output::{format_message, OutputFormat, SurfaceMessage};
@@ -37,6 +38,16 @@ pub enum SurfaceCommand {
         /// Output format: "human" (default) or "json".
         #[arg(long, default_value = "human", value_parser = ["human", "json"])]
         format: String,
+    },
+    /// Restart a deployed surface process (kill + respawn with same env).
+    Restart {
+        /// Name of the surface to restart (as declared in the topology).
+        name: String,
+    },
+    /// Stop a deployed surface process without respawning it.
+    Stop {
+        /// Name of the surface to stop (as declared in the topology).
+        name: String,
     },
 }
 
@@ -245,6 +256,8 @@ pub async fn run_cli(stream: &str, output_format: OutputFormat) -> Result<(), Wh
                     timestamp_ms,
                     user_id: cli_user_id.clone(),
                     reply_to_user_id: String::new(),
+                    source_stream: stream_name.clone(),
+                    source_topic: String::new(),
                 };
 
                 // Wrap in StreamEnvelope
@@ -370,6 +383,212 @@ pub async fn run_cli(stream: &str, output_format: OutputFormat) -> Result<(), Wh
     Ok(())
 }
 
+/// Extract environment variables from a running process by PID.
+///
+/// On macOS, uses `ps eww <pid>` which outputs the command line followed by
+/// environment variables. We parse key=value pairs from the output.
+/// Returns an empty vec if the process is not running or parsing fails.
+fn extract_env_from_pid(pid: u32) -> Vec<(String, String)> {
+    let output = std::process::Command::new("ps")
+        .args(["eww", "-o", "command", "-p", &pid.to_string()])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // ps eww output: first line is header, second line is command + env.
+    // The env vars appear after the binary path, space-separated as KEY=VALUE.
+    let mut env_vars = Vec::new();
+    for line in stdout.lines().skip(1) {
+        // Split on whitespace; each token that contains '=' is an env var.
+        // Tokens before the first '=' token are the command and its args.
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let mut found_env = false;
+        for token in &tokens {
+            if token.contains('=') {
+                found_env = true;
+            }
+            if found_env {
+                if let Some((key, value)) = token.split_once('=') {
+                    // Skip internal/system env vars
+                    if !key.is_empty()
+                        && !key.starts_with('_')
+                        && !key.starts_with("PS_")
+                        && key != "COMMAND"
+                    {
+                        env_vars.push((key.to_string(), value.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    env_vars
+}
+
+/// Read the PID from a surface PID file, if it exists.
+fn read_surface_pid(topology_name: &str, surface_name: &str) -> Option<u32> {
+    let pid_path = wh_broker::deploy::podman::surface_pid_path(topology_name, surface_name);
+    if !pid_path.exists() {
+        return None;
+    }
+    let pid_str = std::fs::read_to_string(&pid_path).ok()?;
+    pid_str.trim().parse().ok()
+}
+
+/// Check if a process with the given PID is still alive.
+fn is_pid_alive(pid: u32) -> bool {
+    // Use kill -0 to check if process exists (does not send a signal)
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// Collect fresh environment variables for a surface (secrets + routing file).
+///
+/// This is the fallback path when no running process exists to copy env from.
+fn collect_fresh_env(topology_name: &str) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+
+    // Collect secrets from keychain/env (same as deploy.rs)
+    for cred in crate::commands::secrets::CREDENTIALS {
+        if let Ok(value) = crate::commands::secrets::read_secret(cred.name) {
+            env.push((cred.env_var.to_string(), value));
+        }
+    }
+
+    // Check for WH_TELEGRAM_ROUTING_FILE at the conventional location.
+    // The routing file is written to <topology_dir>/.wh/telegram-routing.json
+    // during deploy. Since we don't know the topology dir at restart time,
+    // check if WH_TELEGRAM_ROUTING_FILE is set in the current environment.
+    if let Ok(routing_file) = std::env::var("WH_TELEGRAM_ROUTING_FILE") {
+        env.push(("WH_TELEGRAM_ROUTING_FILE".to_string(), routing_file));
+    }
+
+    // Also check ~/.wh/telegram-routing-<topology>.json as a fallback convention
+    if !env.iter().any(|(k, _)| k == "WH_TELEGRAM_ROUTING_FILE") {
+        if let Ok(home) = std::env::var("HOME") {
+            let routing_path = std::path::PathBuf::from(&home)
+                .join(".wh")
+                .join(format!("telegram-routing-{topology_name}.json"));
+            if routing_path.exists() {
+                env.push((
+                    "WH_TELEGRAM_ROUTING_FILE".to_string(),
+                    routing_path.to_string_lossy().to_string(),
+                ));
+            }
+        }
+    }
+
+    env
+}
+
+/// Execute `wh surface restart <name>`.
+///
+/// Loads the committed topology from `.wh/state.json`, verifies the surface
+/// exists, kills the existing process (if running), and spawns a new one
+/// with the same environment variables.
+///
+/// AC-1: Kill and respawn with same env.
+/// AC-2: If not running, start fresh.
+/// AC-3: Unknown surface -> clear error.
+/// AC-4: Print "Restarted surface '<name>'." on success.
+pub fn execute_restart(name: &str) -> Result<(), WhError> {
+    // Load deployed topology from .wh/state.json (same as wh ps)
+    let state_path = Path::new(".wh/state.json");
+    if !state_path.exists() {
+        return Err(WhError::Other(
+            "no deployed topology found (.wh/state.json missing). Run 'wh deploy apply' first."
+                .to_string(),
+        ));
+    }
+
+    let content = std::fs::read_to_string(state_path)
+        .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+    let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+        .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
+
+    // AC-3: Verify surface exists in deployed topology
+    let surface = topology
+        .surfaces
+        .iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| {
+            WhError::Other(format!("surface '{name}' not found in deployed topology"))
+        })?;
+
+    let kind = surface.kind.clone();
+    let topology_name = topology.name.clone();
+
+    // Check if the surface process is currently running
+    let existing_pid = read_surface_pid(&topology_name, name);
+    let is_running = existing_pid.is_some_and(is_pid_alive);
+
+    // Collect environment variables
+    let surface_env = if is_running {
+        // AC-1: Extract env from running process (reuse exact deploy-time env)
+        let pid = existing_pid.unwrap();
+        let mut env = extract_env_from_pid(pid);
+
+        // If we got no env vars from ps, fall back to fresh collection
+        if env.is_empty() {
+            env = collect_fresh_env(&topology_name);
+        }
+        env
+    } else {
+        // AC-2: Not running — collect fresh env
+        collect_fresh_env(&topology_name)
+    };
+
+    // Kill existing process (no-op if not running / no PID file)
+    wh_broker::deploy::podman::kill_surface_process(&topology_name, name)
+        .map_err(|e| WhError::Other(format!("failed to stop surface: {e}")))?;
+
+    // Spawn new process
+    wh_broker::deploy::podman::spawn_surface_process(&topology_name, name, &kind, &surface_env)
+        .map_err(|e| WhError::Other(format!("failed to start surface: {e}")))?;
+
+    // AC-4: Success message
+    println!("Restarted surface '{name}'.");
+    Ok(())
+}
+
+/// Execute `wh surface stop <name>`.
+///
+/// Loads the committed topology from `.wh/state.json`, verifies the surface
+/// exists, and kills the process (if running). Does not respawn.
+pub fn execute_stop(name: &str) -> Result<(), WhError> {
+    let state_path = Path::new(".wh/state.json");
+    if !state_path.exists() {
+        return Err(WhError::Other(
+            "no deployed topology found (.wh/state.json missing). Run 'wh deploy apply' first."
+                .to_string(),
+        ));
+    }
+
+    let content = std::fs::read_to_string(state_path)
+        .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+    let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+        .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
+
+    let topology_name = topology.name.clone();
+
+    if !topology.surfaces.iter().any(|s| s.name == name) {
+        return Err(WhError::Other(format!(
+            "surface '{name}' not found in deployed topology"
+        )));
+    }
+
+    wh_broker::deploy::podman::kill_surface_process(&topology_name, name)
+        .map_err(|e| WhError::Other(format!("failed to stop surface: {e}")))?;
+
+    println!("Stopped surface '{name}'.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,5 +661,72 @@ mod tests {
             result.is_err(),
             "probe should fail when no broker is running"
         );
+    }
+
+    // --- Story 9.7: restart tests ---
+
+    #[test]
+    fn test_restart_no_state_file() {
+        // execute_restart reads .wh/state.json from CWD.
+        // Run from a temp dir where no state file exists.
+        let tmp = tempfile::tempdir().unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let result = execute_restart("telegram");
+        std::env::set_current_dir(&prev).unwrap();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("no deployed topology found"),
+            "expected 'no deployed topology found', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_restart_unknown_surface() {
+        // Create a temp dir with a valid .wh/state.json that has no surfaces.
+        let tmp = tempfile::tempdir().unwrap();
+        let wh_dir = tmp.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+        let state = serde_json::json!({
+            "api_version": "wheelhouse.dev/v1",
+            "name": "dev",
+            "agents": [],
+            "streams": [],
+            "surfaces": []
+        });
+        std::fs::write(wh_dir.join("state.json"), state.to_string()).unwrap();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let result = execute_restart("nonexistent");
+        std::env::set_current_dir(&prev).unwrap();
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("surface 'nonexistent' not found in deployed topology"),
+            "expected surface not found error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_is_pid_alive_nonexistent_pid() {
+        // PID 999999 is very unlikely to exist
+        assert!(!is_pid_alive(999_999));
+    }
+
+    #[test]
+    fn test_extract_env_from_pid_nonexistent() {
+        let env = extract_env_from_pid(999_999);
+        assert!(
+            env.is_empty(),
+            "should return empty vec for nonexistent pid"
+        );
+    }
+
+    #[test]
+    fn test_read_surface_pid_no_file() {
+        assert!(read_surface_pid("nonexistent-topology", "nonexistent-surface").is_none());
     }
 }

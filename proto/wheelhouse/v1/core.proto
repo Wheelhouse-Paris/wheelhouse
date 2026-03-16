@@ -17,6 +17,16 @@ message TextMessage {
   // Surfaces use this to route responses to the correct chat/session.
   string reply_to_user_id = 5;
 
+  // Source stream name — populated by surfaces on inbound messages (Epic 10, Story 10.2).
+  // Identifies which stream this message originated from.
+  // Empty string for messages published by agents or non-surface publishers.
+  string source_stream = 6;
+
+  // Source topic name — human-readable topic label, populated by wh-telegram (Epic 10, Story 10.2).
+  // For Telegram multi-chat surfaces: the topic name (e.g. "Iktos", "General").
+  // Empty string for non-topic surfaces (CLI, single-stream Telegram).
+  string source_topic = 7;
+
   // Reserved for future evolution (TT-02)
   reserved 50 to 100;
   reserved "metadata";

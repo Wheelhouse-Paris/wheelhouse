@@ -113,23 +113,55 @@ pub struct Stream {
     pub name: String,
     #[serde(default)]
     pub retention: Option<String>,
+    /// Optional human-readable description. When present, `wh deploy apply` creates
+    /// `.wh/context/<stream_name>/CONTEXT.md` with this content (FR-NEW-04).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// A surface declaration within a topology.
 ///
 /// Surfaces connect external channels (Telegram, CLI, etc.) to streams.
 /// Each surface is provisioned as a native process (not a container).
-/// The binary is resolved from `kind`: `kind: telegram` → `wh-telegram`.
+/// The binary is resolved from `kind`: `kind: telegram` -> `wh-telegram`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Surface {
     pub name: String,
     /// Surface type: "telegram" or "cli".
     pub kind: String,
-    /// Stream name this surface connects to.
+    /// Stream name this surface connects to (single-stream mode).
+    /// Mutually exclusive with `chats`.
+    #[serde(default)]
     pub stream: String,
     /// Optional environment variables passed to the surface process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub env: Option<std::collections::BTreeMap<String, String>>,
+    /// Multi-chat configuration (Telegram surfaces only).
+    /// Each entry maps a chat (DM or supergroup) to one or more streams.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chats: Option<Vec<SurfaceChatConfig>>,
+}
+
+/// A chat entry within a surface's `chats` block.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SurfaceChatConfig {
+    /// Chat identifier: `@username` for DMs, or group display name for supergroups.
+    pub id: String,
+    /// Stream name for DM chats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
+    /// Thread (topic) list for supergroup chats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<Vec<SurfaceThreadConfig>>,
+}
+
+/// A thread/topic entry within a chat configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SurfaceThreadConfig {
+    /// Topic name (human-readable).
+    pub id: String,
+    /// Stream name this topic is bridged to.
+    pub stream: String,
 }
 
 /// A single change detected between current and desired topology state.
@@ -349,10 +381,12 @@ agents:
                 Stream {
                     name: "z-stream".to_string(),
                     retention: None,
+                    description: None,
                 },
                 Stream {
                     name: "a-stream".to_string(),
                     retention: None,
+                    description: None,
                 },
             ],
             surfaces: vec![],
@@ -545,12 +579,14 @@ agents:
                     kind: "cli".to_string(),
                     stream: "main".to_string(),
                     env: None,
+                    chats: None,
                 },
                 Surface {
                     name: "alpha-surface".to_string(),
                     kind: "telegram".to_string(),
                     stream: "main".to_string(),
                     env: None,
+                    chats: None,
                 },
             ],
             guardrails: None,
@@ -558,5 +594,77 @@ agents:
         let canonical = canonicalize_topology(topo);
         assert_eq!(canonical.surfaces[0].name, "alpha-surface");
         assert_eq!(canonical.surfaces[1].name, "zeta-surface");
+    }
+
+    #[test]
+    fn parse_topology_with_stream_description() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+streams:
+  - name: main
+    description: "Main conversation stream"
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(
+            topo.streams[0].description,
+            Some("Main conversation stream".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_topology_without_stream_description_defaults_to_none() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+streams:
+  - name: main
+    retention: 7d
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.streams[0].description, None);
+    }
+
+    #[test]
+    fn stream_description_yaml_roundtrip() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![],
+            streams: vec![Stream {
+                name: "main".to_string(),
+                retention: None,
+                description: Some("Test context".to_string()),
+            }],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(
+            parsed.streams[0].description,
+            Some("Test context".to_string())
+        );
+    }
+
+    #[test]
+    fn stream_description_none_not_serialized() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            agents: vec![],
+            streams: vec![Stream {
+                name: "main".to_string(),
+                retention: None,
+                description: None,
+            }],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        assert!(
+            !yaml.contains("description"),
+            "description: None should be omitted from YAML: {yaml}"
+        );
     }
 }

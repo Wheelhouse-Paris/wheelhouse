@@ -35,6 +35,10 @@ pub enum TelegramError {
     /// Chat mapping error.
     #[error("chat mapping error: {0}")]
     MappingError(String),
+
+    /// State persistence error.
+    #[error("state error: {0}")]
+    StateError(String),
 }
 
 /// Sanitizes any error to a user-safe message.
@@ -57,12 +61,13 @@ mod tests {
     #[test]
     fn sanitize_returns_same_message_for_all_variants() {
         let errors = vec![
-            TelegramError::ConfigError("missing WH_TELEGRAM_BOT_TOKEN".into()),
+            TelegramError::ConfigError("missing TELEGRAM_BOT_TOKEN".into()),
             TelegramError::BotError("API rate limit exceeded".into()),
             TelegramError::StreamError("broker:5555 connection refused on zmq socket".into()),
             TelegramError::SendFailed("network timeout after 30s".into()),
             TelegramError::InvalidToken,
             TelegramError::MappingError("corrupt YAML".into()),
+            TelegramError::StateError("file not found".into()),
         ];
         for err in &errors {
             assert_eq!(

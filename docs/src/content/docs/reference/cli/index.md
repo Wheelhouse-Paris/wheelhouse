@@ -37,6 +37,8 @@ The `wh` CLI is the primary control plane for Wheelhouse — used by human opera
 | `wh stream delete <name>` | Delete a stream |
 | `wh stream tail <name>` | Live stream of objects |
 | `wh surface cli --stream <name>` | Interactive CLI surface (PUB/SUB to broker) |
+| `wh surface restart <name>` | Kill and respawn a surface with its original env |
+| `wh surface stop <name>` | Stop a surface without respawning it |
 | `wh secrets init` | Initialize credential wizard |
 | `wh memory` | Show agent memory (MEMORY.md) |
 | `wh compact` | Trigger stream compaction |
@@ -168,6 +170,26 @@ Endpoint env vars (defaults match broker defaults):
 | `WH_PUB_ENDPOINT` | Override broker PUB socket address |
 | `WH_SUB_ENDPOINT` | Override broker SUB socket address |
 | `WH_CONTROL_ENDPOINT` | Override broker control socket (used for liveness probe) |
+
+### `wh surface restart` / `wh surface stop`
+
+Manage the lifecycle of deployed surface processes without a full `wh deploy apply` cycle.
+
+```sh
+cd ~/my-agents          # must be run from the topology directory
+wh surface restart telegram   # kill + respawn with the same env vars
+wh surface stop telegram      # kill without respawning
+```
+
+`restart` re-reads env vars from the running process (`ps eww`) so secrets and routing config are preserved automatically. If the surface isn't running, it starts fresh.
+
+`stop` kills the process and removes the PID file. Use this before a binary upgrade or to take a surface offline deliberately.
+
+Both commands error if the surface name is not found in the committed topology:
+
+```
+Error: surface 'unknown' not found in deployed topology
+```
 
 ## Shell completion
 

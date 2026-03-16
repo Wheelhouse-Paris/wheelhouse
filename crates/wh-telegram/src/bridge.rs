@@ -319,6 +319,8 @@ mod tests {
             timestamp_ms: 1000,
             user_id: "usr_abc".to_string(),
             reply_to_user_id: String::new(),
+            source_stream: String::new(),
+            source_topic: String::new(),
         };
 
         let envelope_bytes = encode_text_message_envelope("main", "telegram-surface", &msg);
@@ -344,6 +346,8 @@ mod tests {
             timestamp_ms: 2000,
             user_id: "usr_123".to_string(),
             reply_to_user_id: "usr_456".to_string(),
+            source_stream: String::new(),
+            source_topic: String::new(),
         };
 
         let envelope_bytes = encode_text_message_envelope("main", "agent-donna", &msg);

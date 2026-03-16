@@ -11,3 +11,4 @@ pub mod secrets;
 pub mod status;
 pub mod stream;
 pub mod surface;
+pub mod telegram;

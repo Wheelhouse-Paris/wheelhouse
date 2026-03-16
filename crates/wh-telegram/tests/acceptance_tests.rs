@@ -87,6 +87,8 @@ mod ac2_incoming_message {
             timestamp_ms: 1741777200000,
             user_id: "usr_abc123".to_string(),
             reply_to_user_id: String::new(),
+            source_stream: String::new(),
+            source_topic: String::new(),
         };
         assert_eq!(msg.user_id, "usr_abc123");
     }
@@ -147,6 +149,8 @@ mod ac3_outgoing_response {
             timestamp_ms: 1741777205000,
             user_id: String::new(),
             reply_to_user_id: "usr_abc123".to_string(),
+            source_stream: String::new(),
+            source_topic: String::new(),
         };
         assert_eq!(msg.reply_to_user_id, "usr_abc123");
     }

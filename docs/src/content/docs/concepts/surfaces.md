@@ -11,31 +11,64 @@ Shipped with Wheelhouse:
 
 | Surface | Status | Description |
 |---------|--------|-------------|
-| Telegram | ✅ MVP | Bot-based chat interface |
+| Telegram | ✅ MVP | Bot-based chat interface, with multi-chat and topic routing |
 | CLI | ✅ MVP | Interactive terminal session (`wh surface cli`) |
 | WhatsApp | Phase 2 | |
 
 ## Declaring surfaces in `.wh`
 
-Surfaces are declared alongside agents and streams. The provisioning layer starts and stops surface containers automatically on `wh deploy apply` / `wh deploy destroy`.
+### Simple surface (single stream)
 
 ```yaml
 surfaces:
   - name: telegram
     kind: telegram
-    image: ghcr.io/wheelhouse-paris/wh-telegram:latest
     stream: main
 ```
 
-The provisioning layer automatically injects these env vars into every surface container:
+### Multi-chat Telegram surface
 
-| Env var | Value |
-|---------|-------|
-| `WH_URL` | Broker ZMQ endpoint (set by provisioning layer) |
-| `WH_SURFACE_NAME` | Value of `name` from the topology |
-| `WH_STREAM` | Value of `stream` from the topology |
+When you need different Telegram topics or groups to route to different streams, use the `chats:` block instead of `stream:`:
 
-Secrets (e.g. `TELEGRAM_BOT_TOKEN`) are stored via `wh secrets init` and injected automatically at deploy time — they do not go in the topology file.
+```yaml
+surfaces:
+  - name: telegram
+    kind: telegram
+    chats:
+      - id: "My Group"
+        threads:
+          - id: "General"
+            stream: main
+          - id: "Research"
+            stream: research
+          - id: "Admin"
+            stream: wh-admin
+```
+
+On `wh deploy apply`, the CLI resolves group and thread names to their Telegram IDs and writes a routing file (`<topology_dir>/.wh/telegram-routing.json`) that is passed to the surface process via `WH_TELEGRAM_ROUTING_FILE`.
+
+Secrets (e.g. `TELEGRAM_BOT_TOKEN`) are stored via `wh secrets init` and injected automatically at deploy time — they never go in the topology file.
+
+## Surface lifecycle
+
+Surfaces are native processes managed by the `wh` CLI. Their PID files live in `~/.wh/pids/`.
+
+| Command | Description |
+|---------|-------------|
+| `wh deploy apply <file>` | Provision all surfaces declared in the topology |
+| `wh deploy destroy <file>` | Stop and remove all surfaces |
+| `wh surface restart <name>` | Kill and respawn without a full deploy cycle |
+| `wh surface stop <name>` | Kill without respawning |
+
+`wh surface restart` and `wh surface stop` must be run from the topology directory (where `.wh/state.json` lives):
+
+```sh
+cd ~/my-agents
+wh surface restart telegram   # apply a new binary or routing config
+wh surface stop telegram      # take the surface offline
+```
+
+`restart` re-reads the running process's environment via `ps eww` so secrets and routing config are preserved automatically. If the surface is not running, it performs a fresh start.
 
 ## Setting up Telegram
 
@@ -49,14 +82,17 @@ wh secrets init
 
 Enter the token when prompted for "Telegram bot token". It is stored in the system keychain and never written to disk or committed to git.
 
-**Step 3** — Add the surface to `topology.wh`:
+**Step 3** — Add the surface to `topology.wh` (use `chats:` for multi-topic groups):
 
 ```yaml
 surfaces:
   - name: telegram
     kind: telegram
-    image: ghcr.io/wheelhouse-paris/wh-telegram:latest
-    stream: main
+    chats:
+      - id: "My Group"
+        threads:
+          - id: "General"
+            stream: main
 ```
 
 **Step 4** — Apply:
@@ -65,7 +101,15 @@ surfaces:
 wh deploy apply topology.wh
 ```
 
-The `TELEGRAM_BOT_TOKEN` from the keychain is automatically injected into the container. Open Telegram and message your bot to verify.
+The CLI resolves group and topic names to Telegram IDs, writes the routing file, and starts the `wh-telegram` process. Open Telegram and message your bot to verify.
+
+After a binary upgrade, apply the new binary without touching git state:
+
+```sh
+sudo make install
+cd ~/my-agents
+wh surface restart telegram
+```
 
 ## The CLI surface
 
@@ -124,16 +168,6 @@ async def main():
 | `publish(stream, message)` | Fire-and-forget publish |
 | `publish_confirmed(stream, message)` | Publish with WAL acknowledgement |
 | `subscribe(stream, handler)` | Register an async handler for incoming objects |
-
-Declare custom surfaces in `.wh` with `kind: custom`:
-
-```yaml
-surfaces:
-  - name: my-surface
-    kind: custom
-    image: my-org/my-surface:latest
-    stream: main
-```
 
 ## Custom types
 

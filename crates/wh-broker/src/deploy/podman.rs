@@ -267,7 +267,7 @@ fn register_stream_with_broker(name: &str, retention: Option<&str>) {
 ///
 /// Replaces non-alphanumeric chars (except `-`) with `-`,
 /// collapses multiple `-`, and trims leading/trailing `-`.
-fn sanitize_name(name: &str) -> String {
+pub fn sanitize_name(name: &str) -> String {
     let mut result: String = name
         .chars()
         .map(|c| {
@@ -297,7 +297,7 @@ pub fn container_name(topology_name: &str, agent_name: &str) -> String {
 /// Path to the PID file for a surface process.
 ///
 /// Format: `~/.wh/pids/<topology>-<surface>.pid`
-fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
+pub fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let topo = sanitize_name(topology_name);
     let surf = sanitize_name(surface_name);
@@ -720,7 +720,9 @@ pub fn provision_containers(
             // Build env: extra_env + WH_SURFACE_NAME + WH_STREAM + surface-specific env
             let mut surface_env = extra_env.to_vec();
             surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
-            surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+            if !surface.stream.is_empty() {
+                surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+            }
             if let Some(env_map) = &surface.env {
                 for (key, value) in env_map {
                     surface_env.push((key.clone(), value.clone()));
@@ -1150,12 +1152,15 @@ mod tests {
                 ("TELEGRAM_BOT_TOKEN".to_string(), "tok123".to_string()),
                 ("CHAT_ID".to_string(), "456".to_string()),
             ])),
+            chats: None,
         };
 
         // Reproduce the merge logic from provision_containers
         let mut surface_env = extra_env.to_vec();
         surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
-        surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+        if !surface.stream.is_empty() {
+            surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+        }
         if let Some(env_map) = &surface.env {
             for (key, value) in env_map {
                 surface_env.push((key.clone(), value.clone()));

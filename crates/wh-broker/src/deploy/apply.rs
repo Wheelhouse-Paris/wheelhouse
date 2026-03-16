@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::deploy::gitignore;
 use crate::deploy::plan::PlanOutput;
 use crate::deploy::podman::{self, ApplyResult};
-use crate::deploy::{Change, DeployError, Topology};
+use crate::deploy::{Change, DeployError, Stream, Topology};
 
 /// Default timeout for git subprocess calls (CM-04).
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -145,6 +145,58 @@ fn change_summary(plan: &PlanOutput) -> String {
     }
 }
 
+/// Write `.wh/context/<stream_name>/CONTEXT.md` for streams that have a description (FR-NEW-04).
+///
+/// - Only creates the file if it does not already exist (never overwrites operator-enriched content).
+/// - Empty descriptions are treated as `None` — no file is created.
+/// - Errors creating individual context files are logged but do not fail the deploy.
+pub fn write_context_files(workspace_root: &Path, streams: &[Stream]) {
+    for stream in streams {
+        let desc = match stream.description.as_deref() {
+            Some(d) if !d.is_empty() => d,
+            _ => continue,
+        };
+        let context_path = workspace_root
+            .join(".wh")
+            .join("context")
+            .join(&stream.name)
+            .join("CONTEXT.md");
+
+        if context_path.exists() {
+            tracing::debug!(
+                stream = %stream.name,
+                "CONTEXT.md already exists — skipping (operator may have enriched it)"
+            );
+            continue;
+        }
+
+        if let Some(parent) = context_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!(
+                    stream = %stream.name,
+                    error = %e,
+                    "failed to create context directory — skipping CONTEXT.md"
+                );
+                continue;
+            }
+        }
+
+        if let Err(e) = std::fs::write(&context_path, desc) {
+            tracing::warn!(
+                stream = %stream.name,
+                error = %e,
+                "failed to write CONTEXT.md"
+            );
+        } else {
+            tracing::info!(
+                stream = %stream.name,
+                path = %context_path.display(),
+                "created CONTEXT.md from stream description"
+            );
+        }
+    }
+}
+
 /// Commit the plan to git, producing a `CommittedPlan`.
 ///
 /// The git commit message follows ADR-003 format:
@@ -191,6 +243,10 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
     // Ensure .wh/.gitignore exists BEFORE staging to prevent WAL/secrets/lock files
     // from being accidentally committed (NFR-S2, FR30).
     gitignore::ensure_gitignore(workspace_root)?;
+
+    // Write CONTEXT.md files for streams with descriptions (FR-NEW-04).
+    // Must happen BEFORE git staging so the files are included in the commit.
+    write_context_files(workspace_root, &plan.desired_topology.streams);
 
     // Stage the entire .wh/ directory (state.json, .gitignore, personas, cron,
     // users, compaction summaries) and the topology file (FR28).
@@ -316,7 +372,7 @@ impl std::fmt::Display for DestroyResult {
 
 /// Load the current applied state from `.wh/state.json`.
 /// Returns `None` if no state file exists (nothing deployed).
-fn load_state(workspace_root: &Path) -> Result<Option<Topology>, DeployError> {
+pub fn load_state(workspace_root: &Path) -> Result<Option<Topology>, DeployError> {
     let state_path = workspace_root.join(".wh").join("state.json");
     if !state_path.exists() {
         return Ok(None);
@@ -527,6 +583,7 @@ mod tests {
                 guardrails: None,
             },
             source_path: PathBuf::from("test.wh"),
+            context_files: vec![],
         };
 
         let summary = change_summary(&plan);
@@ -557,9 +614,89 @@ mod tests {
                 guardrails: None,
             },
             source_path: PathBuf::from("test.wh"),
+            context_files: vec![],
         };
 
         let summary = change_summary(&plan);
         assert_eq!(summary, "add agent donna");
+    }
+
+    #[test]
+    fn write_context_files_creates_for_description() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wh_dir = tmp.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        let streams = vec![Stream {
+            name: "main".to_string(),
+            retention: None,
+            description: Some("Main stream context".to_string()),
+        }];
+
+        write_context_files(tmp.path(), &streams);
+
+        let path = wh_dir.join("context").join("main").join("CONTEXT.md");
+        assert!(path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "Main stream context"
+        );
+    }
+
+    #[test]
+    fn write_context_files_skips_none_description() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wh_dir = tmp.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        let streams = vec![Stream {
+            name: "main".to_string(),
+            retention: None,
+            description: None,
+        }];
+
+        write_context_files(tmp.path(), &streams);
+
+        let path = wh_dir.join("context").join("main").join("CONTEXT.md");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn write_context_files_skips_empty_description() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wh_dir = tmp.path().join(".wh");
+        std::fs::create_dir_all(&wh_dir).unwrap();
+
+        let streams = vec![Stream {
+            name: "main".to_string(),
+            retention: None,
+            description: Some(String::new()),
+        }];
+
+        write_context_files(tmp.path(), &streams);
+
+        let path = wh_dir.join("context").join("main").join("CONTEXT.md");
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn write_context_files_does_not_overwrite_existing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let wh_dir = tmp.path().join(".wh");
+        let ctx_dir = wh_dir.join("context").join("main");
+        std::fs::create_dir_all(&ctx_dir).unwrap();
+
+        let path = ctx_dir.join("CONTEXT.md");
+        std::fs::write(&path, "Operator enriched").unwrap();
+
+        let streams = vec![Stream {
+            name: "main".to_string(),
+            retention: None,
+            description: Some("New description".to_string()),
+        }];
+
+        write_context_files(tmp.path(), &streams);
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "Operator enriched");
     }
 }

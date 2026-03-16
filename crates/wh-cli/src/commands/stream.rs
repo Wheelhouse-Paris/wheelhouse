@@ -210,6 +210,8 @@ async fn execute_publish(
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
                 user_id: String::new(),
                 reply_to_user_id: String::new(),
+                source_stream: String::new(),
+                source_topic: String::new(),
             };
             ("wheelhouse.v1.TextMessage".to_string(), msg.encode_to_vec())
         }

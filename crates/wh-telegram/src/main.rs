@@ -21,6 +21,7 @@ use tracing::{error, info};
 use wh_telegram::bridge::ZmqBridge;
 use wh_telegram::config::TelegramConfig;
 use wh_telegram::mapping::ChatMapping;
+use wh_telegram::routing::RoutingTable;
 use wh_telegram::surface::TelegramSurface;
 use wh_user::UserStore;
 
@@ -71,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     // without mutex contention (H1 fix).
     let (mut publisher, mut subscriber) = bridge.split();
 
-    // Step 3: Initialize user store and chat mapping
+    // Step 3: Initialize user store, chat mapping, and routing table
     let data_dir = std::env::var("WH_DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     let user_store = UserStore::new(std::path::Path::new(&data_dir).join("users"));
     let chat_mapping_path = std::path::Path::new(&data_dir).join("telegram");
@@ -83,11 +84,27 @@ async fn main() -> anyhow::Result<()> {
         );
     });
 
+    let routing = if let Some(ref path) = config.routing_file {
+        match RoutingTable::from_file(path) {
+            Ok(table) => {
+                info!(path = %path.display(), routes = table.route_count(), "loaded routing table");
+                table
+            }
+            Err(e) => {
+                error!(error = %e, "failed to load routing table — falling back to single-stream");
+                RoutingTable::single_stream(config.stream_name())
+            }
+        }
+    } else {
+        RoutingTable::single_stream(config.stream_name())
+    };
+
     // Step 4: Create Telegram surface
     let surface = Arc::new(TelegramSurface::new(
         config.clone(),
         user_store,
         chat_mapping,
+        routing,
     ));
     let outbound_rx = surface.take_outbound_rx();
 

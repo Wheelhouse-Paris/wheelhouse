@@ -26,25 +26,28 @@ pub struct TelegramConfig {
     wh_url: String,
     /// Surface name for identification in the topology.
     surface_name: String,
+    /// Path to the flat routing table JSON file (multi-chat mode).
+    /// Set via `WH_TELEGRAM_ROUTING_FILE` env var.
+    pub routing_file: Option<std::path::PathBuf>,
 }
 
 impl TelegramConfig {
     /// Reads configuration from environment variables.
     ///
-    /// - `WH_TELEGRAM_BOT_TOKEN` (required): Telegram bot token from BotFather.
+    /// - `TELEGRAM_BOT_TOKEN` (required): Telegram bot token from BotFather.
     /// - `WH_URL` (required): Broker ZMQ PUB endpoint.
     /// - `WH_STREAM` (optional): Stream name from provisioning layer. Falls back to
     ///   `WH_TELEGRAM_STREAM`, then default "main".
     /// - `WH_SURFACE_NAME` (optional, default "telegram"): Surface name for identification.
     #[instrument]
     pub fn from_env() -> Result<Self, TelegramError> {
-        let bot_token = std::env::var("WH_TELEGRAM_BOT_TOKEN").map_err(|_| {
-            TelegramError::ConfigError("WH_TELEGRAM_BOT_TOKEN environment variable not set".into())
+        let bot_token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| {
+            TelegramError::ConfigError("TELEGRAM_BOT_TOKEN environment variable not set".into())
         })?;
 
         if bot_token.is_empty() {
             return Err(TelegramError::ConfigError(
-                "WH_TELEGRAM_BOT_TOKEN cannot be empty".into(),
+                "TELEGRAM_BOT_TOKEN cannot be empty".into(),
             ));
         }
 
@@ -58,10 +61,33 @@ impl TelegramConfig {
             return Err(TelegramError::ConfigError("WH_URL cannot be empty".into()));
         }
 
-        // Stream name: WH_STREAM (provisioning layer) > WH_TELEGRAM_STREAM (backward compat) > default
+        // Path to routing file (multi-chat mode).
+        let routing_file = std::env::var("WH_TELEGRAM_ROUTING_FILE")
+            .ok()
+            .map(std::path::PathBuf::from);
+
+        // Stream name: WH_STREAM > WH_TELEGRAM_STREAM > first stream in routing file > default.
         let stream_name = std::env::var("WH_STREAM")
             .or_else(|_| std::env::var("WH_TELEGRAM_STREAM"))
-            .unwrap_or_else(|_| DEFAULT_STREAM.to_string());
+            .unwrap_or_else(|_| {
+                // In multi-chat mode, derive primary stream from routing file.
+                if let Some(ref path) = routing_file {
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        if let Ok(entries) =
+                            serde_json::from_str::<Vec<serde_json::Value>>(&content)
+                        {
+                            if let Some(first_stream) = entries
+                                .first()
+                                .and_then(|e| e.get("stream"))
+                                .and_then(|s| s.as_str())
+                            {
+                                return first_stream.to_string();
+                            }
+                        }
+                    }
+                }
+                DEFAULT_STREAM.to_string()
+            });
 
         validate_stream_name(&stream_name)?;
 
@@ -74,6 +100,7 @@ impl TelegramConfig {
             startup_timeout_secs: DEFAULT_STARTUP_TIMEOUT_SECS,
             wh_url,
             surface_name,
+            routing_file,
         })
     }
 

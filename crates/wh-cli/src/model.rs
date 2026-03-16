@@ -73,12 +73,42 @@ pub struct SurfaceSpec {
     /// Surface type: "telegram" or "cli".
     pub kind: Option<String>,
 
-    /// Container image reference (e.g., `ghcr.io/wheelhouse-paris/wh-telegram:latest`).
-    pub image: Option<String>,
-
-    /// Stream name this surface connects to.
+    /// Stream name this surface connects to (single-stream mode).
+    /// Mutually exclusive with `chats`.
     pub stream: Option<String>,
 
     /// Optional environment variables for the surface container.
     pub env: Option<std::collections::BTreeMap<String, String>>,
+
+    /// Multi-chat configuration for Telegram surfaces.
+    /// Each entry maps a chat (DM or supergroup) to one or more streams.
+    /// Mutually exclusive with `stream`.
+    pub chats: Option<Vec<TelegramChatSpec>>,
+}
+
+/// A Telegram chat specification within a surface's `chats` block.
+///
+/// Represents either:
+/// - A DM chat (`@username`) with a single `stream`
+/// - A supergroup (by display name) with multiple `threads`
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramChatSpec {
+    /// Chat identifier: `@username` for DMs, or group display name for supergroups.
+    pub id: Option<String>,
+
+    /// Stream name for DM chats (mutually exclusive with `threads` within a chat entry).
+    pub stream: Option<String>,
+
+    /// Thread (topic) list for supergroup chats.
+    pub threads: Option<Vec<TelegramThreadSpec>>,
+}
+
+/// A Telegram topic/thread specification within a supergroup chat.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TelegramThreadSpec {
+    /// Topic name (human-readable, resolved to thread_id at runtime).
+    pub id: Option<String>,
+
+    /// Stream name this topic is bridged to.
+    pub stream: Option<String>,
 }

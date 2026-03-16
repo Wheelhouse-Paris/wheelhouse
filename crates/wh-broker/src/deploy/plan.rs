@@ -25,6 +25,8 @@ pub struct PlanOutput {
     pub(crate) warnings: Vec<String>,
     pub(crate) desired_topology: Topology,
     pub(crate) source_path: PathBuf,
+    /// Streams that will have a new `.wh/context/<name>/CONTEXT.md` created on apply (FR-NEW-04).
+    pub(crate) context_files: Vec<String>,
 }
 
 impl PlanOutput {
@@ -56,6 +58,10 @@ impl PlanOutput {
         &self.desired_topology
     }
 
+    pub fn context_files(&self) -> &[String] {
+        &self.context_files
+    }
+
     pub fn source_path(&self) -> &Path {
         &self.source_path
     }
@@ -71,6 +77,9 @@ pub struct PlanData {
     pub topology_name: String,
     pub policy_snapshot_hash: String,
     pub warnings: Vec<String>,
+    /// Streams that will have a new `.wh/context/<name>/CONTEXT.md` created on apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_files: Vec<String>,
 }
 
 impl std::fmt::Display for PlanData {
@@ -131,6 +140,14 @@ impl std::fmt::Display for PlanData {
             writeln!(f, "Warning: {warning}")?;
         }
 
+        if !self.context_files.is_empty() {
+            writeln!(f)?;
+            writeln!(f, "Context files to create:")?;
+            for stream_name in &self.context_files {
+                writeln!(f, "  + .wh/context/{stream_name}/CONTEXT.md (new)")?;
+            }
+        }
+
         Ok(())
     }
 }
@@ -144,6 +161,7 @@ impl From<&PlanOutput> for PlanData {
             topology_name: plan.topology_name.clone(),
             policy_snapshot_hash: plan.policy_snapshot_hash.clone(),
             warnings: plan.warnings.clone(),
+            context_files: plan.context_files.clone(),
         }
     }
 }
@@ -394,6 +412,29 @@ fn compute_plan_hash(changes: &[Change]) -> String {
     format!("sha256:{result:x}")
 }
 
+/// Detect which streams will have a new `.wh/context/<name>/CONTEXT.md` created on apply.
+///
+/// Returns the list of stream names that have a `description` but no existing CONTEXT.md file.
+/// This is a pure read operation with no side effects (ADR-003).
+pub fn detect_new_context_files(workspace_root: &Path, streams: &[Stream]) -> Vec<String> {
+    let mut result = Vec::new();
+    for stream in streams {
+        match stream.description.as_deref() {
+            Some(d) if !d.is_empty() => {}
+            _ => continue,
+        }
+        let context_path = workspace_root
+            .join(".wh")
+            .join("context")
+            .join(&stream.name)
+            .join("CONTEXT.md");
+        if !context_path.exists() {
+            result.push(stream.name.clone());
+        }
+    }
+    result
+}
+
 /// Execute the plan step: consume a `LintedFile` and produce a `PlanOutput`.
 ///
 /// The plan is a pure in-memory diff with no side effects (ADR-003).
@@ -489,6 +530,9 @@ pub fn plan_with_options(
         );
     }
 
+    // Detect which streams will have a new CONTEXT.md created (FR-NEW-04).
+    let context_files = detect_new_context_files(workspace_root, &desired.streams);
+
     Ok(PlanOutput {
         has_changes,
         changes,
@@ -498,6 +542,7 @@ pub fn plan_with_options(
         warnings,
         desired_topology: desired,
         source_path: linted.source_path,
+        context_files,
     })
 }
 
@@ -587,6 +632,7 @@ mod tests {
             streams: vec![Stream {
                 name: "main".to_string(),
                 retention: Some("7d".to_string()),
+                description: None,
             }],
             surfaces: vec![],
             guardrails: None,
@@ -898,6 +944,7 @@ mod tests {
             topology_name: "dev".to_string(),
             policy_snapshot_hash: String::new(),
             warnings: vec![],
+            context_files: vec![],
         };
 
         let output = format!("{plan_data}");
@@ -932,6 +979,7 @@ mod tests {
             topology_name: "dev".to_string(),
             policy_snapshot_hash: String::new(),
             warnings: vec![],
+            context_files: vec![],
         };
 
         let output = format!("{plan_data}");
@@ -960,6 +1008,7 @@ mod tests {
             topology_name: "dev".to_string(),
             policy_snapshot_hash: String::new(),
             warnings: vec![],
+            context_files: vec![],
         };
 
         let output = format!("{plan_data}");
@@ -995,6 +1044,7 @@ mod tests {
             streams: vec![Stream {
                 name: "main".to_string(),
                 retention: None,
+                description: None,
             }],
             surfaces: vec![],
             guardrails: None,
@@ -1052,6 +1102,7 @@ mod tests {
                 kind: "telegram".to_string(),
                 stream: "main".to_string(),
                 env: None,
+                chats: None,
             }],
             guardrails: None,
         };
@@ -1106,10 +1157,12 @@ mod tests {
                 Stream {
                     name: "main".to_string(),
                     retention: None,
+                    description: None,
                 },
                 Stream {
                     name: "alt".to_string(),
                     retention: None,
+                    description: None,
                 },
             ],
             surfaces: vec![Surface {
@@ -1117,6 +1170,7 @@ mod tests {
                 kind: "telegram".to_string(),
                 stream: "main".to_string(),
                 env: None,
+                chats: None,
             }],
             guardrails: None,
         };
@@ -1176,6 +1230,7 @@ mod tests {
             streams: vec![Stream {
                 name: "main".to_string(),
                 retention: None,
+                description: None,
             }],
             surfaces: vec![Surface {
                 name: "telegram".to_string(),
@@ -1185,6 +1240,7 @@ mod tests {
                     "TELEGRAM_BOT_TOKEN".to_string(),
                     "old-token".to_string(),
                 )])),
+                chats: None,
             }],
             guardrails: None,
         };
