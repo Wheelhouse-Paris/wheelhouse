@@ -169,7 +169,11 @@ fn destroy_preserves_context_md() {
         "streams": [],
         "surfaces": []
     });
-    std::fs::write(&state_path, serde_json::to_string_pretty(&empty_state).unwrap()).unwrap();
+    std::fs::write(
+        &state_path,
+        serde_json::to_string_pretty(&empty_state).unwrap(),
+    )
+    .unwrap();
 
     // CONTEXT.md must still exist after state is cleared
     assert!(
@@ -276,18 +280,9 @@ fn mixed_streams_only_described_get_context() {
 
     write_context_files(tmp.path(), &streams);
 
-    assert!(tmp
-        .path()
-        .join(".wh/context/main/CONTEXT.md")
-        .exists());
-    assert!(!tmp
-        .path()
-        .join(".wh/context/logs/CONTEXT.md")
-        .exists());
-    assert!(tmp
-        .path()
-        .join(".wh/context/admin/CONTEXT.md")
-        .exists());
+    assert!(tmp.path().join(".wh/context/main/CONTEXT.md").exists());
+    assert!(!tmp.path().join(".wh/context/logs/CONTEXT.md").exists());
+    assert!(tmp.path().join(".wh/context/admin/CONTEXT.md").exists());
 }
 
 /// PlanData display includes context file creation notes
