@@ -50,8 +50,8 @@ ENV CLAUDE_DISABLE_AUTO_UPDATES=1
 
 # Non-root user required by claude --dangerously-skip-permissions
 RUN useradd --create-home --shell /bin/bash agent \
-    && mkdir -p /home/agent/.claude /persona \
-    && chown -R agent:agent /home/agent/.claude /persona
+    && mkdir -p /home/agent/.claude /persona /context \
+    && chown -R agent:agent /home/agent/.claude /persona /context
 
 # Copy installed Python packages from builder
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages

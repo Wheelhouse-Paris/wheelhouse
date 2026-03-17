@@ -400,6 +400,7 @@ class TestStartupSequence:
                         "agent_name": "donna",
                         "streams": ["main"],
                         "persona_path": "/tmp/test-persona",
+                        "context_path": "/tmp/test-context",
                         "model": "claude-3-5-sonnet-20241022",
                     },
                 )[1]

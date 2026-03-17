@@ -9,7 +9,7 @@ Missing files are handled gracefully per AC-03:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger("agent_claude")
@@ -22,14 +22,24 @@ class Persona:
     soul: str
     identity: str
     memory: str
+    stream_contexts: dict[str, str] = field(default_factory=dict)
 
     def build_system_prompt(self) -> str:
-        """Build the system prompt by concatenating persona files.
+        """Build the system prompt by concatenating persona files and stream contexts.
 
-        Format: SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY
-        Per ADR-017.
+        Format: SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY + stream context sections
+        Per ADR-017 and ADR-021.
+
+        Stream context sections are appended in alphabetical order by stream name.
+        Each section has a markdown header: '## Stream Context: <stream_name>'
         """
-        return f"{self.soul}\n\n{self.identity}\n\n{self.memory}"
+        prompt = f"{self.soul}\n\n{self.identity}\n\n{self.memory}"
+
+        for stream_name in sorted(self.stream_contexts):
+            content = self.stream_contexts[stream_name]
+            prompt += f"\n\n## Stream Context: {stream_name}\n\n{content}"
+
+        return prompt
 
     def reload_memory(self, persona_path: str) -> None:
         """Re-read MEMORY.md from disk before each Claude API call (AC-04).
