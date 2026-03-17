@@ -175,7 +175,7 @@ jobs:
   build-agent-claude-image:
     name: Build agent-claude Image (CI)
     needs: [changes]
-    if: needs.changes.outputs.agent_claude == 'true'
+    if: needs.changes.outputs.agent_claude == 'true' && github.ref != 'refs/heads/dev'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -194,3 +194,40 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
             VERSION=ci-${{ github.sha }}
+
+  # ──────────────────────────────────────────────
+  # agent-claude: Build and push :dev tag to GHCR
+  # Runs on push to dev branch when agent-claude/ changes
+  # ──────────────────────────────────────────────
+  publish-agent-claude-dev:
+    name: Publish agent-claude Image (dev)
+    needs: [changes]
+    if: needs.changes.outputs.agent_claude == 'true' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push :dev image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: agent-claude/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/wheelhouse-paris/agent-claude:dev
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=dev-${{ github.sha }}
