@@ -15,6 +15,7 @@ from typing import Any
 
 import wheelhouse
 
+from agent_claude.context import load_stream_contexts
 from agent_claude.errors import AgentConfigError
 from agent_claude.persona import load_persona
 
@@ -22,6 +23,7 @@ logger = logging.getLogger("agent_claude")
 
 # Default values per ADR-018
 DEFAULT_PERSONA_PATH = "/persona"
+DEFAULT_CONTEXT_PATH = "/context"
 
 
 def validate_env() -> dict[str, Any]:
@@ -34,6 +36,7 @@ def validate_env() -> dict[str, Any]:
 
     Optional with defaults:
       - WH_PERSONA_PATH (default: /persona)
+      - WH_CONTEXT_PATH (default: /context) — mount point for .wh/context/
 
     Authentication is handled by the `claude` CLI (CLAUDE_CODE_OAUTH_TOKEN
     env var or credentials in ~/.claude/ inside the container).
@@ -74,12 +77,14 @@ def validate_env() -> dict[str, Any]:
 
     # Optional with defaults
     persona_path = os.environ.get("WH_PERSONA_PATH", DEFAULT_PERSONA_PATH).strip()
+    context_path = os.environ.get("WH_CONTEXT_PATH", DEFAULT_CONTEXT_PATH).strip()
 
     return {
         "wh_url": wh_url,
         "agent_name": agent_name,
         "streams": streams,
         "persona_path": persona_path,
+        "context_path": context_path,
     }
 
 
@@ -100,6 +105,12 @@ async def run_startup() -> dict[str, Any]:
 
     # Step 2: Load persona
     persona = load_persona(config["persona_path"])
+
+    # Step 2b: Load stream contexts (ADR-021: once at startup, not per message)
+    stream_contexts = load_stream_contexts(
+        config["context_path"], config["streams"]
+    )
+    persona.stream_contexts = stream_contexts
 
     # Step 3: Connect to Wheelhouse broker
     try:
