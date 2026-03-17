@@ -397,4 +397,6 @@ class TestPersonaBackwardCompat:
             memory="memory content",
         )
         prompt = persona.build_system_prompt()
-        assert prompt == "soul content\n\nidentity content\n\nmemory content"
+        # ADR-022: batch output instruction is now always appended
+        assert prompt.startswith("soul content\n\nidentity content\n\nmemory content")
+        assert "## Output Format" in prompt

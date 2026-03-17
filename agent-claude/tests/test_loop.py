@@ -1367,24 +1367,27 @@ class TestSystemPromptAssembly:
     def test_system_prompt_format(self):
         """Given persona files are loaded,
         When build_system_prompt() is called,
-        Then the result is SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY per ADR-017.
+        Then the result contains SOUL + IDENTITY + MEMORY + batch instruction per ADR-017/022.
         """
         from agent_claude.persona import Persona
 
         p = Persona(soul="soul content", identity="identity content", memory="memory content")
         prompt = p.build_system_prompt()
-        assert prompt == "soul content\n\nidentity content\n\nmemory content"
+        assert prompt.startswith("soul content\n\nidentity content\n\nmemory content")
+        assert "## Output Format" in prompt
+        assert "JSON array" in prompt
 
     def test_system_prompt_with_empty_components(self):
         """Given some persona files are missing (empty strings),
         When build_system_prompt() is called,
-        Then the format is preserved with empty sections separated by \\n\\n.
+        Then the format is preserved with empty sections and batch instruction appended.
         """
         from agent_claude.persona import Persona
 
         p = Persona(soul="", identity="identity", memory="")
         prompt = p.build_system_prompt()
-        assert prompt == "\n\nidentity\n\n"
+        assert prompt.startswith("\n\nidentity\n\n")
+        assert "## Output Format" in prompt
 
     def test_system_prompt_passed_to_claude_api(
         self, mock_connection, config, persona, mock_claude_client
