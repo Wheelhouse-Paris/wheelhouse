@@ -118,10 +118,15 @@ impl TelegramSurface {
             let mut mapping = self.chat_mapping.lock().await;
             mapping.register(&profile.user_id, chat_id)?;
         }
-        {
+        // Record user location and resolve source stream/topic in one lock (Story 10.2)
+        let (source_stream, source_topic) = {
             let mut routing = self.routing.lock().await;
             routing.record_user_location(&profile.user_id, chat_id, thread_id);
-        }
+            match routing.resolve_inbound_with_topic(chat_id, thread_id) {
+                Some((stream, topic)) => (stream.to_string(), topic.unwrap_or("").to_string()),
+                None => (self.config.stream_name().to_string(), String::new()),
+            }
+        };
 
         // Create TextMessage for stream publication
         let timestamp_ms = chrono::Utc::now().timestamp_millis();
@@ -131,8 +136,8 @@ impl TelegramSurface {
             timestamp_ms,
             user_id: profile.user_id.clone(),
             reply_to_user_id: String::new(),
-            source_stream: String::new(),
-            source_topic: String::new(),
+            source_stream,
+            source_topic,
         };
 
         // Queue for stream publication

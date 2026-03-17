@@ -264,6 +264,10 @@ pub struct TelegramRoutingEntry {
     pub chat_id: i64,
     pub thread_id: Option<i32>,
     pub stream: String,
+    /// Human-readable topic name (e.g., "Iktos", "General").
+    /// Present for forum-topic routes, absent for non-topic routes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_name: Option<String>,
 }
 
 /// Resolve Telegram group names and create topics at deploy time.
@@ -394,6 +398,7 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<Option<PathBuf>
                                 chat_id,
                                 thread_id: Some(thread_id),
                                 stream: thread_spec.stream.clone().unwrap_or_default(),
+                                topic_name: Some(topic_name.clone()),
                             });
                         }
                         continue;
@@ -423,6 +428,7 @@ pub fn resolve_telegram_surfaces(topology_path: &Path) -> Result<Option<PathBuf>
                         chat_id: effective_chat_id,
                         thread_id: Some(thread_id),
                         stream: thread_spec.stream.clone().unwrap_or_default(),
+                        topic_name: Some(topic_name.clone()),
                     });
                 }
             }
