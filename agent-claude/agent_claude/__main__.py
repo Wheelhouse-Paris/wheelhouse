@@ -54,6 +54,9 @@ async def _run() -> None:
     config = result["config"]
     persona = result["persona"]
 
+    # Wire stream list into Persona for batch output instruction (ADR-022)
+    persona.streams = config["streams"]
+
     logger = logging.getLogger("agent_claude")
     logger.info(
         "Startup complete -- agent %s ready on streams: %s",

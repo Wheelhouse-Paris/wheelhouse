@@ -28,9 +28,11 @@ from wheelhouse.types import (
     TopologyShutdown,
 )
 
+from agent_claude.batch_publisher import publish_batch
 from agent_claude.claude_client import ClaudeClient
 from agent_claude.errors import ClaudeAuthError
 from agent_claude.persona import Persona
+from agent_claude.response_parser import parse_batch_response
 
 logger = logging.getLogger("agent_claude")
 
@@ -247,19 +249,23 @@ async def _handle_text_message(
     task.add_done_callback(_pending_tasks.discard)
     result = await task
     if result is not None:
-        response_msg = TextMessage(
-            content=result.text,
-            publisher_id=agent_name,
-            # Route response back to the user who sent the message (FR59).
-            # Surfaces (e.g. wh-telegram) use this field to deliver the reply
-            # to the correct chat session.
-            reply_to_user_id=message.user_id,
-        )
-        await _publish_response(
+        # Parse batch response (ADR-022)
+        items = parse_batch_response(result.text)
+        if items is None:
+            logger.error(
+                "Malformed batch response from Claude: stream=%s",
+                stream_name,
+            )
+            return
+        if not items:
+            logger.debug("Empty batch response (no-op): stream=%s", stream_name)
+            return
+        await publish_batch(
             connection,
-            stream_name,
-            response_msg,
-            f"type=TextMessage chars={len(result.text)}",
+            items,
+            agent_name,
+            source_stream=stream_name,
+            reply_to_user_id=message.user_id,
         )
 
 
@@ -294,15 +300,26 @@ async def _handle_cron_event(
     task.add_done_callback(_pending_tasks.discard)
     result = await task
     if result is not None:
-        response_msg = TextMessage(
-            content=result.text,
-            publisher_id=agent_name,
-        )
-        await _publish_response(
+        # Parse batch response (ADR-022)
+        items = parse_batch_response(result.text)
+        if items is None:
+            logger.error(
+                "Malformed batch response from Claude: stream=%s type=CronEvent",
+                stream_name,
+            )
+            return
+        if not items:
+            logger.debug(
+                "Empty batch response (no-op): stream=%s type=CronEvent",
+                stream_name,
+            )
+            return
+        await publish_batch(
             connection,
-            stream_name,
-            response_msg,
-            f"type=TextMessage chars={len(result.text)}",
+            items,
+            agent_name,
+            source_stream=stream_name,
+            reply_to_user_id=None,
         )
 
 
@@ -367,6 +384,41 @@ async def _handle_skill_invocation(
     task.add_done_callback(_pending_tasks.discard)
     result = await task
     if result is not None:
+        # Parse batch response for side-effect TextMessage publishes (ADR-022)
+        items = parse_batch_response(result.text)
+        if items is None:
+            # Malformed batch: publish SkillResult(success=False)
+            logger.error(
+                "Malformed batch response from Claude: stream=%s type=SkillInvocation",
+                stream_name,
+            )
+            fail_result = SkillResult(
+                invocation_id=message.invocation_id,
+                skill_name=message.skill_name,
+                success=False,
+                error_message="Malformed batch response from Claude",
+            )
+            await _publish_response(
+                connection,
+                stream_name,
+                fail_result,
+                f"type=SkillResult invocation_id={message.invocation_id} success=False",
+            )
+            return
+
+        # Publish any batch TextMessage items
+        if items:
+            await publish_batch(
+                connection,
+                items,
+                agent_name,
+                source_stream=stream_name,
+                reply_to_user_id=None,
+            )
+
+        # Always publish SkillResult(success=True) — the batch items are
+        # side-effect publishes; the SkillResult is the primary contract.
+        # Use the raw text as skill output for the caller.
         skill_result = SkillResult(
             invocation_id=message.invocation_id,
             skill_name=message.skill_name,

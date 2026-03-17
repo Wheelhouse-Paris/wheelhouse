@@ -23,21 +23,29 @@ class Persona:
     identity: str
     memory: str
     stream_contexts: dict[str, str] = field(default_factory=dict)
+    streams: list[str] = field(default_factory=list)
 
     def build_system_prompt(self) -> str:
-        """Build the system prompt by concatenating persona files and stream contexts.
+        """Build the system prompt by concatenating persona files, stream contexts,
+        and batch output instructions.
 
-        Format: SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY + stream context sections
-        Per ADR-017 and ADR-021.
+        Format: SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY
+                + stream context sections (ADR-021)
+                + batch output instruction (ADR-022)
 
         Stream context sections are appended in alphabetical order by stream name.
         Each section has a markdown header: '## Stream Context: <stream_name>'
         """
+        from agent_claude.response_parser import format_batch_instruction
+
         prompt = f"{self.soul}\n\n{self.identity}\n\n{self.memory}"
 
         for stream_name in sorted(self.stream_contexts):
             content = self.stream_contexts[stream_name]
             prompt += f"\n\n## Stream Context: {stream_name}\n\n{content}"
+
+        # Append batch output instruction (ADR-022)
+        prompt += f"\n\n{format_batch_instruction(self.streams)}"
 
         return prompt
 
