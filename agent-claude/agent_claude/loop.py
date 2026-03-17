@@ -252,9 +252,22 @@ async def _handle_text_message(
         # Parse batch response (ADR-022)
         items = parse_batch_response(result.text)
         if items is None:
-            logger.error(
-                "Malformed batch response from Claude: stream=%s",
+            # Graceful fallback: Claude ignored the JSON format instruction.
+            # Publish the raw text to the source stream so the user gets a response.
+            logger.warning(
+                "Malformed batch response from Claude — falling back to plain text: stream=%s",
                 stream_name,
+            )
+            fallback = TextMessage(
+                content=result.text,
+                publisher_id=agent_name,
+                reply_to_user_id=message.user_id,
+            )
+            await _publish_response(
+                connection,
+                stream_name,
+                fallback,
+                f"type=TextMessage(fallback) stream={stream_name} chars={len(result.text)}",
             )
             return
         if not items:
@@ -303,9 +316,19 @@ async def _handle_cron_event(
         # Parse batch response (ADR-022)
         items = parse_batch_response(result.text)
         if items is None:
-            logger.error(
-                "Malformed batch response from Claude: stream=%s type=CronEvent",
+            logger.warning(
+                "Malformed batch response from Claude — falling back to plain text: stream=%s type=CronEvent",
                 stream_name,
+            )
+            fallback = TextMessage(
+                content=result.text,
+                publisher_id=agent_name,
+            )
+            await _publish_response(
+                connection,
+                stream_name,
+                fallback,
+                f"type=TextMessage(fallback) stream={stream_name} chars={len(result.text)}",
             )
             return
         if not items:
