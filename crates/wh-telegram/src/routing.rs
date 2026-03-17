@@ -16,6 +16,10 @@ struct RoutingEntry {
     chat_id: i64,
     thread_id: Option<i32>,
     stream: String,
+    /// Human-readable topic name (e.g., "Iktos", "General").
+    /// Absent in pre-10.2 routing files; defaults to None.
+    #[serde(default)]
+    topic_name: Option<String>,
 }
 
 /// Routing table for multi-chat Telegram surfaces.
@@ -30,6 +34,10 @@ pub struct RoutingTable {
 
     /// Inbound routing: `(chat_id, Option<thread_id>)` -> stream name.
     inbound: HashMap<(i64, Option<i32>), String>,
+
+    /// Topic names: `(chat_id, Option<thread_id>)` -> human-readable topic name.
+    /// Only populated for forum-topic routes in multi-chat mode.
+    topic_names: HashMap<(i64, Option<i32>), String>,
 
     /// Outbound routing: `user_id` -> `(chat_id, Option<thread_id>)`.
     /// Updated from last-seen inbound messages.
@@ -51,6 +59,7 @@ impl RoutingTable {
         Self {
             mode: RoutingMode::SingleStream(stream_name.to_string()),
             inbound: HashMap::new(),
+            topic_names: HashMap::new(),
             outbound: HashMap::new(),
         }
     }
@@ -62,6 +71,7 @@ impl RoutingTable {
         Self {
             mode: RoutingMode::MultiChat,
             inbound: HashMap::new(),
+            topic_names: HashMap::new(),
             outbound: HashMap::new(),
         }
     }
@@ -70,6 +80,20 @@ impl RoutingTable {
     pub fn add_route(&mut self, chat_id: i64, thread_id: Option<i32>, stream_name: &str) {
         self.inbound
             .insert((chat_id, thread_id), stream_name.to_string());
+    }
+
+    /// Adds an inbound route with an associated topic name.
+    pub fn add_route_with_topic(
+        &mut self,
+        chat_id: i64,
+        thread_id: Option<i32>,
+        stream_name: &str,
+        topic_name: &str,
+    ) {
+        self.inbound
+            .insert((chat_id, thread_id), stream_name.to_string());
+        self.topic_names
+            .insert((chat_id, thread_id), topic_name.to_string());
     }
 
     /// Resolves the target stream for an inbound message.
@@ -81,6 +105,29 @@ impl RoutingTable {
         match &self.mode {
             RoutingMode::SingleStream(stream) => Some(stream.as_str()),
             RoutingMode::MultiChat => self.inbound.get(&(chat_id, thread_id)).map(|s| s.as_str()),
+        }
+    }
+
+    /// Resolves the target stream and topic name for an inbound message.
+    ///
+    /// Returns `(stream_name, Option<topic_name>)`.
+    /// In single-stream mode, returns the configured stream with no topic.
+    /// In multi-chat mode, looks up both the stream and topic name.
+    pub fn resolve_inbound_with_topic(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i32>,
+    ) -> Option<(&str, Option<&str>)> {
+        match &self.mode {
+            RoutingMode::SingleStream(stream) => Some((stream.as_str(), None)),
+            RoutingMode::MultiChat => {
+                let stream = self.inbound.get(&(chat_id, thread_id))?;
+                let topic = self
+                    .topic_names
+                    .get(&(chat_id, thread_id))
+                    .map(|s| s.as_str());
+                Some((stream.as_str(), topic))
+            }
         }
     }
 
@@ -107,7 +154,11 @@ impl RoutingTable {
             .map_err(|e| format!("failed to parse routing file: {e}"))?;
         let mut table = Self::multi_chat();
         for entry in entries {
-            table.add_route(entry.chat_id, entry.thread_id, &entry.stream);
+            if let Some(ref topic) = entry.topic_name {
+                table.add_route_with_topic(entry.chat_id, entry.thread_id, &entry.stream, topic);
+            } else {
+                table.add_route(entry.chat_id, entry.thread_id, &entry.stream);
+            }
         }
         Ok(table)
     }
@@ -180,5 +231,69 @@ mod tests {
         table.add_route(1, None, "s1");
         table.add_route(2, Some(10), "s2");
         assert_eq!(table.route_count(), 2);
+    }
+
+    // ── Story 10.2: source_stream context tests ──
+
+    #[test]
+    fn resolve_inbound_with_topic_single_stream() {
+        let table = RoutingTable::single_stream("main");
+        let result = table.resolve_inbound_with_topic(12345, None);
+        assert_eq!(result, Some(("main", None)));
+    }
+
+    #[test]
+    fn resolve_inbound_with_topic_multi_chat() {
+        let mut table = RoutingTable::multi_chat();
+        table.add_route_with_topic(-100999, Some(42), "iktos", "Iktos");
+        table.add_route(-100999, Some(99), "general");
+
+        // Route with topic
+        let result = table.resolve_inbound_with_topic(-100999, Some(42));
+        assert_eq!(result, Some(("iktos", Some("Iktos"))));
+
+        // Route without topic
+        let result = table.resolve_inbound_with_topic(-100999, Some(99));
+        assert_eq!(result, Some(("general", None)));
+
+        // Unmapped route
+        let result = table.resolve_inbound_with_topic(99999, None);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn from_file_with_topic_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routing.json");
+        let json = r#"[
+            {"chat_id": -100999, "thread_id": 42, "stream": "iktos", "topic_name": "Iktos"},
+            {"chat_id": -100999, "thread_id": 99, "stream": "general"}
+        ]"#;
+        std::fs::write(&path, json).unwrap();
+
+        let table = RoutingTable::from_file(&path).unwrap();
+        assert_eq!(
+            table.resolve_inbound_with_topic(-100999, Some(42)),
+            Some(("iktos", Some("Iktos")))
+        );
+        assert_eq!(
+            table.resolve_inbound_with_topic(-100999, Some(99)),
+            Some(("general", None))
+        );
+    }
+
+    #[test]
+    fn from_file_backward_compat_no_topic_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routing.json");
+        // Pre-10.2 JSON without topic_name field
+        let json = r#"[{"chat_id": -100999, "thread_id": 42, "stream": "iktos"}]"#;
+        std::fs::write(&path, json).unwrap();
+
+        let table = RoutingTable::from_file(&path).unwrap();
+        assert_eq!(
+            table.resolve_inbound_with_topic(-100999, Some(42)),
+            Some(("iktos", None))
+        );
     }
 }

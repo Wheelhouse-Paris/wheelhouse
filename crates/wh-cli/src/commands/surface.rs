@@ -256,6 +256,8 @@ pub async fn run_cli(stream: &str, output_format: OutputFormat) -> Result<(), Wh
                     timestamp_ms,
                     user_id: cli_user_id.clone(),
                     reply_to_user_id: String::new(),
+                    source_stream: stream_name.clone(),
+                    source_topic: String::new(),
                 };
 
                 // Wrap in StreamEnvelope

@@ -22,6 +22,8 @@ fn generate_v1_fixtures() {
         timestamp_ms: 1710000000000, // Fixed timestamp for reproducibility
         user_id: String::new(),
         reply_to_user_id: String::new(),
+        source_stream: String::new(),
+        source_topic: String::new(),
     };
     let path = format!("{FIXTURE_DIR}/v1_text_message.bin");
     std::fs::write(&path, text_msg.encode_to_vec()).expect("Failed to write TextMessage fixture");

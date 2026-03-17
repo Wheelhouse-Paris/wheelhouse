@@ -41,6 +41,8 @@ pub fn build_text_message(content: &str, publisher_id: &str) -> wh_proto::TextMe
         timestamp_ms: now_ms(),
         user_id: String::new(),
         reply_to_user_id: String::new(),
+        source_stream: String::new(),
+        source_topic: String::new(),
     }
 }
 
