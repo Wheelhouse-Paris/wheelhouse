@@ -62,6 +62,15 @@ const SURFACE_IMAGE_TAG: &str = "latest";
 /// not inside a container.
 const BROKER_CONTROL_ENDPOINT: &str = "tcp://127.0.0.1:5557";
 
+/// Default port mappings for the broker container (ADR-025).
+///
+/// Used when the topology's `broker.ports` is empty or absent.
+const DEFAULT_BROKER_PORTS: &[&str] = &[
+    "127.0.0.1:5555:5555",
+    "127.0.0.1:5556:5556",
+    "127.0.0.1:5557:5557",
+];
+
 /// Maximum time to wait for the broker to start after spawning it.
 const BROKER_START_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -183,7 +192,10 @@ fn is_broker_reachable() -> bool {
 ///
 /// After starting, polls the control socket via TCP until reachable (up to 5s).
 #[tracing::instrument(skip_all, fields(topology = %topology_name))]
-pub fn ensure_broker_container(topology_name: &str) -> Result<(), DeployError> {
+pub fn ensure_broker_container(
+    topology_name: &str,
+    broker: Option<&crate::deploy::BrokerSpec>,
+) -> Result<(), DeployError> {
     // Idempotent: skip if already running.
     if podman_is_running(BROKER_CONTAINER_NAME)? {
         tracing::info!("broker container already running");
@@ -195,29 +207,44 @@ pub fn ensure_broker_container(topology_name: &str) -> Result<(), DeployError> {
     let wal_volume = format!("wh-{}-wal", sanitize_name(topology_name));
     let volume_mount = format!("{wal_volume}:/data");
 
-    let args = vec![
-        "run",
-        "-d",
-        "--name",
-        BROKER_CONTAINER_NAME,
-        "--network",
-        &net_name,
-        "-p",
-        "127.0.0.1:5555:5555",
-        "-p",
-        "127.0.0.1:5556:5556",
-        "-p",
-        "127.0.0.1:5557:5557",
-        "-v",
-        &volume_mount,
-        "-e",
-        "WH_DATA_DIR=/data",
-        BROKER_IMAGE,
+    // Use topology-specified image or fall back to default (ADR-029).
+    let image = broker.map(|b| b.image.as_str()).unwrap_or(BROKER_IMAGE);
+
+    // Build args with topology-specified or default ports (ADR-029).
+    let custom_ports = broker.map(|b| &b.ports).filter(|p| !p.is_empty());
+
+    let mut args: Vec<String> = vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),
+        BROKER_CONTAINER_NAME.to_string(),
+        "--network".to_string(),
+        net_name,
     ];
+
+    if let Some(ports) = custom_ports {
+        for port in ports {
+            args.push("-p".to_string());
+            args.push(port.clone());
+        }
+    } else {
+        for port in DEFAULT_BROKER_PORTS {
+            args.push("-p".to_string());
+            args.push((*port).to_string());
+        }
+    }
+
+    args.push("-v".to_string());
+    args.push(volume_mount);
+    args.push("-e".to_string());
+    args.push("WH_DATA_DIR=/data".to_string());
+    args.push(image.to_string());
+
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
     tracing::info!("starting broker container");
     eprintln!("  Starting Wheelhouse broker container...");
-    run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT)?;
+    run_podman_checked(podman, &arg_refs, PODMAN_RUN_TIMEOUT)?;
 
     // Poll until the control socket is reachable from the host (published port).
     let start = std::time::Instant::now();
@@ -803,6 +830,7 @@ fn resolve_context_path(workspace_root: Option<&std::path::Path>) -> Option<Stri
 /// On container failure, logs the error but does NOT fail the entire apply.
 /// The git commit is already done; the operator can retry `apply` (idempotent).
 #[tracing::instrument(skip_all)]
+#[allow(clippy::too_many_arguments)]
 pub fn provision_containers(
     topology_name: &str,
     changes: &[Change],
@@ -811,6 +839,7 @@ pub fn provision_containers(
     surfaces: &[crate::deploy::Surface],
     workspace_root: Option<&std::path::Path>,
     extra_env: &[(String, String)],
+    broker: Option<&crate::deploy::BrokerSpec>,
 ) -> ApplyResult {
     // Count stream additions upfront — streams require no container operation.
     let streams_created = changes
@@ -870,7 +899,7 @@ pub fn provision_containers(
 
     // Start the broker container before any agent containers (ADR-025).
     // Agents connect to the broker via DNS at startup, so it must be available first.
-    if let Err(e) = ensure_broker_container(topology_name) {
+    if let Err(e) = ensure_broker_container(topology_name, broker) {
         tracing::error!(error = %e, "broker is not available");
         eprintln!("Error: {e}");
         return ApplyResult {
@@ -1333,7 +1362,7 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[]);
+        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None);
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
         assert_eq!(result.destroyed, 0);
@@ -1389,7 +1418,7 @@ mod tests {
             from: None,
             to: None,
         }];
-        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[]);
+        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None);
         // Should skip gracefully, not panic, and not increment created
         assert_eq!(result.created, 0);
     }

@@ -136,6 +136,7 @@ pub fn lint_file(path: &Path) -> Result<(LintResult, Option<LintedFile>), LintEr
     validate_streams(&wh_file, &filename, &mut errors, &mut warnings);
     validate_stream_references(&wh_file, &filename, &mut errors);
     validate_surfaces(&wh_file, &filename, &mut errors);
+    validate_broker(&wh_file, &filename, &mut errors, &mut warnings);
 
     let result = LintResult { errors, warnings };
 
@@ -593,6 +594,43 @@ fn validate_surface_chats(
     }
 }
 
+/// Validate the optional broker section (ADR-029).
+///
+/// - Absent: emit deprecation warning (native process fallback is deprecated).
+/// - Present without `image`: emit error.
+/// - Present with `image`: no warning.
+fn validate_broker(
+    wh_file: &WhFile,
+    filename: &str,
+    errors: &mut Vec<LintDiagnostic>,
+    warnings: &mut Vec<LintDiagnostic>,
+) {
+    match &wh_file.broker {
+        None => {
+            warnings.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Warning,
+                message: "missing `broker` section \u{2014} native process fallback is deprecated"
+                    .to_string(),
+                hint: "add a `broker` section for container-native deployment (ADR-029)"
+                    .to_string(),
+            });
+        }
+        Some(broker) => {
+            if broker.image.is_none() || broker.image.as_deref() == Some("") {
+                errors.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    level: DiagnosticLevel::Error,
+                    message: "broker section requires 'image' field".to_string(),
+                    hint: "add image: ghcr.io/wheelhouse-paris/wh-broker:latest".to_string(),
+                });
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,6 +649,8 @@ mod tests {
         let f = write_wh(
             r#"
 apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
 agents:
   - name: researcher
     image: my-org/researcher:latest
@@ -1252,6 +1292,104 @@ surfaces:
         assert!(
             !result.has_errors(),
             "cli should be a valid surface kind: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn missing_broker_section_emits_deprecation_warning() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+agents:
+  - name: researcher
+    image: my-org/researcher:latest
+    max_replicas: 3
+    streams: [main]
+streams:
+  - name: main
+    provider: local
+    compaction_cron: "0 2 * * *"
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some(), "LintedFile should still be produced");
+        assert_eq!(result.warnings.len(), 1);
+        assert!(
+            result.warnings[0]
+                .message
+                .contains("missing `broker` section"),
+            "expected broker deprecation warning, got: {}",
+            result.warnings[0].message
+        );
+        assert!(
+            result.warnings[0].hint.contains("ADR-029"),
+            "expected ADR-029 in hint, got: {}",
+            result.warnings[0].hint
+        );
+    }
+
+    #[test]
+    fn broker_section_present_no_warning() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+  ports:
+    - "127.0.0.1:5555:5555"
+agents:
+  - name: researcher
+    image: my-org/researcher:latest
+    max_replicas: 3
+    streams: [main]
+streams:
+  - name: main
+    provider: local
+    compaction_cron: "0 2 * * *"
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+        let broker_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("broker"))
+            .collect();
+        assert!(
+            broker_warnings.is_empty(),
+            "no broker warning expected when broker section is present: {:?}",
+            broker_warnings
+        );
+    }
+
+    #[test]
+    fn broker_section_missing_image_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  ports:
+    - "127.0.0.1:5555:5555"
+agents:
+  - name: researcher
+    image: my-org/researcher:latest
+    max_replicas: 3
+    streams: [main]
+streams:
+  - name: main
+    provider: local
+    compaction_cron: "0 2 * * *"
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(linted.is_none());
+        assert!(
+            result.errors.iter().any(|e| e.message.contains("broker")),
+            "expected broker image error, got: {:?}",
             result.errors
         );
     }

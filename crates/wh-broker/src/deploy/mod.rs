@@ -50,6 +50,21 @@ pub struct Guardrails {
     pub approval_timeout_secs: Option<u64>,
 }
 
+/// Broker configuration within a topology (ADR-029).
+///
+/// When present in the `.wh` file, the broker runs as a container with the
+/// specified image and port mappings. When absent, the native process fallback
+/// is used (deprecated — `wh deploy lint` emits a warning).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BrokerSpec {
+    /// Container image for the broker (e.g., `ghcr.io/wheelhouse-paris/wh-broker:latest`).
+    pub image: String,
+    /// Port mappings published on the host (e.g., `["127.0.0.1:5555:5555"]`).
+    /// Defaults to the standard broker ports if empty or absent.
+    #[serde(default)]
+    pub ports: Vec<String>,
+}
+
 /// Represents a parsed and validated `.wh` topology file.
 ///
 /// A topology declares the desired state of agents, streams, and surfaces.
@@ -58,6 +73,10 @@ pub struct Guardrails {
 pub struct Topology {
     pub api_version: String,
     pub name: String,
+    /// Optional broker configuration (ADR-029). When absent, native process
+    /// fallback is used (deprecated).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker: Option<BrokerSpec>,
     #[serde(default)]
     pub agents: Vec<Agent>,
     #[serde(default)]
@@ -359,6 +378,7 @@ agents:
         let topo = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![
                 Agent {
                     name: "zeta".to_string(),
@@ -489,6 +509,7 @@ streams:
         let topo = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "donna".to_string(),
                 image: "agent-claude:latest".to_string(),
@@ -573,6 +594,7 @@ agents:
         let topo = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![],
             streams: vec![],
             surfaces: vec![
@@ -632,6 +654,7 @@ streams:
         let topo = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -654,6 +677,7 @@ streams:
         let topo = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -667,6 +691,99 @@ streams:
         assert!(
             !yaml.contains("description"),
             "description: None should be omitted from YAML: {yaml}"
+        );
+    }
+
+    #[test]
+    fn parse_topology_with_broker_section() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+  ports:
+    - "127.0.0.1:5555:5555"
+    - "127.0.0.1:5556:5556"
+    - "127.0.0.1:5557:5557"
+agents:
+  - name: researcher
+    image: researcher:latest
+streams:
+  - name: main
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        let broker = topo.broker.as_ref().unwrap();
+        assert_eq!(broker.image, "ghcr.io/wheelhouse-paris/wh-broker:latest");
+        assert_eq!(broker.ports.len(), 3);
+        assert_eq!(broker.ports[0], "127.0.0.1:5555:5555");
+    }
+
+    #[test]
+    fn parse_topology_without_broker_section() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+streams:
+  - name: main
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert!(topo.broker.is_none());
+    }
+
+    #[test]
+    fn parse_topology_broker_without_ports_defaults_empty() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:v1.0.0
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        let broker = topo.broker.as_ref().unwrap();
+        assert_eq!(broker.image, "ghcr.io/wheelhouse-paris/wh-broker:v1.0.0");
+        assert!(broker.ports.is_empty());
+    }
+
+    #[test]
+    fn broker_yaml_roundtrip() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            broker: Some(BrokerSpec {
+                image: "ghcr.io/wheelhouse-paris/wh-broker:latest".to_string(),
+                ports: vec![
+                    "127.0.0.1:5555:5555".to_string(),
+                    "127.0.0.1:5556:5556".to_string(),
+                ],
+            }),
+            agents: vec![],
+            streams: vec![],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(topo, parsed);
+    }
+
+    #[test]
+    fn broker_none_not_serialized() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            broker: None,
+            agents: vec![],
+            streams: vec![],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        assert!(
+            !yaml.contains("broker"),
+            "broker: None should be omitted from YAML: {yaml}"
         );
     }
 }

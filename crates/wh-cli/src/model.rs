@@ -33,6 +33,24 @@ pub struct WhFile {
 
     /// Surface specifications. May be absent or empty.
     pub surfaces: Option<Vec<SurfaceSpec>>,
+
+    /// Optional broker configuration (ADR-029).
+    /// When absent, native process fallback is used (deprecated).
+    pub broker: Option<BrokerCliSpec>,
+}
+
+/// Broker specification within a `.wh` file (ADR-029).
+///
+/// Declares that the broker should run as a container with the given image
+/// and optional port mappings. When absent from the `.wh` file, the native
+/// process fallback is used (deprecated — `wh deploy lint` emits a warning).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerCliSpec {
+    /// Container image for the broker (e.g., `ghcr.io/wheelhouse-paris/wh-broker:latest`).
+    pub image: Option<String>,
+
+    /// Port mappings published on the host (e.g., `["127.0.0.1:5555:5555"]`).
+    pub ports: Option<Vec<String>>,
 }
 
 /// Agent specification within a `.wh` file.
