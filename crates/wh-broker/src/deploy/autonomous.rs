@@ -569,6 +569,7 @@ mod tests {
         Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents,
             streams: vec![],
             surfaces: vec![],

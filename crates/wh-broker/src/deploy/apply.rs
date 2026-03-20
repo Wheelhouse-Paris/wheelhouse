@@ -344,6 +344,7 @@ pub fn apply(
         &committed.desired_topology.surfaces,
         Some(workspace_root),
         extra_env,
+        committed.desired_topology.broker.as_ref(),
     );
 
     Ok(result)
@@ -509,6 +510,7 @@ pub fn destroy(
     let empty_topology = Topology {
         api_version: topology.api_version.clone(),
         name: topology.name.clone(),
+        broker: topology.broker.clone(),
         agents: vec![],
         streams: vec![],
         surfaces: vec![],
@@ -608,6 +610,7 @@ mod tests {
             desired_topology: Topology {
                 api_version: "wheelhouse.dev/v1".to_string(),
                 name: "dev".to_string(),
+                broker: None,
                 agents: vec![],
                 streams: vec![],
                 surfaces: vec![],
@@ -639,6 +642,7 @@ mod tests {
             desired_topology: Topology {
                 api_version: "wheelhouse.dev/v1".to_string(),
                 name: "dev".to_string(),
+                broker: None,
                 agents: vec![],
                 streams: vec![],
                 surfaces: vec![],

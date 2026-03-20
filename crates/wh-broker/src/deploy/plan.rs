@@ -474,6 +474,7 @@ pub fn plan_with_options(
             let empty = Topology {
                 api_version: "wheelhouse.dev/v1".to_string(),
                 name: desired.name.clone(),
+                broker: None,
                 agents: vec![],
                 streams: vec![],
                 surfaces: vec![],
@@ -620,6 +621,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -666,6 +668,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -753,6 +756,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![],
             streams: vec![],
             surfaces: vec![],
@@ -787,6 +791,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -830,6 +835,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -879,6 +885,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -1032,6 +1039,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -1087,6 +1095,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -1144,6 +1153,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
@@ -1218,6 +1228,7 @@ mod tests {
         let topology = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
+            broker: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
