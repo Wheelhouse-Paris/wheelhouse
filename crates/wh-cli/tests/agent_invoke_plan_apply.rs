@@ -1,7 +1,7 @@
 //! Acceptance tests for Story 7.2: Agent-Invoked Plan and Apply.
 //!
-//! These tests verify that an agent can invoke `wh deploy plan` and
-//! `wh deploy apply` as subprocesses, receiving structured JSON output
+//! These tests verify that an agent can invoke `wh topology plan` and
+//! `wh topology apply` as subprocesses, receiving structured JSON output
 //! and proper exit codes. Guardrail validation is also tested.
 
 use wh_broker::deploy::apply;

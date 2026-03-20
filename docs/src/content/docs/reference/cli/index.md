@@ -19,16 +19,16 @@ The `wh` CLI is the primary control plane for Wheelhouse — used by human opera
 |------|---------|
 | `0` | Success |
 | `1` | Error |
-| `2` | Plan change detected (`wh deploy plan`) |
+| `2` | Plan change detected (`wh topology plan`) |
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
-| `wh deploy lint <file>` | Validate `.wh` syntax |
-| `wh deploy plan <file>` | Preview topology changes |
-| `wh deploy apply <file>` | Apply a topology |
-| `wh deploy destroy <file>` | Destroy a topology |
+| `wh topology lint <file>` | Validate `.wh` syntax |
+| `wh topology plan <file>` | Preview topology changes |
+| `wh topology apply <file>` | Apply a topology |
+| `wh topology destroy <file>` | Destroy a topology |
 | `wh ps` | List running components (agents + surfaces) |
 | `wh logs <agent>` | Stream agent logs |
 | `wh status` | Topology health summary |
@@ -72,7 +72,7 @@ With `--format json`:
 }
 ```
 
-### `wh deploy plan`
+### `wh topology plan`
 
 ```
   Changes to apply:
@@ -83,7 +83,7 @@ With `--format json`:
 
   1 to create · 1 to update · 1 to destroy
 
-  Run 'wh deploy apply topology.wh' to apply these changes.
+  Run 'wh topology apply topology.wh' to apply these changes.
 ```
 
 Prefix legend: `+` create · `~` update · `!` destroy.
@@ -101,7 +101,7 @@ With `--format json`, the response includes `has_changes: bool` as a top-level f
 }
 ```
 
-### `wh deploy lint` errors
+### `wh topology lint` errors
 
 Lint errors use compiler-style format — `file:line: field 'X' — reason`:
 
@@ -132,11 +132,11 @@ Content is truncated at 120 characters. Use `--verbose` to disable truncation.
 
 `--format json` is a first-class output contract, not an afterthought. Every command's JSON schema is stable — breaking changes require a major version bump.
 
-Designed for agent consumption: `wh deploy plan --format json` gives agents a structured decision context. `wh ps --format json` gives monitoring pipelines machine-parseable status.
+Designed for agent consumption: `wh topology plan --format json` gives agents a structured decision context. `wh ps --format json` gives monitoring pipelines machine-parseable status.
 
 ```sh
 # Check if topology has pending changes (agent use)
-wh deploy plan topology.wh --format json | jq '.has_changes'
+wh topology plan topology.wh --format json | jq '.has_changes'
 
 # Get running agent names
 wh ps --format json | jq '[.components[] | select(.status == "running") | .name]'
@@ -173,7 +173,7 @@ Endpoint env vars (defaults match broker defaults):
 
 ### `wh surface restart` / `wh surface stop`
 
-Manage the lifecycle of deployed surface processes without a full `wh deploy apply` cycle.
+Manage the lifecycle of deployed surface processes without a full `wh topology apply` cycle.
 
 ```sh
 cd ~/my-agents          # must be run from the topology directory

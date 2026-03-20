@@ -2,7 +2,7 @@
 
 Loads CONTEXT.md files from the context volume at startup.
 Each stream may have a CONTEXT.md at <context_path>/<stream_name>/CONTEXT.md
-(written by `wh deploy apply` from the stream's `description` field).
+(written by `wh topology apply` from the stream's `description` field).
 
 Per ADR-021, context files are loaded ONCE at startup and injected into
 the system prompt. They are NOT re-read per message. Restart the container

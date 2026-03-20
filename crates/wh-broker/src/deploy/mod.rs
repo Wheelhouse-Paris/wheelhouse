@@ -54,7 +54,7 @@ pub struct Guardrails {
 ///
 /// When present in the `.wh` file, the broker runs as a container with the
 /// specified image and port mappings. When absent, the native process fallback
-/// is used (deprecated — `wh deploy lint` emits a warning).
+/// is used (deprecated — `wh topology lint` emits a warning).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BrokerSpec {
     /// Container image for the broker (e.g., `ghcr.io/wheelhouse-paris/wh-broker:latest`).
@@ -132,7 +132,7 @@ pub struct Stream {
     pub name: String,
     #[serde(default)]
     pub retention: Option<String>,
-    /// Optional human-readable description. When present, `wh deploy apply` creates
+    /// Optional human-readable description. When present, `wh topology apply` creates
     /// `.wh/context/<stream_name>/CONTEXT.md` with this content (FR-NEW-04).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

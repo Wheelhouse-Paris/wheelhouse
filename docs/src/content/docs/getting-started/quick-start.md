@@ -31,7 +31,7 @@ Wheelhouse auto-detects available providers and guides you through credential se
   ? Telegram bot token  ········ (optional — skip with Enter)
 
   Secrets stored in macOS Keychain.
-  Run 'wh deploy apply topology.wh' to start.
+  Run 'wh topology apply topology.wh' to start.
 ```
 
 Secrets are stored outside git, never in `.wh` files. If you enter a Telegram bot token here, it is automatically injected into any Telegram surface container at deploy time.
@@ -60,7 +60,7 @@ guardrails:
 ## 3. Preview changes
 
 ```sh
-wh deploy plan topology.wh
+wh topology plan topology.wh
 ```
 
 ```
@@ -71,13 +71,13 @@ wh deploy plan topology.wh
 
   2 to create · 0 to update · 0 to destroy
 
-  Run 'wh deploy apply topology.wh' to apply these changes.
+  Run 'wh topology apply topology.wh' to apply these changes.
 ```
 
 ## 4. Apply
 
 ```sh
-wh deploy apply topology.wh
+wh topology apply topology.wh
 ```
 
 ```
@@ -138,8 +138,8 @@ guardrails:
 Preview and apply:
 
 ```sh
-wh deploy plan topology.wh
-wh deploy apply topology.wh
+wh topology plan topology.wh
+wh topology apply topology.wh
 ```
 
 ```

@@ -43,7 +43,7 @@ pub struct WhFile {
 ///
 /// Declares that the broker should run as a container with the given image
 /// and optional port mappings. When absent from the `.wh` file, the native
-/// process fallback is used (deprecated — `wh deploy lint` emits a warning).
+/// process fallback is used (deprecated — `wh topology lint` emits a warning).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerCliSpec {
     /// Container image for the broker (e.g., `ghcr.io/wheelhouse-paris/wh-broker:latest`).

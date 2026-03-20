@@ -79,7 +79,7 @@ fn ac1_all_configured_message_in_json() {
             },
         ],
         all_configured: true,
-        next_command: "wh deploy apply topology.wh".to_string(),
+        next_command: "wh topology apply topology.wh".to_string(),
     };
     let envelope = OutputEnvelope::ok(data);
     let json = serde_json::to_string_pretty(&envelope).unwrap();
@@ -224,7 +224,7 @@ fn json_output_snake_case_for_new_fields() {
         },
         credentials: vec![],
         all_configured: false,
-        next_command: "wh deploy apply topology.wh".to_string(),
+        next_command: "wh topology apply topology.wh".to_string(),
     };
     let envelope = OutputEnvelope::ok(data);
     let json = serde_json::to_string_pretty(&envelope).unwrap();

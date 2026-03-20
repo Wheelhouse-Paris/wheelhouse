@@ -14,7 +14,6 @@ use clap::{Parser, Subcommand};
 
 use commands::compact::CompactArgs;
 use commands::completion::CompletionArgs;
-use commands::deploy::DeployCommand;
 use commands::doctor::DoctorArgs;
 use commands::logs::LogsArgs;
 use commands::memory::MemoryCommand;
@@ -23,6 +22,7 @@ use commands::secrets::SecretsCmd;
 use commands::stream::StreamCommand;
 use commands::surface::SurfaceCommand;
 use commands::telegram::TelegramCommand;
+use commands::topology::TopologyCommand;
 use output::OutputFormat;
 
 /// wh — the Wheelhouse CLI.
@@ -32,7 +32,7 @@ use output::OutputFormat;
 pub const GETTING_STARTED_HINT: &str = "\
 Wheelhouse — local-first agent orchestration
   wh secrets init    Configure credentials
-  wh deploy apply    Deploy your topology
+  wh topology apply   Deploy your topology
   wh --help          Show all commands";
 
 #[derive(Debug, Parser)]
@@ -55,9 +55,9 @@ pub enum Commands {
         cmd: SecretsCmd,
     },
     /// Manage topology deployment.
-    Deploy {
+    Topology {
         #[command(subcommand)]
-        command: DeployCommand,
+        command: TopologyCommand,
     },
     /// Manage surfaces (CLI, Telegram, etc.).
     Surface {

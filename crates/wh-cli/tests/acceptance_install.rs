@@ -104,7 +104,7 @@ fn test_no_args_prints_getting_started_hint() {
         "hint should mention Wheelhouse: {stdout}"
     );
     assert!(
-        stdout.contains("wh secrets init") || stdout.contains("wh deploy"),
+        stdout.contains("wh secrets init") || stdout.contains("wh topology"),
         "hint should contain getting-started commands: {stdout}"
     );
 }

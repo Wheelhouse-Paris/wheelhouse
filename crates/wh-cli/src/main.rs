@@ -91,7 +91,7 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Deploy { command } => {
+        Commands::Topology { command } => {
             let exit_code = command.execute();
             std::process::exit(exit_code);
         }

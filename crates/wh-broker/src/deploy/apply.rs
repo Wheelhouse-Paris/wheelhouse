@@ -300,7 +300,7 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
 /// To restore infrastructure on a new machine:
 /// 1. `git clone <repo>` — restores topology config, personas, cron, user profiles
 /// 2. `wh broker start` — starts the Wheelhouse broker process
-/// 3. `wh deploy apply topology.wh` — provisions agents and streams
+/// 3. `wh topology apply topology.wh` — provisions agents and streams
 ///
 /// WAL content (in-flight messages) and secrets are NOT restored via git.
 /// Secrets must be re-configured via `wh secrets init`.

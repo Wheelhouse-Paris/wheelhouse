@@ -1,4 +1,4 @@
-//! Acceptance tests for Story 2-3: `wh deploy plan` — Preview Changes
+//! Acceptance tests for Story 2-3: `wh topology plan` — Preview Changes
 //!
 //! TDD Red Phase: These tests verify the acceptance criteria for story 2-3.
 //! Tests cover human-readable output format, self-destruct detection (CM-05),
@@ -15,7 +15,7 @@ fn wh_binary() -> Command {
 // ===========================================================================
 
 /// AC #1: Given a `.wh` file that would create 1 agent and 1 stream (first deploy),
-/// When I run `wh deploy plan topology.wh`,
+/// When I run `wh topology plan topology.wh`,
 /// Then the output shows `+ agent researcher (new)` and `+ stream main (new)`
 /// And the summary line reads `2 to create · 0 to update · 0 to destroy`.
 #[test]
@@ -29,7 +29,7 @@ fn plan_human_output_shows_new_annotations_and_summary() {
     .unwrap();
 
     let output = wh_binary()
-        .args(["deploy", "plan", wh_path.to_str().unwrap()])
+        .args(["topology", "plan", wh_path.to_str().unwrap()])
         .output()
         .expect("failed to execute wh binary");
 
@@ -69,7 +69,7 @@ fn plan_human_output_shows_provider_info_for_streams() {
     .unwrap();
 
     let output = wh_binary()
-        .args(["deploy", "plan", wh_path.to_str().unwrap()])
+        .args(["topology", "plan", wh_path.to_str().unwrap()])
         .output()
         .expect("failed to execute wh binary");
 
@@ -87,7 +87,7 @@ fn plan_human_output_shows_provider_info_for_streams() {
 // ===========================================================================
 
 /// AC #2: Given a plan is run on an already-deployed topology with no changes,
-/// When I run `wh deploy plan topology.wh`,
+/// When I run `wh topology plan topology.wh`,
 /// Then the output reads `No changes. Infrastructure is up-to-date.`
 #[test]
 fn plan_human_output_shows_no_changes_message() {
@@ -108,7 +108,7 @@ fn plan_human_output_shows_no_changes_message() {
     .unwrap();
 
     let output = wh_binary()
-        .args(["deploy", "plan", wh_path.to_str().unwrap()])
+        .args(["topology", "plan", wh_path.to_str().unwrap()])
         .current_dir(temp_dir.path())
         .output()
         .expect("failed to execute wh binary");
@@ -134,7 +134,7 @@ fn plan_human_output_shows_no_changes_message() {
 fn plan_json_output_goes_to_stdout_only() {
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified.wh",
             "--format",
@@ -162,7 +162,7 @@ fn plan_json_output_goes_to_stdout_only() {
 fn plan_exits_with_code_2_on_changes() {
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified.wh",
             "--format",
@@ -183,7 +183,7 @@ fn plan_exits_with_code_2_on_changes() {
 // ===========================================================================
 
 /// AC #5: Given a plan would destroy all agents (self-destruct),
-/// When `wh deploy plan` evaluates the diff,
+/// When `wh topology plan` evaluates the diff,
 /// Then the plan exits with error and a prominent warning.
 #[test]
 fn plan_blocks_self_destruct_without_force_flag() {
@@ -207,7 +207,7 @@ fn plan_blocks_self_destruct_without_force_flag() {
     .unwrap();
 
     let output = wh_binary()
-        .args(["deploy", "plan", wh_path.to_str().unwrap()])
+        .args(["topology", "plan", wh_path.to_str().unwrap()])
         .current_dir(temp_dir.path())
         .output()
         .expect("failed to execute wh binary");
@@ -249,7 +249,7 @@ fn plan_allows_self_destruct_with_force_flag() {
 
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "plan",
             wh_path.to_str().unwrap(),
             "--force-destroy-all",
@@ -288,7 +288,7 @@ fn plan_self_destruct_with_force_json_includes_warning() {
 
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "plan",
             wh_path.to_str().unwrap(),
             "--force-destroy-all",
@@ -342,7 +342,7 @@ fn plan_human_output_shows_modification_details() {
     .unwrap();
 
     let output = wh_binary()
-        .args(["deploy", "plan", wh_path.to_str().unwrap()])
+        .args(["topology", "plan", wh_path.to_str().unwrap()])
         .current_dir(temp_dir.path())
         .output()
         .expect("failed to execute wh binary");

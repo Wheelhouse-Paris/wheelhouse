@@ -39,5 +39,5 @@ Migrate a complete infrastructure to a new machine:
 
 ```sh
 git clone https://github.com/you/your-infra
-wh deploy apply topology.wh
+wh topology apply topology.wh
 ```

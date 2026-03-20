@@ -505,10 +505,20 @@ pub fn build_surface_run_args(
         args.push(format!("WH_STREAM={}", surface.stream));
     }
 
-    // Inject caller-provided secrets/env vars (e.g. CLAUDE_CODE_OAUTH_TOKEN)
+    // Inject caller-provided secrets/env vars (e.g. CLAUDE_CODE_OAUTH_TOKEN).
+    // For file-path env vars (e.g. WH_TELEGRAM_ROUTING_FILE), bind-mount the
+    // host file into the container and rewrite the env var to the container path.
     for (key, value) in extra_env {
-        args.push("-e".to_string());
-        args.push(format!("{key}={value}"));
+        if key == "WH_TELEGRAM_ROUTING_FILE" {
+            let container_path = "/etc/wh/telegram-routing.json";
+            args.push("-v".to_string());
+            args.push(format!("{value}:{container_path}:ro"));
+            args.push("-e".to_string());
+            args.push(format!("{key}={container_path}"));
+        } else {
+            args.push("-e".to_string());
+            args.push(format!("{key}={value}"));
+        }
     }
 
     // Inject surface-specific env vars from topology spec
@@ -936,7 +946,7 @@ pub fn provision_containers(
                     Err(e) => tracing::error!(
                         surface = %surface_name,
                         error = %e,
-                        "failed to stop surface container — retry with `wh deploy apply`"
+                        "failed to stop surface container — retry with `wh topology apply`"
                     ),
                 }
                 continue;
@@ -970,7 +980,7 @@ pub fn provision_containers(
                         Err(e) => tracing::error!(
                             surface = %surface.name,
                             error = %e,
-                            "failed to start surface container — retry with `wh deploy apply`"
+                            "failed to start surface container — retry with `wh topology apply`"
                         ),
                     }
                 }
@@ -989,7 +999,7 @@ pub fn provision_containers(
                         Err(e) => tracing::error!(
                             surface = %surface.name,
                             error = %e,
-                            "failed to restart surface container — retry with `wh deploy apply`"
+                            "failed to restart surface container — retry with `wh topology apply`"
                         ),
                     }
                 }
@@ -1064,7 +1074,7 @@ pub fn provision_containers(
                         tracing::error!(
                             agent = %agent.name,
                             error = %e,
-                            "failed to start agent container — retry with `wh deploy apply`"
+                            "failed to start agent container — retry with `wh topology apply`"
                         );
                     }
                 }
@@ -1077,7 +1087,7 @@ pub fn provision_containers(
                         tracing::error!(
                             agent = %agent_name,
                             error = %e,
-                            "failed to stop agent container — retry with `wh deploy apply`"
+                            "failed to stop agent container — retry with `wh topology apply`"
                         );
                     }
                 }
@@ -1131,7 +1141,7 @@ pub fn provision_containers(
                         tracing::error!(
                             agent = %agent.name,
                             error = %e,
-                            "failed to restart agent container — retry with `wh deploy apply`"
+                            "failed to restart agent container — retry with `wh topology apply`"
                         );
                     }
                 }
@@ -1492,6 +1502,33 @@ mod tests {
         assert!(
             args.iter().any(|a| a == "SECRET_KEY=secret-val"),
             "should include extra_env"
+        );
+    }
+
+    #[test]
+    fn build_surface_run_args_mounts_routing_file() {
+        let surface = crate::deploy::Surface {
+            name: "telegram".to_string(),
+            kind: "telegram".to_string(),
+            stream: "main".to_string(),
+            env: None,
+            chats: None,
+        };
+        let extra = vec![(
+            "WH_TELEGRAM_ROUTING_FILE".to_string(),
+            "/host/path/telegram-routing.json".to_string(),
+        )];
+        let args = build_surface_run_args("dev", &surface, &extra);
+
+        assert!(
+            args.iter()
+                .any(|a| a == "/host/path/telegram-routing.json:/etc/wh/telegram-routing.json:ro"),
+            "should bind-mount routing file into container"
+        );
+        assert!(
+            args.iter().any(|a| a
+                == "WH_TELEGRAM_ROUTING_FILE=/etc/wh/telegram-routing.json"),
+            "should rewrite env var to container path"
         );
     }
 

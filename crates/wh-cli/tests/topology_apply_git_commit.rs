@@ -1,5 +1,5 @@
 //! Acceptance tests for Story 7.1: Operator-Driven Plan/Apply Loop (Donna Mode)
-//! AC #2: `wh deploy apply --yes` creates git commit with plan_hash in message body
+//! AC #2: `wh topology apply --yes` creates git commit with plan_hash in message body
 //!
 //! These tests use the library API directly to validate the apply+commit logic,
 //! because the test sandbox may prevent double process spawning (test -> wh -> git).

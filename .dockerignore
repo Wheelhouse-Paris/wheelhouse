@@ -1,0 +1,6 @@
+target/
+.git/
+my-agents/
+_bmad/
+_bmad-output/
+*.wh

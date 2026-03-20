@@ -1,7 +1,7 @@
 // Story 5-5: Cron Job Declaration and CronEvent Publishing — Acceptance Tests
 // TDD RED phase: these tests MUST fail until implementation is complete.
 
-/// AC1: Given a .wh file declares a cron job, When wh deploy apply runs,
+/// AC1: Given a .wh file declares a cron job, When wh topology apply runs,
 /// Then the cron job is registered and committed to git as cron/jobs.yaml
 #[test]
 fn ac1_cron_job_parsed_from_wh_file_and_persisted_to_git() {

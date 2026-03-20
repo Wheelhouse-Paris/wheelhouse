@@ -138,7 +138,7 @@ fn check_gitignore(path: &std::path::Path) -> CheckResult {
         return CheckResult {
             name: ".wh/.gitignore".to_string(),
             status: CheckStatus::Warn,
-            message: "Missing — run `wh deploy apply` to create it automatically".to_string(),
+            message: "Missing — run `wh topology apply` to create it automatically".to_string(),
         };
     }
 

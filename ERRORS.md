@@ -9,10 +9,10 @@ Use `--format json` to get machine-parseable error output with the code as a num
 
 | Code | Name | Description | Fix Instruction |
 |------|------|-------------|-----------------|
-| WH-1001 | CONNECTION_ERROR | Cannot connect to Wheelhouse. The local Wheelhouse instance is not running or not reachable. | Run `wh deploy apply` to start Wheelhouse, or check that the topology file exists and is valid. |
-| WH-2001 | LINT_ERROR | Topology file lint validation failed. A field or value in the `.wh` file is invalid. | Check the `context.file`, `context.line`, and `context.field` in the error output. Fix the indicated field in your topology file. Run `wh deploy lint` to re-validate. |
+| WH-1001 | CONNECTION_ERROR | Cannot connect to Wheelhouse. The local Wheelhouse instance is not running or not reachable. | Run `wh topology apply` to start Wheelhouse, or check that the topology file exists and is valid. |
+| WH-2001 | LINT_ERROR | Topology file lint validation failed. A field or value in the `.wh` file is invalid. | Check the `context.file`, `context.line`, and `context.field` in the error output. Fix the indicated field in your topology file. Run `wh topology lint` to re-validate. |
 | WH-2002 | PLAN_ERROR | Deploy plan generation failed. The topology could not be resolved into a valid deployment plan. | Review the error message for details. Ensure all referenced agents, streams, and dependencies exist and are correctly configured. |
-| WH-2003 | APPLY_ERROR | Deploy apply failed. The deployment could not be completed. | Check the error message for the specific failure. Common causes: missing container images, insufficient permissions, port conflicts. Run `wh deploy plan` first to preview changes. |
+| WH-2003 | APPLY_ERROR | Deploy apply failed. The deployment could not be completed. | Check the error message for the specific failure. Common causes: missing container images, insufficient permissions, port conflicts. Run `wh topology plan` first to preview changes. |
 | WH-3001 | STREAM_ERROR | Stream operation failed. The requested stream does not exist or is not accessible. | Verify the stream name with `wh ps`. Ensure the topology includes the stream and that Wheelhouse is running. |
 | WH-4001 | CONFIG_ERROR | Configuration error. A configuration file is missing, malformed, or contains invalid values. | Check the indicated file path and field. Ensure YAML syntax is valid and all required fields are present. |
 | WH-4002 | SECRET_NOT_FOUND | A required secret is not configured. Neither an environment variable nor an OS keychain entry was found for the requested credential. | Run `wh secrets init` to configure credentials. Alternatively, set the corresponding environment variable (e.g., `ANTHROPIC_API_KEY`). |
@@ -60,7 +60,7 @@ When using `--format json`, errors are returned as:
 |-----------|---------|
 | 0 | Success |
 | 1 | Error (see error output for details) |
-| 2 | Plan change detected (`wh deploy plan` only) |
+| 2 | Plan change detected (`wh topology plan` only) |
 
 ---
 

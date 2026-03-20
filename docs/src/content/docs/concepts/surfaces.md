@@ -45,7 +45,7 @@ surfaces:
             stream: wh-admin
 ```
 
-On `wh deploy apply`, the CLI resolves group and thread names to their Telegram IDs and writes a routing file (`<topology_dir>/.wh/telegram-routing.json`) that is passed to the surface process via `WH_TELEGRAM_ROUTING_FILE`.
+On `wh topology apply`, the CLI resolves group and thread names to their Telegram IDs and writes a routing file (`<topology_dir>/.wh/telegram-routing.json`) that is passed to the surface process via `WH_TELEGRAM_ROUTING_FILE`.
 
 Secrets (e.g. `TELEGRAM_BOT_TOKEN`) are stored via `wh secrets init` and injected automatically at deploy time — they never go in the topology file.
 
@@ -55,8 +55,8 @@ Surfaces are native processes managed by the `wh` CLI. Their PID files live in `
 
 | Command | Description |
 |---------|-------------|
-| `wh deploy apply <file>` | Provision all surfaces declared in the topology |
-| `wh deploy destroy <file>` | Stop and remove all surfaces |
+| `wh topology apply <file>` | Provision all surfaces declared in the topology |
+| `wh topology destroy <file>` | Stop and remove all surfaces |
 | `wh surface restart <name>` | Kill and respawn without a full deploy cycle |
 | `wh surface stop <name>` | Kill without respawning |
 
@@ -98,7 +98,7 @@ surfaces:
 **Step 4** — Apply:
 
 ```sh
-wh deploy apply topology.wh
+wh topology apply topology.wh
 ```
 
 The CLI resolves group and topic names to Telegram IDs, writes the routing file, and starts the `wh-telegram` process. Open Telegram and message your bot to verify.

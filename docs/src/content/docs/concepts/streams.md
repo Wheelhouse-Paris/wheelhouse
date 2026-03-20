@@ -46,4 +46,4 @@ streams:
     retention: "30d"   # optional duration string; omit to keep forever
 ```
 
-A stream without a compaction cron generates a lint warning at `wh deploy lint` time — objects will accumulate without bound.
+A stream without a compaction cron generates a lint warning at `wh topology lint` time — objects will accumulate without bound.

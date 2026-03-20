@@ -243,7 +243,7 @@ fn run_init(format: OutputFormat, update: bool) -> Result<(), WhError> {
     }
 
     // --- Summary ---
-    let next_command = "wh deploy apply topology.wh".to_string();
+    let next_command = "wh topology apply topology.wh".to_string();
 
     if format == OutputFormat::Human && !all_configured {
         println!(); // blank line before summary
@@ -711,7 +711,7 @@ mod tests {
                 },
             ],
             all_configured: false,
-            next_command: "wh deploy apply topology.wh".to_string(),
+            next_command: "wh topology apply topology.wh".to_string(),
         };
 
         let envelope = OutputEnvelope::ok(data);
@@ -750,7 +750,7 @@ mod tests {
                 status: CredentialStatus::DetectedFromEnv,
             }],
             all_configured: true,
-            next_command: "wh deploy apply topology.wh".to_string(),
+            next_command: "wh topology apply topology.wh".to_string(),
         };
         let envelope = OutputEnvelope::ok(data);
         let json = serde_json::to_string_pretty(&envelope).unwrap();

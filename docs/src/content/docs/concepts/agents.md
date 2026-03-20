@@ -16,14 +16,14 @@ load persona (SOUL.md → IDENTITY.md → MEMORY.md) → connect to streams → 
 ## The autonomous loop
 
 ```
-observe (stream) → decide (LLM) → act (publish / wh deploy apply)
+observe (stream) → decide (LLM) → act (publish / wh topology apply)
 ```
 
 An agent can revise its own `.wh` file at any time based on any signal it receives — a stream message, a compaction summary, a user command, or its own judgment.
 
 ## Stream messages are untrusted input
 
-An agent must treat stream messages as untrusted user input. Infrastructure-modifying operations (e.g. `wh deploy apply`) must not be triggered solely by stream message content — they require a secondary validation step: human confirmation or a policy check defined in `wh-policy.yaml`.
+An agent must treat stream messages as untrusted user input. Infrastructure-modifying operations (e.g. `wh topology apply`) must not be triggered solely by stream message content — they require a secondary validation step: human confirmation or a policy check defined in `wh-policy.yaml`.
 
 ## Identity & audit trail
 

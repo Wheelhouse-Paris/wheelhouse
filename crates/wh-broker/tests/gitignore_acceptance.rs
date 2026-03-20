@@ -64,9 +64,9 @@ fn setup_git_repo() -> tempfile::TempDir {
 
 // ── AC #1: Deploy apply stages .wh/ directory ──
 
-/// AC #1: After deploy apply, .wh/state.json is committed.
+/// AC #1: After topology apply, .wh/state.json is committed.
 #[test]
-fn deploy_apply_commits_state_json() {
+fn topology_apply_commits_state_json() {
     let temp_dir = setup_git_repo();
     let temp_path = temp_dir.path();
     let wh_path = temp_path.join("topology.wh");
@@ -94,7 +94,7 @@ fn deploy_apply_commits_state_json() {
 
 /// AC #1: After deploy apply, .wh/.gitignore is committed.
 #[test]
-fn deploy_apply_creates_gitignore() {
+fn topology_apply_creates_gitignore() {
     let temp_dir = setup_git_repo();
     let temp_path = temp_dir.path();
     let wh_path = temp_path.join("topology.wh");

@@ -41,7 +41,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -71,7 +71,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -98,7 +98,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -132,7 +132,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -154,7 +154,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -183,7 +183,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -211,7 +211,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -252,7 +252,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -280,7 +280,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -311,7 +311,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -341,7 +341,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -371,7 +371,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -403,7 +403,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -429,7 +429,7 @@ streams:
     );
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 
@@ -463,7 +463,7 @@ streams:
 
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "lint",
             file.path().to_str().unwrap(),
             "--format",
@@ -498,7 +498,7 @@ streams:
 
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "lint",
             file.path().to_str().unwrap(),
             "--format",
@@ -523,7 +523,7 @@ streams:
 #[test]
 fn nonexistent_file_produces_error() {
     let output = wh_binary()
-        .args(["deploy", "lint", "/tmp/nonexistent-12345.wh"])
+        .args(["topology", "lint", "/tmp/nonexistent-12345.wh"])
         .output()
         .expect("run wh");
 
@@ -535,7 +535,7 @@ fn invalid_yaml_produces_error() {
     let file = write_wh_file(":::invalid yaml{{{");
 
     let output = wh_binary()
-        .args(["deploy", "lint", file.path().to_str().unwrap()])
+        .args(["topology", "lint", file.path().to_str().unwrap()])
         .output()
         .expect("run wh");
 

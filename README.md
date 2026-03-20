@@ -7,7 +7,7 @@ Specify, deploy, monitor, and let your agents operate their own infrastructure.
 ```sh
 brew install wheelhouse-paris/tap/wh
 wh secrets init
-wh deploy apply my-agent.wh
+wh topology apply my-agent.wh
 ```
 
 **Documentation:** [docs.wheelhouse.paris](https://docs.wheelhouse.paris)

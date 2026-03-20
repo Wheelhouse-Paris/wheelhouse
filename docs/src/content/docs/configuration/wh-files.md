@@ -94,20 +94,20 @@ agents:
     max_apply_per_hour: 10
 ```
 
-`wh deploy apply` validates against `wh-policy.yaml` before executing. Policy changes require explicit human confirmation regardless of threshold setting.
+`wh topology apply` validates against `wh-policy.yaml` before executing. Policy changes require explicit human confirmation regardless of threshold setting.
 
 ## Validation
 
 Validate syntax without applying:
 
 ```sh
-wh deploy lint topology.wh
+wh topology lint topology.wh
 ```
 
 Preview changes before applying:
 
 ```sh
-wh deploy plan topology.wh
+wh topology plan topology.wh
 ```
 
 Check topology and git health:

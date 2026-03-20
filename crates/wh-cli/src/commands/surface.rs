@@ -444,7 +444,7 @@ pub fn execute_restart(name: &str) -> Result<(), WhError> {
     let state_path = Path::new(".wh/state.json");
     if !state_path.exists() {
         return Err(WhError::Other(
-            "no deployed topology found (.wh/state.json missing). Run 'wh deploy apply' first."
+            "no deployed topology found (.wh/state.json missing). Run 'wh topology apply' first."
                 .to_string(),
         ));
     }
@@ -514,7 +514,7 @@ pub fn execute_stop(name: &str) -> Result<(), WhError> {
     let state_path = Path::new(".wh/state.json");
     if !state_path.exists() {
         return Err(WhError::Other(
-            "no deployed topology found (.wh/state.json missing). Run 'wh deploy apply' first."
+            "no deployed topology found (.wh/state.json missing). Run 'wh topology apply' first."
                 .to_string(),
         ));
     }

@@ -1,6 +1,6 @@
-//! `wh deploy` subcommands: lint, plan, apply.
+//! `wh topology` subcommands: lint, plan, apply.
 //!
-//! Implements the operator-facing CLI for the deploy pipeline.
+//! Implements the operator-facing CLI for the topology pipeline.
 //! All output routed through the format switch (SCV-05).
 
 use std::path::PathBuf;
@@ -14,9 +14,9 @@ use crate::lint as lint_engine;
 use crate::output::error;
 use crate::output::{self, LintError, OutputFormat};
 
-/// Deploy subcommands for managing topology.
+/// Topology subcommands: lint, plan, apply, destroy.
 #[derive(Debug, Subcommand)]
-pub enum DeployCommand {
+pub enum TopologyCommand {
     /// Validate the syntax and semantics of a `.wh` topology file.
     Lint {
         /// Path to the `.wh` file to validate.
@@ -70,24 +70,24 @@ pub enum DeployCommand {
     },
 }
 
-impl DeployCommand {
-    /// Execute the deploy subcommand. Returns the process exit code.
+impl TopologyCommand {
+    /// Execute the topology subcommand. Returns the process exit code.
     pub fn execute(self) -> i32 {
         match self {
-            DeployCommand::Lint { file, format } => execute_lint(&file, format),
-            DeployCommand::Plan {
+            TopologyCommand::Lint { file, format } => execute_lint(&file, format),
+            TopologyCommand::Plan {
                 file,
                 format,
                 force_destroy_all,
                 calling_agent,
             } => execute_plan(&file, format, force_destroy_all, calling_agent.as_deref()),
-            DeployCommand::Apply {
+            TopologyCommand::Apply {
                 file,
                 yes,
                 format,
                 agent_name,
             } => execute_apply(&file, yes, format, agent_name.as_deref()),
-            DeployCommand::Destroy {
+            TopologyCommand::Destroy {
                 file,
                 yes,
                 format,

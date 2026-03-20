@@ -59,6 +59,8 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       proto: ${{ steps.filter.outputs.proto }}
       agent_claude: ${{ steps.filter.outputs.agent_claude }}
+      broker: ${{ steps.filter.outputs.broker }}
+      telegram: ${{ steps.filter.outputs.telegram }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -80,6 +82,16 @@ jobs:
             agent_claude:
               - 'agent-claude/**'
               - 'sdk/python/**'
+            broker:
+              - 'crates/wh-broker/**'
+              - 'crates/wh-proto/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            telegram:
+              - 'crates/wh-telegram/**'
+              - 'crates/wh-proto/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
 
   # ──────────────────────────────────────────────
   # Rust: cargo test + clippy + fmt
@@ -231,3 +243,115 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
             VERSION=dev-${{ github.sha }}
+
+  # ──────────────────────────────────────────────
+  # wh-broker: Docker build verification (no push)
+  # ──────────────────────────────────────────────
+  build-broker-image:
+    name: Build wh-broker Image (CI)
+    needs: [changes]
+    if: needs.changes.outputs.broker == 'true' && github.ref != 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: crates/wh-broker/Dockerfile
+          push: false
+          load: true
+          tags: wh-broker:ci
+
+  # ──────────────────────────────────────────────
+  # wh-broker: Build and push :dev tag to GHCR
+  # ──────────────────────────────────────────────
+  publish-broker-dev:
+    name: Publish wh-broker Image (dev)
+    needs: [changes]
+    if: needs.changes.outputs.broker == 'true' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push :dev image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: crates/wh-broker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/wheelhouse-paris/wh-broker:dev
+
+  # ──────────────────────────────────────────────
+  # wh-telegram: Docker build verification (no push)
+  # ──────────────────────────────────────────────
+  build-telegram-image:
+    name: Build wh-telegram Image (CI)
+    needs: [changes]
+    if: needs.changes.outputs.telegram == 'true' && github.ref != 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: crates/wh-telegram/Dockerfile
+          push: false
+          load: true
+          tags: wh-telegram:ci
+
+  # ──────────────────────────────────────────────
+  # wh-telegram: Build and push :dev tag to GHCR
+  # ──────────────────────────────────────────────
+  publish-telegram-dev:
+    name: Publish wh-telegram Image (dev)
+    needs: [changes]
+    if: needs.changes.outputs.telegram == 'true' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push :dev image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: crates/wh-telegram/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/wheelhouse-paris/wh-telegram:dev

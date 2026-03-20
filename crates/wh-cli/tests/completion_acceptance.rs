@@ -125,7 +125,7 @@ fn wh_help_works_offline() {
     assert!(stdout.contains("ps"), "Expected 'ps' in help output");
     assert!(stdout.contains("logs"), "Expected 'logs' in help output");
     assert!(
-        stdout.contains("deploy"),
+        stdout.contains("topology"),
         "Expected 'deploy' in help output"
     );
     assert!(
@@ -134,19 +134,19 @@ fn wh_help_works_offline() {
     );
 }
 
-/// AC #2: `wh deploy --help` works offline and lists deploy subcommands.
+/// AC #2: `wh topology --help` works offline and lists deploy subcommands.
 #[test]
-fn wh_deploy_help_works_offline() {
+fn wh_topology_help_works_offline() {
     let output = wh_bin()
-        .args(["deploy", "--help"])
+        .args(["topology", "--help"])
         .output()
         .expect("failed to execute wh");
 
-    assert!(output.status.success(), "Expected exit 0 for deploy --help");
+    assert!(output.status.success(), "Expected exit 0 for topology --help");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("lint"), "Expected 'lint' in deploy help");
-    assert!(stdout.contains("plan"), "Expected 'plan' in deploy help");
-    assert!(stdout.contains("apply"), "Expected 'apply' in deploy help");
+    assert!(stdout.contains("lint"), "Expected 'lint' in topology help");
+    assert!(stdout.contains("plan"), "Expected 'plan' in topology help");
+    assert!(stdout.contains("apply"), "Expected 'apply' in topology help");
 }
 
 /// AC #2: `wh ps --help` works offline and shows format flag.
@@ -188,16 +188,16 @@ fn wh_completion_help_works_offline() {
 // AC #3 & #4: Semantic exit codes
 // ============================================================
 
-/// AC #3: `wh deploy plan` with a topology exits with 0 (no change) or 2 (change detected).
+/// AC #3: `wh topology plan` with a topology exits with 0 (no change) or 2 (change detected).
 /// This test uses the unchanged fixture which produces a valid plan.
 #[test]
-fn deploy_plan_exits_zero_or_two() {
+fn topology_plan_exits_zero_or_two() {
     // Use the existing fixture which is a valid .wh topology
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/unchanged.wh");
 
     let output = Command::new(env!("CARGO_BIN_EXE_wh"))
-        .args(["deploy", "plan", &fixture.to_string_lossy()])
+        .args(["topology", "plan", &fixture.to_string_lossy()])
         .current_dir(std::env::temp_dir())
         .env("NO_COLOR", "1")
         .output()
@@ -215,9 +215,9 @@ fn deploy_plan_exits_zero_or_two() {
 
 /// AC #4: Error commands exit with code 1.
 #[test]
-fn deploy_plan_invalid_file_exits_one() {
+fn topology_plan_invalid_file_exits_one() {
     let output = Command::new(env!("CARGO_BIN_EXE_wh"))
-        .args(["deploy", "plan", "/nonexistent/file.wh"])
+        .args(["topology", "plan", "/nonexistent/file.wh"])
         .current_dir(std::env::temp_dir())
         .env("NO_COLOR", "1")
         .output()
@@ -227,11 +227,11 @@ fn deploy_plan_invalid_file_exits_one() {
     assert_eq!(code, 1, "Expected exit code 1 for error, got: {code}");
 }
 
-/// AC #4: `wh deploy apply` with error exits 1.
+/// AC #4: `wh topology apply` with error exits 1.
 #[test]
-fn deploy_apply_error_exits_one() {
+fn topology_apply_error_exits_one() {
     let output = Command::new(env!("CARGO_BIN_EXE_wh"))
-        .args(["deploy", "apply", "/nonexistent/file.wh", "--yes"])
+        .args(["topology", "apply", "/nonexistent/file.wh", "--yes"])
         .current_dir(std::env::temp_dir())
         .env("NO_COLOR", "1")
         .output()

@@ -50,7 +50,7 @@ fn ac2_optional_credential_skipped_on_empty_enter() {
 fn ac2_final_line_shows_next_command() {
     // Given: the wizard has completed (all credentials processed)
     // When: the summary is displayed
-    // Then: the final line shows the exact next command: `wh deploy apply topology.wh`
+    // Then: the final line shows the exact next command: `wh topology apply topology.wh`
     todo!("Implement: verify final output contains next command hint")
 }
 

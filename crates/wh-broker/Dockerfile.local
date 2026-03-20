@@ -1,0 +1,15 @@
+# Local development image for wh-broker.
+# Multi-stage build — compiles inside the container, no cross-compilation needed.
+# Usage: podman build -f crates/wh-broker/Dockerfile.local -t wh-broker:local .
+# (run from workspace root so Cargo workspace is available)
+
+FROM rust:1.85-slim-bookworm AS builder
+RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY . .
+RUN cargo build --release -p wh-broker
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/target/release/wh-broker /usr/local/bin/wh-broker
+ENTRYPOINT ["/usr/local/bin/wh-broker"]

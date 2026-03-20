@@ -1,4 +1,4 @@
-//! Acceptance tests for Story 2.7: `wh deploy destroy` and Guardrails
+//! Acceptance tests for Story 2.7: `wh topology destroy` and Guardrails
 //!
 //! AC #1: Deploy destroy stops all containers and records a git commit
 //! AC #2: Guardrails max_replicas blocks apply when exceeded (FR4)

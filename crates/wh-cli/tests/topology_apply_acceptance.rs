@@ -1,4 +1,4 @@
-//! Acceptance tests for Story 2.4: `wh deploy apply` — Provision Agents with Podman
+//! Acceptance tests for Story 2.4: `wh topology apply` — Provision Agents with Podman
 //!
 //! Tests validate the deploy apply pipeline: lint -> plan -> commit -> apply,
 //! including change counts, idempotency, git attribution, and podman integration.
@@ -73,10 +73,10 @@ streams:
 }
 
 // ============================================================
-// AC #3: `wh deploy apply --yes` applies without prompting
+// AC #3: `wh topology apply --yes` applies without prompting
 // ============================================================
 
-/// AC #3: `wh deploy apply --yes` applies without prompting.
+/// AC #3: `wh topology apply --yes` applies without prompting.
 /// Validates that the full pipeline (lint -> plan -> commit -> apply) succeeds.
 #[test]
 fn apply_yes_runs_without_prompting() {

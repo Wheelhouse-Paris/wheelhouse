@@ -1,5 +1,5 @@
 //! Acceptance tests for Story 7.1: Operator-Driven Plan/Apply Loop (Donna Mode)
-//! AC #1: `wh deploy plan --format json` returns structured JSON with has_changes, changes, plan_hash
+//! AC #1: `wh topology plan --format json` returns structured JSON with has_changes, changes, plan_hash
 //! AC #3: JSON output matches v1.0 fixture schema — all required fields present
 
 use std::process::Command;
@@ -9,14 +9,14 @@ fn wh_binary() -> Command {
 }
 
 /// AC #1: Given a first deploy (no prior state),
-/// When I run `wh deploy plan topology.wh --format json`,
+/// When I run `wh topology plan topology.wh --format json`,
 /// Then the JSON output includes `has_changes: true`, changes, and a `plan_hash` field,
 /// And the exit code is `2` (change detected).
 #[test]
 fn plan_json_includes_has_changes_and_plan_hash_when_changes_exist() {
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified.wh",
             "--format",
@@ -80,7 +80,7 @@ fn plan_json_returns_no_changes_when_topology_unchanged() {
     ).unwrap();
 
     let output = wh_binary()
-        .args(["deploy", "plan", "topology.wh", "--format", "json"])
+        .args(["topology", "plan", "topology.wh", "--format", "json"])
         .current_dir(temp_path)
         .output()
         .expect("failed to execute wh binary");
@@ -105,7 +105,7 @@ fn plan_json_returns_no_changes_when_topology_unchanged() {
 fn plan_json_schema_contains_all_v1_required_fields() {
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified.wh",
             "--format",
@@ -161,7 +161,7 @@ fn plan_malformed_wh_file_returns_error() {
 
     let output = wh_binary()
         .args([
-            "deploy",
+            "topology",
             "plan",
             bad_file.to_str().unwrap(),
             "--format",
@@ -181,7 +181,7 @@ fn plan_malformed_wh_file_returns_error() {
 #[test]
 fn plan_missing_file_returns_error() {
     let output = wh_binary()
-        .args(["deploy", "plan", "/nonexistent/path.wh", "--format", "json"])
+        .args(["topology", "plan", "/nonexistent/path.wh", "--format", "json"])
         .output()
         .expect("failed to execute wh binary");
 

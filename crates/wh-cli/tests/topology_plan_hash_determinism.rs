@@ -13,7 +13,7 @@ fn plan_hash_is_deterministic_for_same_topology_diff() {
     // Run plan twice on the same input
     let output1 = Command::new(env!("CARGO_BIN_EXE_wh"))
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified.wh",
             "--format",
@@ -24,7 +24,7 @@ fn plan_hash_is_deterministic_for_same_topology_diff() {
 
     let output2 = Command::new(env!("CARGO_BIN_EXE_wh"))
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified.wh",
             "--format",
@@ -62,7 +62,7 @@ fn plan_hash_is_canonical_independent_of_field_ordering() {
     // This test uses two .wh files that are semantically identical but may differ in YAML key order
     let output1 = Command::new(env!("CARGO_BIN_EXE_wh"))
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified.wh",
             "--format",
@@ -73,7 +73,7 @@ fn plan_hash_is_canonical_independent_of_field_ordering() {
 
     let output2 = Command::new(env!("CARGO_BIN_EXE_wh"))
         .args([
-            "deploy",
+            "topology",
             "plan",
             "tests/fixtures/modified_reordered.wh",
             "--format",

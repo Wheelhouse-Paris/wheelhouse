@@ -44,13 +44,13 @@ guardrails:
 ## Step 3 — Plan and apply
 
 ```sh
-wh deploy plan my-first-agent.wh
+wh topology plan my-first-agent.wh
 ```
 
 Review the plan, then apply:
 
 ```sh
-wh deploy apply my-first-agent.wh
+wh topology apply my-first-agent.wh
 ```
 
 ## Step 4 — Verify
