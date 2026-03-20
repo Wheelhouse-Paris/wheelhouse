@@ -471,6 +471,14 @@ pub fn destroy(
         }
     }
 
+    // Remove the topology network (ADR-024). Best-effort — log warn on failure.
+    if let Err(e) = podman::remove_network(&topology.name) {
+        tracing::warn!(
+            error = %e,
+            "failed to remove topology network during destroy — continuing"
+        );
+    }
+
     // Write cleared state to .wh/state.json
     let wh_dir = workspace_root.join(".wh");
     std::fs::create_dir_all(&wh_dir).map_err(DeployError::FileRead)?;
