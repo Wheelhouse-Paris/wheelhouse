@@ -5,7 +5,7 @@
 //! Podman is the only container provider for MVP (Docker explicitly excluded).
 
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -39,12 +39,22 @@ const BROKER_IMAGE: &str = "ghcr.io/wheelhouse-paris/wh-broker:latest";
 /// from the host via published port. Port 5557 = control REP socket.
 const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5557";
 
-/// Broker endpoint for host-side processes (surfaces, CLI).
+/// Broker endpoint for host-side processes (CLI).
 ///
-/// The broker container publishes ports on `127.0.0.1`. Native processes
-/// on the host connect via this address. Surfaces will move to containers
-/// in story 11-4 and use `BROKER_DNS_URL` instead.
+/// The broker container publishes ports on `127.0.0.1`. The CLI surface
+/// (the only native component) connects via this address. All other surfaces
+/// run as containers and use `BROKER_DNS_URL` instead.
+#[allow(dead_code)]
 const HOST_BROKER_URL: &str = "tcp://127.0.0.1:5555";
+
+/// Image prefix for surface containers (ADR-026).
+///
+/// Combined with the surface kind and tag to produce the full image name:
+/// `ghcr.io/wheelhouse-paris/wh-<kind>:<tag>`
+const SURFACE_IMAGE_PREFIX: &str = "ghcr.io/wheelhouse-paris/wh-";
+
+/// Default image tag for surface containers.
+const SURFACE_IMAGE_TAG: &str = "latest";
 
 /// ZMQ endpoint for the broker control socket (host-side, published port).
 ///
@@ -421,103 +431,77 @@ pub fn container_name(topology_name: &str, agent_name: &str) -> String {
     format!("wh-{topo}-{agent}")
 }
 
-/// Path to the PID file for a surface process.
+/// Build the container image name for a surface kind (ADR-026).
 ///
-/// Format: `~/.wh/pids/<topology>-<surface>.pid`
-pub fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let topo = sanitize_name(topology_name);
-    let surf = sanitize_name(surface_name);
-    home.join(".wh")
-        .join("pids")
-        .join(format!("{topo}-{surf}.pid"))
+/// `kind: telegram` → `ghcr.io/wheelhouse-paris/wh-telegram:latest`
+pub fn surface_image(kind: &str) -> String {
+    format!("{SURFACE_IMAGE_PREFIX}{kind}:{SURFACE_IMAGE_TAG}")
 }
 
-/// Resolve the binary path for a surface kind.
+/// Build command arguments for `podman run` for a surface container (ADR-026).
 ///
-/// `kind: telegram` → `wh-telegram`, etc.
-///
-/// Looks for the binary in the same directory as the current executable
-/// first (co-installed binaries), then falls back to bare name for PATH
-/// resolution.
-fn binary_for_surface_kind(kind: &str) -> String {
-    let name = format!("wh-{kind}");
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(&name);
-            if candidate.is_file() {
-                return candidate.to_string_lossy().into_owned();
-            }
+/// Returns the argument list for starting a surface as a Podman container
+/// on the topology network. Surface containers get:
+/// - `--network wh-<topology>` for DNS-based discovery
+/// - `-v wh-<topology>-users:/data/users` for user profile access
+/// - `-e WH_URL=tcp://wh-broker:5555` (DNS broker address)
+/// - `-e WH_SURFACE_NAME=<name>`, `-e WH_STREAM=<stream>`
+/// - Any surface-specific env vars (e.g., `TELEGRAM_BOT_TOKEN`)
+/// - Any extra_env vars (e.g., `CLAUDE_CODE_OAUTH_TOKEN`)
+pub fn build_surface_run_args(
+    topology_name: &str,
+    surface: &crate::deploy::Surface,
+    extra_env: &[(String, String)],
+) -> Vec<String> {
+    let name = container_name(topology_name, &surface.name);
+    let net_name = network_name(topology_name);
+    let users_volume = format!("wh-{}-users:/data/users", sanitize_name(topology_name));
+    let image = surface_image(&surface.kind);
+
+    let mut args = vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),
+        name,
+        "--network".to_string(),
+        net_name,
+        "-v".to_string(),
+        users_volume,
+        "-e".to_string(),
+        format!("WH_URL={BROKER_DNS_URL}"),
+        "-e".to_string(),
+        format!("WH_SURFACE_NAME={}", surface.name),
+    ];
+
+    if !surface.stream.is_empty() {
+        args.push("-e".to_string());
+        args.push(format!("WH_STREAM={}", surface.stream));
+    }
+
+    // Inject caller-provided secrets/env vars (e.g. CLAUDE_CODE_OAUTH_TOKEN)
+    for (key, value) in extra_env {
+        args.push("-e".to_string());
+        args.push(format!("{key}={value}"));
+    }
+
+    // Inject surface-specific env vars from topology spec
+    if let Some(env_map) = &surface.env {
+        for (key, value) in env_map {
+            args.push("-e".to_string());
+            args.push(format!("{key}={value}"));
         }
     }
-    name
-}
 
-/// Spawn a surface as a native process and record its PID.
-#[tracing::instrument(skip_all, fields(surface = surface_name, kind = kind))]
-pub fn spawn_surface_process(
-    topology_name: &str,
-    surface_name: &str,
-    kind: &str,
-    surface_env: &[(String, String)],
-) -> Result<(), DeployError> {
-    let binary = binary_for_surface_kind(kind);
-    let pid_path = surface_pid_path(topology_name, surface_name);
-
-    if let Some(parent) = pid_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| DeployError::ApplyFailed(format!("failed to create pids dir: {e}")))?;
+    // Serialize multi-chat configuration as JSON env var (Telegram surfaces)
+    if let Some(chats) = &surface.chats {
+        if let Ok(chats_json) = serde_json::to_string(chats) {
+            args.push("-e".to_string());
+            args.push(format!("WH_CHATS={chats_json}"));
+        }
     }
 
-    let log_path = pid_path.with_extension("log");
-    let log_file = std::fs::File::create(&log_path)
-        .map_err(|e| DeployError::ApplyFailed(format!("failed to create log file: {e}")))?;
-    let log_stderr = log_file
-        .try_clone()
-        .map_err(|e| DeployError::ApplyFailed(format!("failed to clone log fd: {e}")))?;
-
-    let mut cmd = Command::new(&binary);
-    cmd.env("WH_URL", HOST_BROKER_URL);
-    for (key, value) in surface_env {
-        cmd.env(key, value);
-    }
-    cmd.stdout(log_file).stderr(log_stderr);
-
-    let child = cmd
-        .spawn()
-        .map_err(|e| DeployError::PodmanFailed(format!("failed to spawn {binary}: {e}")))?;
-
-    let pid = child.id();
-    std::fs::write(&pid_path, pid.to_string())
-        .map_err(|e| DeployError::ApplyFailed(format!("failed to write pid file: {e}")))?;
-
-    tracing::info!(pid, binary = %binary, "surface process started");
-    Ok(())
-}
-
-/// Stop a surface native process using its PID file.
-///
-/// Sends SIGTERM; removes the PID file regardless of outcome.
-/// No-op if no PID file exists.
-pub fn kill_surface_process(topology_name: &str, surface_name: &str) -> Result<(), DeployError> {
-    let pid_path = surface_pid_path(topology_name, surface_name);
-
-    if !pid_path.exists() {
-        return Ok(());
-    }
-
-    let pid_str = std::fs::read_to_string(&pid_path)
-        .map_err(|e| DeployError::ApplyFailed(format!("failed to read pid file: {e}")))?;
-    let pid: u32 = pid_str
-        .trim()
-        .parse()
-        .map_err(|e| DeployError::ApplyFailed(format!("invalid pid: {e}")))?;
-
-    let _ = Command::new("kill").arg(pid.to_string()).output();
-    std::fs::remove_file(&pid_path).ok();
-
-    tracing::info!(pid, surface = %surface_name, "surface process stopped");
-    Ok(())
+    args.push(image);
+    args
 }
 
 /// Run a podman command with the given timeout.
@@ -914,15 +898,16 @@ pub fn provision_containers(
     };
 
     for change in changes {
-        // Surface changes — spawn/stop native process.
+        // Surface changes — container lifecycle (ADR-026).
         if let Some(surface_name) = parse_surface_name(&change.component) {
             if change.op == "-" {
-                match kill_surface_process(topology_name, surface_name) {
+                let cname = container_name(topology_name, surface_name);
+                match podman_stop(&cname) {
                     Ok(()) => result.surfaces_destroyed += 1,
                     Err(e) => tracing::error!(
                         surface = %surface_name,
                         error = %e,
-                        "failed to stop surface process — retry with `wh deploy apply`"
+                        "failed to stop surface container — retry with `wh deploy apply`"
                     ),
                 }
                 continue;
@@ -933,47 +918,49 @@ pub fn provision_containers(
                 continue;
             };
 
-            // Build env: extra_env + WH_SURFACE_NAME + WH_STREAM + surface-specific env
-            let mut surface_env = extra_env.to_vec();
-            surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
-            if !surface.stream.is_empty() {
-                surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
+            // CLI surface remains native — skip container creation (ADR-026 exception).
+            if surface.kind == "cli" {
+                tracing::debug!(surface = %surface.name, "CLI surface is native — skipping container creation");
+                continue;
             }
-            if let Some(env_map) = &surface.env {
-                for (key, value) in env_map {
-                    surface_env.push((key.clone(), value.clone()));
-                }
-            }
+
+            let run_args = build_surface_run_args(topology_name, surface, extra_env);
+            let run_args_ref: Vec<&str> = run_args.iter().map(|s| s.as_str()).collect();
 
             match change.op.as_str() {
                 "+" => {
-                    match spawn_surface_process(
-                        topology_name,
-                        &surface.name,
-                        &surface.kind,
-                        &surface_env,
+                    match run_podman_checked(
+                        find_podman().unwrap_or("podman"),
+                        &run_args_ref,
+                        PODMAN_RUN_TIMEOUT,
                     ) {
-                        Ok(()) => result.surfaces_created += 1,
+                        Ok(_) => {
+                            result.surfaces_created += 1;
+                            tracing::info!(surface = %surface.name, "surface container started");
+                        }
                         Err(e) => tracing::error!(
                             surface = %surface.name,
                             error = %e,
-                            "failed to start surface process — retry with `wh deploy apply`"
+                            "failed to start surface container — retry with `wh deploy apply`"
                         ),
                     }
                 }
                 "~" => {
-                    let _ = kill_surface_process(topology_name, &surface.name);
-                    match spawn_surface_process(
-                        topology_name,
-                        &surface.name,
-                        &surface.kind,
-                        &surface_env,
+                    let cname = container_name(topology_name, &surface.name);
+                    let _ = podman_stop(&cname);
+                    match run_podman_checked(
+                        find_podman().unwrap_or("podman"),
+                        &run_args_ref,
+                        PODMAN_RUN_TIMEOUT,
                     ) {
-                        Ok(()) => result.surfaces_changed += 1,
+                        Ok(_) => {
+                            result.surfaces_changed += 1;
+                            tracing::info!(surface = %surface.name, "surface container restarted");
+                        }
                         Err(e) => tracing::error!(
                             surface = %surface.name,
                             error = %e,
-                            "failed to restart surface process — retry with `wh deploy apply`"
+                            "failed to restart surface container — retry with `wh deploy apply`"
                         ),
                     }
                 }
@@ -1408,19 +1395,124 @@ mod tests {
     }
 
     #[test]
-    fn surface_pid_path_formats_correctly() {
-        let path = surface_pid_path("dev", "telegram");
-        assert!(path.to_string_lossy().contains("dev-telegram.pid"));
-        assert!(path.to_string_lossy().contains(".wh/pids"));
+    fn surface_image_formats_correctly() {
+        // ADR-026: surface image derived from kind.
+        assert_eq!(
+            surface_image("telegram"),
+            "ghcr.io/wheelhouse-paris/wh-telegram:latest"
+        );
+        assert_eq!(
+            surface_image("discord"),
+            "ghcr.io/wheelhouse-paris/wh-discord:latest"
+        );
     }
 
     #[test]
-    fn binary_for_surface_kind_returns_wh_prefix() {
-        // When no co-installed binary exists, falls back to bare name
-        let tg = binary_for_surface_kind("telegram");
-        assert!(tg.ends_with("wh-telegram"), "got: {tg}");
-        let cli = binary_for_surface_kind("cli");
-        assert!(cli.ends_with("wh-cli"), "got: {cli}");
+    fn build_surface_run_args_correct() {
+        let surface = crate::deploy::Surface {
+            name: "telegram".to_string(),
+            kind: "telegram".to_string(),
+            stream: "main".to_string(),
+            env: Some(std::collections::BTreeMap::from([(
+                "TELEGRAM_BOT_TOKEN".to_string(),
+                "tok123".to_string(),
+            )])),
+            chats: None,
+        };
+        let args = build_surface_run_args("dev", &surface, &[]);
+
+        assert_eq!(args[0], "run");
+        assert_eq!(args[1], "-d");
+        assert_eq!(args[2], "--name");
+        assert_eq!(args[3], "wh-dev-telegram");
+        assert_eq!(args[4], "--network");
+        assert_eq!(args[5], "wh-dev");
+        assert_eq!(args[6], "-v");
+        assert_eq!(args[7], "wh-dev-users:/data/users");
+        assert_eq!(args[8], "-e");
+        assert_eq!(args[9], "WH_URL=tcp://wh-broker:5555");
+        assert_eq!(args[10], "-e");
+        assert_eq!(args[11], "WH_SURFACE_NAME=telegram");
+        assert_eq!(args[12], "-e");
+        assert_eq!(args[13], "WH_STREAM=main");
+        // Surface-specific env
+        assert!(
+            args.iter().any(|a| a == "TELEGRAM_BOT_TOKEN=tok123"),
+            "should include surface spec env"
+        );
+        // Image is last
+        assert_eq!(
+            args.last().unwrap(),
+            "ghcr.io/wheelhouse-paris/wh-telegram:latest"
+        );
+    }
+
+    #[test]
+    fn build_surface_run_args_with_extra_env() {
+        let surface = crate::deploy::Surface {
+            name: "telegram".to_string(),
+            kind: "telegram".to_string(),
+            stream: "main".to_string(),
+            env: None,
+            chats: None,
+        };
+        let extra = vec![("SECRET_KEY".to_string(), "secret-val".to_string())];
+        let args = build_surface_run_args("dev", &surface, &extra);
+
+        assert!(
+            args.iter().any(|a| a == "SECRET_KEY=secret-val"),
+            "should include extra_env"
+        );
+    }
+
+    #[test]
+    fn build_surface_run_args_with_chats() {
+        let surface = crate::deploy::Surface {
+            name: "telegram".to_string(),
+            kind: "telegram".to_string(),
+            stream: String::new(),
+            env: None,
+            chats: Some(vec![crate::deploy::SurfaceChatConfig {
+                id: "@user".to_string(),
+                stream: Some("dm-stream".to_string()),
+                threads: None,
+            }]),
+        };
+        let args = build_surface_run_args("dev", &surface, &[]);
+
+        // Should have WH_CHATS env var with JSON
+        let chats_arg = args.iter().find(|a| a.starts_with("WH_CHATS="));
+        assert!(
+            chats_arg.is_some(),
+            "should have WH_CHATS env var for multi-chat config"
+        );
+        let chats_json = chats_arg.unwrap().strip_prefix("WH_CHATS=").unwrap();
+        assert!(
+            chats_json.contains("@user"),
+            "WH_CHATS should contain chat id"
+        );
+        // No WH_STREAM when stream is empty
+        assert!(
+            !args.iter().any(|a| a == "WH_STREAM="),
+            "should not have empty WH_STREAM"
+        );
+    }
+
+    #[test]
+    fn build_surface_run_args_no_stream_when_empty() {
+        let surface = crate::deploy::Surface {
+            name: "telegram".to_string(),
+            kind: "telegram".to_string(),
+            stream: String::new(),
+            env: None,
+            chats: None,
+        };
+        let args = build_surface_run_args("dev", &surface, &[]);
+
+        assert!(
+            !args.iter().any(|a| a.starts_with("WH_STREAM=")),
+            "should not inject WH_STREAM when stream is empty"
+        );
     }
 
     #[test]
@@ -1482,8 +1574,8 @@ mod tests {
     }
 
     #[test]
-    fn surface_env_merge_includes_spec_entries() {
-        // Simulate the env merge logic from provision_containers
+    fn surface_env_merge_includes_spec_entries_via_build_args() {
+        // ADR-026: verify build_surface_run_args includes all env vars.
         let extra_env: Vec<(String, String)> = vec![(
             "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
             "oauth-token-xxx".to_string(),
@@ -1499,38 +1591,30 @@ mod tests {
             chats: None,
         };
 
-        // Reproduce the merge logic from provision_containers
-        let mut surface_env = extra_env.to_vec();
-        surface_env.push(("WH_SURFACE_NAME".to_string(), surface.name.clone()));
-        if !surface.stream.is_empty() {
-            surface_env.push(("WH_STREAM".to_string(), surface.stream.clone()));
-        }
-        if let Some(env_map) = &surface.env {
-            for (key, value) in env_map {
-                surface_env.push((key.clone(), value.clone()));
-            }
-        }
+        let args = build_surface_run_args("dev", &surface, &extra_env);
 
-        // Verify all expected env vars are present
-        let keys: Vec<&str> = surface_env.iter().map(|(k, _)| k.as_str()).collect();
+        // Verify all expected env vars are present in the args
         assert!(
-            keys.contains(&"CLAUDE_CODE_OAUTH_TOKEN"),
+            args.iter()
+                .any(|a| a == "CLAUDE_CODE_OAUTH_TOKEN=oauth-token-xxx"),
             "should carry over extra_env"
         );
         assert!(
-            keys.contains(&"WH_SURFACE_NAME"),
+            args.iter().any(|a| a == "WH_SURFACE_NAME=telegram"),
             "should inject WH_SURFACE_NAME"
         );
-        assert!(keys.contains(&"WH_STREAM"), "should inject WH_STREAM");
         assert!(
-            keys.contains(&"TELEGRAM_BOT_TOKEN"),
+            args.iter().any(|a| a == "WH_STREAM=main"),
+            "should inject WH_STREAM"
+        );
+        assert!(
+            args.iter().any(|a| a == "TELEGRAM_BOT_TOKEN=tok123"),
             "should include surface spec env"
         );
         assert!(
-            keys.contains(&"CHAT_ID"),
+            args.iter().any(|a| a == "CHAT_ID=456"),
             "should include all surface spec env entries"
         );
-        assert_eq!(surface_env.len(), 5, "should have exactly 5 env entries");
     }
 
     #[test]
