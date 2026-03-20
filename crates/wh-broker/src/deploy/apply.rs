@@ -452,19 +452,25 @@ pub fn destroy(
         }
     }
 
-    // Stop all surface native processes
+    // Stop all surface containers (ADR-026).
     let mut surfaces_destroyed_count: usize = 0;
     for surface_def in &topology.surfaces {
-        match podman::kill_surface_process(&topology.name, &surface_def.name) {
+        // CLI surfaces are native — no container to stop.
+        if surface_def.kind == "cli" {
+            tracing::debug!(surface = %surface_def.name, "CLI surface is native — skipping container stop");
+            continue;
+        }
+        let cname = podman::container_name(&topology.name, &surface_def.name);
+        match podman::podman_stop(&cname) {
             Ok(()) => {
                 surfaces_destroyed_count += 1;
-                tracing::info!(surface = %surface_def.name, "surface process stopped");
+                tracing::info!(surface = %surface_def.name, "surface container stopped");
             }
             Err(e) => {
                 tracing::error!(
                     surface = %surface_def.name,
                     error = %e,
-                    "failed to stop surface process during destroy — continuing"
+                    "failed to stop surface container during destroy — continuing"
                 );
                 surfaces_destroyed_count += 1;
             }

@@ -383,68 +383,11 @@ pub async fn run_cli(stream: &str, output_format: OutputFormat) -> Result<(), Wh
     Ok(())
 }
 
-/// Extract environment variables from a running process by PID.
-///
-/// On macOS, uses `ps eww <pid>` which outputs the command line followed by
-/// environment variables. We parse key=value pairs from the output.
-/// Returns an empty vec if the process is not running or parsing fails.
-fn extract_env_from_pid(pid: u32) -> Vec<(String, String)> {
-    let output = std::process::Command::new("ps")
-        .args(["eww", "-o", "command", "-p", &pid.to_string()])
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // ps eww output: first line is header, second line is command + env.
-    // The env vars appear after the binary path, space-separated as KEY=VALUE.
-    let mut env_vars = Vec::new();
-    for line in stdout.lines().skip(1) {
-        // Split on whitespace; each token that contains '=' is an env var.
-        // Tokens before the first '=' token are the command and its args.
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        let mut found_env = false;
-        for token in &tokens {
-            if token.contains('=') {
-                found_env = true;
-            }
-            if found_env {
-                if let Some((key, value)) = token.split_once('=') {
-                    // Skip internal/system env vars
-                    if !key.is_empty()
-                        && !key.starts_with('_')
-                        && !key.starts_with("PS_")
-                        && key != "COMMAND"
-                    {
-                        env_vars.push((key.to_string(), value.to_string()));
-                    }
-                }
-            }
-        }
-    }
-    env_vars
-}
-
-/// Read the PID from a surface PID file, if it exists.
-fn read_surface_pid(topology_name: &str, surface_name: &str) -> Option<u32> {
-    let pid_path = wh_broker::deploy::podman::surface_pid_path(topology_name, surface_name);
-    if !pid_path.exists() {
-        return None;
-    }
-    let pid_str = std::fs::read_to_string(&pid_path).ok()?;
-    pid_str.trim().parse().ok()
-}
-
-/// Check if a process with the given PID is still alive.
-fn is_pid_alive(pid: u32) -> bool {
-    // Use kill -0 to check if process exists (does not send a signal)
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .output()
-        .is_ok_and(|o| o.status.success())
+/// Check if a surface container is currently running (ADR-026).
+#[allow(dead_code)]
+fn is_surface_container_running(topology_name: &str, surface_name: &str) -> bool {
+    let cname = wh_broker::deploy::podman::container_name(topology_name, surface_name);
+    wh_broker::deploy::podman::podman_is_running(&cname).unwrap_or(false)
 }
 
 /// Collect fresh environment variables for a surface (secrets + routing file).
@@ -520,36 +463,43 @@ pub fn execute_restart(name: &str) -> Result<(), WhError> {
             WhError::Other(format!("surface '{name}' not found in deployed topology"))
         })?;
 
-    let kind = surface.kind.clone();
     let topology_name = topology.name.clone();
 
-    // Check if the surface process is currently running
-    let existing_pid = read_surface_pid(&topology_name, name);
-    let is_running = existing_pid.is_some_and(is_pid_alive);
+    // CLI surfaces are native — cannot be restarted via container lifecycle.
+    if surface.kind == "cli" {
+        return Err(WhError::Other(
+            "CLI surface is native — restart is not supported via 'wh surface restart'."
+                .to_string(),
+        ));
+    }
 
-    // Collect environment variables
-    let surface_env = if is_running {
-        // AC-1: Extract env from running process (reuse exact deploy-time env)
-        let pid = existing_pid.unwrap();
-        let mut env = extract_env_from_pid(pid);
+    let cname = wh_broker::deploy::podman::container_name(&topology_name, name);
 
-        // If we got no env vars from ps, fall back to fresh collection
-        if env.is_empty() {
-            env = collect_fresh_env(&topology_name);
-        }
-        env
-    } else {
-        // AC-2: Not running — collect fresh env
-        collect_fresh_env(&topology_name)
-    };
+    // Stop existing container (best-effort — may not be running)
+    let _ = wh_broker::deploy::podman::podman_stop(&cname);
 
-    // Kill existing process (no-op if not running / no PID file)
-    wh_broker::deploy::podman::kill_surface_process(&topology_name, name)
-        .map_err(|e| WhError::Other(format!("failed to stop surface: {e}")))?;
+    // Collect extra env (secrets from keychain)
+    let extra_env = collect_fresh_env(&topology_name);
 
-    // Spawn new process
-    wh_broker::deploy::podman::spawn_surface_process(&topology_name, name, &kind, &surface_env)
-        .map_err(|e| WhError::Other(format!("failed to start surface: {e}")))?;
+    // Start new surface container (ADR-026)
+    let args =
+        wh_broker::deploy::podman::build_surface_run_args(&topology_name, surface, &extra_env);
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let podman = wh_broker::deploy::podman::find_podman()
+        .map_err(|e| WhError::Other(format!("podman not available: {e}")))?;
+
+    // Use the raw command since run_podman_checked is not public.
+    let output = std::process::Command::new(podman)
+        .args(&args_ref)
+        .output()
+        .map_err(|e| WhError::Other(format!("failed to start surface container: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WhError::Other(format!(
+            "failed to start surface container: {stderr}"
+        )));
+    }
 
     // AC-4: Success message
     println!("Restarted surface '{name}'.");
@@ -582,8 +532,20 @@ pub fn execute_stop(name: &str) -> Result<(), WhError> {
         )));
     }
 
-    wh_broker::deploy::podman::kill_surface_process(&topology_name, name)
-        .map_err(|e| WhError::Other(format!("failed to stop surface: {e}")))?;
+    // CLI surfaces are native — cannot be stopped via container lifecycle.
+    if topology
+        .surfaces
+        .iter()
+        .any(|s| s.name == name && s.kind == "cli")
+    {
+        return Err(WhError::Other(
+            "CLI surface is native — stop is not supported via 'wh surface stop'.".to_string(),
+        ));
+    }
+
+    let cname = wh_broker::deploy::podman::container_name(&topology_name, name);
+    wh_broker::deploy::podman::podman_stop(&cname)
+        .map_err(|e| WhError::Other(format!("failed to stop surface container: {e}")))?;
 
     println!("Stopped surface '{name}'.");
     Ok(())
@@ -711,22 +673,16 @@ mod tests {
     }
 
     #[test]
-    fn test_is_pid_alive_nonexistent_pid() {
-        // PID 999999 is very unlikely to exist
-        assert!(!is_pid_alive(999_999));
+    fn test_surface_container_name_deterministic() {
+        // ADR-026: surface container name follows same pattern as agents.
+        let cname = wh_broker::deploy::podman::container_name("dev", "telegram");
+        assert_eq!(cname, "wh-dev-telegram");
     }
 
     #[test]
-    fn test_extract_env_from_pid_nonexistent() {
-        let env = extract_env_from_pid(999_999);
-        assert!(
-            env.is_empty(),
-            "should return empty vec for nonexistent pid"
-        );
-    }
-
-    #[test]
-    fn test_read_surface_pid_no_file() {
-        assert!(read_surface_pid("nonexistent-topology", "nonexistent-surface").is_none());
+    fn test_surface_image_from_kind() {
+        // ADR-026: surface image derived from kind.
+        let image = wh_broker::deploy::podman::surface_image("telegram");
+        assert_eq!(image, "ghcr.io/wheelhouse-paris/wh-telegram:latest");
     }
 }

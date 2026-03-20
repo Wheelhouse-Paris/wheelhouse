@@ -122,8 +122,10 @@ pub struct Stream {
 /// A surface declaration within a topology.
 ///
 /// Surfaces connect external channels (Telegram, CLI, etc.) to streams.
-/// Each surface is provisioned as a native process (not a container).
-/// The binary is resolved from `kind`: `kind: telegram` -> `wh-telegram`.
+/// Each surface is provisioned as a Podman container on the topology network
+/// (ADR-026). The container image is derived from `kind`:
+/// `kind: telegram` -> `ghcr.io/wheelhouse-paris/wh-telegram:latest`.
+/// CLI surfaces are the exception and remain native (no container).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Surface {
     pub name: String,
