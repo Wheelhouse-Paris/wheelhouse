@@ -1,20 +1,21 @@
 //! Broker configuration.
 //!
-//! On Linux the bind address is `127.0.0.1` (loopback-only, ADR-001 / NFR-S1).
-//! On macOS, Podman runs containers inside a Linux VM and cannot reach the macOS
-//! loopback. The broker must bind to `0.0.0.0` so the Podman VM network can
-//! reach it via `host.containers.internal`. The macOS application firewall
-//! provides host-level protection.
+//! The broker runs inside a Podman container on an isolated topology network
+//! (ADR-025, supersedes ADR-001). It binds `0.0.0.0` inside the container —
+//! this is safe because the topology network provides isolation and ports are
+//! published on `127.0.0.1` only on the host.
+//!
 //! Ports are configurable via environment variables for development flexibility.
+//! Default data directory is `/data` (container convention, mounted from a
+//! named Podman volume).
 
 use std::path::{Path, PathBuf};
 
-/// Bind address: loopback on Linux (security invariant), all-interfaces on macOS
-/// to allow Podman containers to connect via the VM gateway.
-#[cfg(target_os = "macos")]
+/// Bind address: always `0.0.0.0` inside the container (ADR-025).
+///
+/// The broker runs on an isolated Podman network. Security is enforced by
+/// network isolation (ADR-024) and `127.0.0.1`-only port publishing on the host.
 const BIND_ADDRESS: &str = "0.0.0.0";
-#[cfg(not(target_os = "macos"))]
-const BIND_ADDRESS: &str = "127.0.0.1";
 
 /// Default ports for the broker sockets.
 const DEFAULT_PUB_PORT: u16 = 5555;
@@ -48,15 +49,12 @@ impl BrokerConfig {
     /// Create a new configuration from environment variables or defaults.
     ///
     /// Reads `WH_PUB_PORT`, `WH_SUB_PORT`, `WH_CONTROL_PORT` from the environment.
-    /// The bind address is always `127.0.0.1` and cannot be overridden.
+    /// The bind address is always `0.0.0.0` (container context, ADR-025).
+    /// Default data directory is `/data` (container volume mount point).
     pub fn from_env() -> Self {
         let data_dir = std::env::var("WH_DATA_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".wh")
-            });
+            .unwrap_or_else(|_| PathBuf::from("/data"));
 
         let compaction_interval_secs = std::env::var("WH_COMPACTION_INTERVAL_SECS")
             .ok()
@@ -93,11 +91,7 @@ impl BrokerConfig {
             control_port,
             data_dir: std::env::var("WH_DATA_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    dirs::home_dir()
-                        .unwrap_or_else(|| PathBuf::from("."))
-                        .join(".wh")
-                }),
+                .unwrap_or_else(|_| PathBuf::from("/data")),
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
             skills_repo: None,
             skills_allowlist: vec![],
@@ -122,22 +116,22 @@ impl BrokerConfig {
         }
     }
 
-    /// The bind address -- always `127.0.0.1` (security invariant).
+    /// The bind address — always `0.0.0.0` inside the container (ADR-025).
     pub fn bind_address(&self) -> &str {
         BIND_ADDRESS
     }
 
-    /// Full PUB socket endpoint: `tcp://127.0.0.1:{port}`.
+    /// Full PUB socket endpoint: `tcp://0.0.0.0:{port}`.
     pub fn pub_endpoint(&self) -> String {
         format!("tcp://{}:{}", BIND_ADDRESS, self.pub_port)
     }
 
-    /// Full SUB socket endpoint: `tcp://127.0.0.1:{port}`.
+    /// Full SUB socket endpoint: `tcp://0.0.0.0:{port}`.
     pub fn sub_endpoint(&self) -> String {
         format!("tcp://{}:{}", BIND_ADDRESS, self.sub_port)
     }
 
-    /// Full control socket endpoint: `tcp://127.0.0.1:{port}`.
+    /// Full control socket endpoint: `tcp://0.0.0.0:{port}`.
     pub fn control_endpoint(&self) -> String {
         format!("tcp://{}:{}", BIND_ADDRESS, self.control_port)
     }
@@ -191,9 +185,7 @@ impl Default for BrokerConfig {
             pub_port: DEFAULT_PUB_PORT,
             sub_port: DEFAULT_SUB_PORT,
             control_port: DEFAULT_CONTROL_PORT,
-            data_dir: dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".wh"),
+            data_dir: PathBuf::from("/data"),
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
             skills_repo: None,
             skills_allowlist: vec![],
@@ -206,31 +198,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_config_defaults_localhost() {
+    fn test_config_defaults_container() {
         let config = BrokerConfig::default();
-        assert_eq!(config.bind_address(), "127.0.0.1");
+        assert_eq!(config.bind_address(), "0.0.0.0");
         assert_eq!(config.pub_port(), 5555);
         assert_eq!(config.sub_port(), 5556);
         assert_eq!(config.control_port(), 5557);
-        assert!(config.pub_endpoint().starts_with("tcp://127.0.0.1:"));
-        assert!(config.sub_endpoint().starts_with("tcp://127.0.0.1:"));
-        assert!(config.control_endpoint().starts_with("tcp://127.0.0.1:"));
+        assert!(config.pub_endpoint().starts_with("tcp://0.0.0.0:"));
+        assert!(config.sub_endpoint().starts_with("tcp://0.0.0.0:"));
+        assert!(config.control_endpoint().starts_with("tcp://0.0.0.0:"));
+        assert_eq!(config.data_dir(), std::path::Path::new("/data"));
     }
 
     #[test]
-    fn test_config_address_not_configurable() {
-        // The bind address is hardcoded -- there is no setter or field to change it.
-        // This test verifies the invariant holds for any config creation method.
+    fn test_config_bind_address_always_all_interfaces() {
+        // ADR-025: broker runs inside a container on an isolated network.
+        // Bind address is always 0.0.0.0 — security is via network isolation.
         let config = BrokerConfig::default();
-        assert_eq!(config.bind_address(), "127.0.0.1");
+        assert_eq!(config.bind_address(), "0.0.0.0");
 
         let config = BrokerConfig::from_env();
-        assert_eq!(config.bind_address(), "127.0.0.1");
+        assert_eq!(config.bind_address(), "0.0.0.0");
 
         let config = BrokerConfig::with_ports(9999, 9998, 9997);
-        assert_eq!(config.bind_address(), "127.0.0.1");
-        // Even with custom ports, the address remains 127.0.0.1
-        assert!(config.pub_endpoint().starts_with("tcp://127.0.0.1:"));
+        assert_eq!(config.bind_address(), "0.0.0.0");
+        assert!(config.pub_endpoint().starts_with("tcp://0.0.0.0:"));
     }
 
     #[test]
@@ -239,8 +231,8 @@ mod tests {
         assert_eq!(config.pub_port(), 6000);
         assert_eq!(config.sub_port(), 6001);
         assert_eq!(config.control_port(), 6002);
-        assert_eq!(config.pub_endpoint(), "tcp://127.0.0.1:6000");
-        assert_eq!(config.sub_endpoint(), "tcp://127.0.0.1:6001");
-        assert_eq!(config.control_endpoint(), "tcp://127.0.0.1:6002");
+        assert_eq!(config.pub_endpoint(), "tcp://0.0.0.0:6000");
+        assert_eq!(config.sub_endpoint(), "tcp://0.0.0.0:6001");
+        assert_eq!(config.control_endpoint(), "tcp://0.0.0.0:6002");
     }
 }
