@@ -72,6 +72,7 @@ fn high_impact_change_with_low_threshold_requires_approval() {
             autonomous_apply_threshold: Some(ThresholdLevel::Low),
             ..Default::default()
         }),
+        broker: None,
     };
 
     // Signal triggers a scale from 1->2 = 100% increase = High impact
@@ -210,6 +211,7 @@ fn low_impact_change_with_low_threshold_proceeds_autonomously() {
             autonomous_apply_threshold: Some(ThresholdLevel::Low),
             ..Default::default()
         }),
+        broker: None,
     };
 
     // 5 -> 6 = 20% increase = Low impact
@@ -250,6 +252,7 @@ fn any_change_without_threshold_proceeds_autonomously() {
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
+        broker: None,
     };
 
     let eval = SignalEvaluation {
@@ -293,6 +296,7 @@ fn medium_threshold_allows_medium_but_blocks_high() {
             autonomous_apply_threshold: Some(ThresholdLevel::Medium),
             ..Default::default()
         }),
+        broker: None,
     };
 
     // 2 -> 3 = 50% = Medium impact -> should proceed with medium threshold
@@ -354,6 +358,7 @@ fn high_threshold_allows_all_changes() {
             autonomous_apply_threshold: Some(ThresholdLevel::High),
             ..Default::default()
         }),
+        broker: None,
     };
 
     // 1 -> 3 = 200% = High impact -> should still proceed with high threshold
@@ -475,6 +480,7 @@ fn classify_impact_high_for_large_scaling() {
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
+        broker: None,
     };
 
     // 1 -> 3 = 200% increase = High
@@ -500,6 +506,7 @@ fn classify_impact_low_for_small_increase() {
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
+        broker: None,
     };
 
     // 5 -> 6 = 20% = Low

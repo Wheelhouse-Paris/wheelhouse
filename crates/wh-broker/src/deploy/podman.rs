@@ -1266,6 +1266,7 @@ mod tests {
             &["main".to_string()],
             None,
             None,
+            None,
             &[],
             Some("wh-dev"),
         );

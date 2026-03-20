@@ -150,6 +150,7 @@ fn signal_evaluation_proposes_scale_up_on_timeout_pattern() {
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
+        broker: None,
     };
 
     let eval = evaluate_signal("4 daily timeouts on researcher", &topology);
@@ -170,6 +171,7 @@ fn signal_evaluation_returns_none_for_unrecognized_pattern() {
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
+        broker: None,
     };
 
     let eval = evaluate_signal("hello world nothing to see", &topology);
@@ -199,6 +201,7 @@ fn signal_evaluation_respects_guardrail_max_replicas() {
             max_replicas: Some(1),
             ..Default::default()
         }),
+        broker: None,
     };
 
     let eval = evaluate_signal("4 daily timeouts on researcher", &topology);
