@@ -20,25 +20,36 @@ const PODMAN_CMD_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for `podman machine start`.
 const PODMAN_MACHINE_START_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// Default broker endpoint for agent containers on Linux.
-const DEFAULT_BROKER_URL: &str = "tcp://127.0.0.1:5555";
-
-/// Broker endpoint for agent containers running on a Podman topology network.
+/// Broker endpoint for agent containers on the topology network (ADR-025).
 ///
-/// With network-per-topology isolation (ADR-024), all containers are on a named
-/// Podman network. `host.containers.internal` resolves to the host gateway on
-/// both macOS (Podman VM) and Linux, allowing containers to reach the native
-/// broker process. This replaces the previous `#[cfg(target_os)]` conditional.
-///
-/// When the broker becomes a container (story 11-3), this will change to
-/// `tcp://wh-broker:5555` (DNS-based discovery within the topology network).
-const CONTAINER_BROKER_URL: &str = "tcp://host.containers.internal:5555";
+/// All containers use DNS-based discovery within the Podman network.
+/// The broker container is named `wh-broker` (ADR-024) and agents
+/// connect via `tcp://wh-broker:5555`.
+const BROKER_DNS_URL: &str = "tcp://wh-broker:5555";
 
-/// TCP address used to probe whether the broker control socket is reachable.
-/// Port 5557 = control REP socket (matches DEFAULT_CONTROL_PORT in config.rs).
+/// Fixed container name for the broker (ADR-024).
+///
+/// No topology prefix — names are unique per network, not globally.
+const BROKER_CONTAINER_NAME: &str = "wh-broker";
+
+/// Default broker container image (ADR-028).
+const BROKER_IMAGE: &str = "ghcr.io/wheelhouse-paris/wh-broker:latest";
+
+/// TCP address used to probe whether the broker control socket is reachable
+/// from the host via published port. Port 5557 = control REP socket.
 const BROKER_CONTROL_ADDR: &str = "127.0.0.1:5557";
 
-/// ZMQ endpoint for the broker control socket.
+/// Broker endpoint for host-side processes (surfaces, CLI).
+///
+/// The broker container publishes ports on `127.0.0.1`. Native processes
+/// on the host connect via this address. Surfaces will move to containers
+/// in story 11-4 and use `BROKER_DNS_URL` instead.
+const HOST_BROKER_URL: &str = "tcp://127.0.0.1:5555";
+
+/// ZMQ endpoint for the broker control socket (host-side, published port).
+///
+/// Used by `register_stream_with_broker()` which runs on the host CLI,
+/// not inside a container.
 const BROKER_CONTROL_ENDPOINT: &str = "tcp://127.0.0.1:5557";
 
 /// Maximum time to wait for the broker to start after spawning it.
@@ -151,68 +162,64 @@ fn is_broker_reachable() -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok()
 }
 
-/// Find the wh-broker binary: same directory as the current executable, or PATH.
-fn find_broker_binary() -> Option<PathBuf> {
-    // Check the same directory as the currently running wh binary first
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("wh-broker");
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
-    // Fall back to PATH
-    if let Ok(path_var) = std::env::var("PATH") {
-        for dir in path_var.split(':') {
-            let candidate = Path::new(dir).join("wh-broker");
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
-}
-
-/// Ensure the Wheelhouse broker is running, starting it automatically if not.
+/// Ensure the broker is running as a Podman container on the topology network (ADR-025).
 ///
-/// Probes the broker control socket via TCP. If unreachable, spawns `wh-broker`
-/// as a detached background process (stdin/stdout/stderr to /dev/null) and polls
-/// until it becomes reachable (up to 5 seconds).
+/// If a container named `wh-broker` is already running, this is a no-op (idempotent).
+/// Otherwise, starts the broker container with:
+/// - `--network wh-<topology>` for DNS-based discovery
+/// - `-p 127.0.0.1:5555-5557:5555-5557` for host CLI access
+/// - `-v wh-<topology>-wal:/data` for WAL persistence
+/// - `-e WH_DATA_DIR=/data`
 ///
-/// This mirrors `ensure_podman_running()` — the broker is infrastructure, not a
-/// user-managed object, and must be running before agent containers start.
-pub fn ensure_broker_running() -> Result<(), DeployError> {
-    if is_broker_reachable() {
+/// After starting, polls the control socket via TCP until reachable (up to 5s).
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn ensure_broker_container(topology_name: &str) -> Result<(), DeployError> {
+    // Idempotent: skip if already running.
+    if podman_is_running(BROKER_CONTAINER_NAME)? {
+        tracing::info!("broker container already running");
         return Ok(());
     }
 
-    let broker_bin = find_broker_binary().ok_or_else(|| {
-        DeployError::ApplyFailed(
-            "wh-broker not found. Ensure it is installed alongside the wh CLI.".to_string(),
-        )
-    })?;
+    let podman = find_podman()?;
+    let net_name = network_name(topology_name);
+    let wal_volume = format!("wh-{}-wal", sanitize_name(topology_name));
+    let volume_mount = format!("{wal_volume}:/data");
 
-    tracing::info!(binary = %broker_bin.display(), "broker not running — spawning wh-broker");
-    eprintln!("  Starting Wheelhouse broker...");
+    let args = vec![
+        "run",
+        "-d",
+        "--name",
+        BROKER_CONTAINER_NAME,
+        "--network",
+        &net_name,
+        "-p",
+        "127.0.0.1:5555:5555",
+        "-p",
+        "127.0.0.1:5556:5556",
+        "-p",
+        "127.0.0.1:5557:5557",
+        "-v",
+        &volume_mount,
+        "-e",
+        "WH_DATA_DIR=/data",
+        BROKER_IMAGE,
+    ];
 
-    Command::new(&broker_bin)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| DeployError::ApplyFailed(format!("failed to spawn wh-broker: {e}")))?;
+    tracing::info!("starting broker container");
+    eprintln!("  Starting Wheelhouse broker container...");
+    run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT)?;
 
-    // Poll until reachable or timeout
+    // Poll until the control socket is reachable from the host (published port).
     let start = std::time::Instant::now();
     loop {
         if is_broker_reachable() {
-            eprintln!("  Wheelhouse broker started.");
+            tracing::info!("broker container ready");
+            eprintln!("  Wheelhouse broker container started.");
             return Ok(());
         }
         if start.elapsed() > BROKER_START_TIMEOUT {
             return Err(DeployError::ApplyFailed(
-                "wh-broker did not start in time. Run `wh broker logs` to debug.".to_string(),
+                "broker container started but control socket not reachable. Run `podman logs wh-broker` to debug.".to_string(),
             ));
         }
         std::thread::sleep(BROKER_POLL_INTERVAL);
@@ -470,7 +477,7 @@ pub fn spawn_surface_process(
         .map_err(|e| DeployError::ApplyFailed(format!("failed to clone log fd: {e}")))?;
 
     let mut cmd = Command::new(&binary);
-    cmd.env("WH_URL", DEFAULT_BROKER_URL);
+    cmd.env("WH_URL", HOST_BROKER_URL);
     for (key, value) in surface_env {
         cmd.env(key, value);
     }
@@ -592,7 +599,7 @@ pub fn build_run_args(
     network: Option<&str>,
 ) -> Vec<String> {
     let name = container_name(topology_name, agent_name);
-    let url = broker_url.unwrap_or(DEFAULT_BROKER_URL);
+    let url = broker_url.unwrap_or(BROKER_DNS_URL);
     let streams_csv = streams.join(",");
 
     let mut args = vec![
@@ -848,9 +855,9 @@ pub fn provision_containers(
         };
     }
 
-    // Ensure the broker is running before starting agent containers.
-    // Agents connect to the broker at startup, so it must be available first.
-    if let Err(e) = ensure_broker_running() {
+    // Start the broker container before any agent containers (ADR-025).
+    // Agents connect to the broker via DNS at startup, so it must be available first.
+    if let Err(e) = ensure_broker_container(topology_name) {
         tracing::error!(error = %e, "broker is not available");
         eprintln!("Error: {e}");
         return ApplyResult {
@@ -999,7 +1006,7 @@ pub fn provision_containers(
                     &agent.name,
                     &agent.image,
                     &agent.streams,
-                    Some(CONTAINER_BROKER_URL),
+                    Some(BROKER_DNS_URL),
                     persona_abs.as_deref(),
                     extra_env,
                     Some(&topo_network),
@@ -1063,7 +1070,7 @@ pub fn provision_containers(
                     &agent.name,
                     &agent.image,
                     &agent.streams,
-                    Some(CONTAINER_BROKER_URL),
+                    Some(BROKER_DNS_URL),
                     persona_abs.as_deref(),
                     extra_env,
                     Some(&topo_network),
@@ -1184,7 +1191,8 @@ mod tests {
         assert_eq!(args[2], "--name");
         assert_eq!(args[3], "wh-dev-researcher");
         assert_eq!(args[4], "-e");
-        assert_eq!(args[5], "WH_URL=tcp://127.0.0.1:5555");
+        // ADR-025: default broker URL uses DNS within the topology network.
+        assert_eq!(args[5], "WH_URL=tcp://wh-broker:5555");
         assert_eq!(args[6], "-e");
         assert_eq!(args[7], "WH_AGENT_NAME=researcher");
         assert_eq!(args[8], "-e");
@@ -1382,6 +1390,30 @@ mod tests {
         assert_eq!(parse_surface_name("surface cli"), Some("cli"));
         assert_eq!(parse_surface_name("agent researcher"), None);
         assert_eq!(parse_surface_name("stream main"), None);
+    }
+
+    #[test]
+    fn broker_dns_url_uses_container_name() {
+        // ADR-025: agents connect to broker via DNS within the topology network.
+        assert_eq!(BROKER_DNS_URL, "tcp://wh-broker:5555");
+    }
+
+    #[test]
+    fn broker_container_name_constant() {
+        // ADR-024: broker container has a fixed name, no topology prefix.
+        assert_eq!(BROKER_CONTAINER_NAME, "wh-broker");
+    }
+
+    #[test]
+    fn broker_image_constant() {
+        // ADR-028: broker image from GHCR.
+        assert!(BROKER_IMAGE.starts_with("ghcr.io/wheelhouse-paris/wh-broker:"));
+    }
+
+    #[test]
+    fn host_broker_url_uses_localhost() {
+        // Host-side processes (surfaces, CLI) connect via published ports.
+        assert_eq!(HOST_BROKER_URL, "tcp://127.0.0.1:5555");
     }
 
     #[test]
