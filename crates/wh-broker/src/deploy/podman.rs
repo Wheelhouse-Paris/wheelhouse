@@ -456,6 +456,8 @@ fn run_podman_checked(
 /// Returns the argument list (without the "podman" binary itself).
 /// When `persona_path` is provided, adds a read-only volume mount and
 /// `WH_PERSONA_PATH` environment variable for persona files.
+/// When `context_path` is provided, adds a read-only volume mount and
+/// `WH_CONTEXT_PATH` environment variable for per-stream context files.
 /// `extra_env` is a list of additional `(KEY, VALUE)` pairs injected as `-e` flags
 /// (used to pass secrets like `CLAUDE_CODE_OAUTH_TOKEN` from the CLI keychain).
 pub fn build_run_args(
@@ -465,6 +467,7 @@ pub fn build_run_args(
     streams: &[String],
     broker_url: Option<&str>,
     persona_path: Option<&str>,
+    context_path: Option<&str>,
     extra_env: &[(String, String)],
 ) -> Vec<String> {
     let name = container_name(topology_name, agent_name);
@@ -498,6 +501,14 @@ pub fn build_run_args(
         args.push("WH_PERSONA_PATH=/persona".to_string());
     }
 
+    // Add context volume mount and env var when configured (ADR-021)
+    if let Some(path) = context_path {
+        args.push("-v".to_string());
+        args.push(format!("{path}:/context:ro"));
+        args.push("-e".to_string());
+        args.push("WH_CONTEXT_PATH=/context".to_string());
+    }
+
     args.push(image.to_string());
     args
 }
@@ -506,6 +517,7 @@ pub fn build_run_args(
 ///
 /// Uses `podman run -d` with the appropriate environment variables.
 /// When `persona_path` is provided, mounts persona files read-only.
+/// When `context_path` is provided, mounts per-stream context files read-only.
 /// `extra_env` is forwarded to `build_run_args` for secret injection.
 /// Timeout: 120s (image pull may be slow on first run).
 #[tracing::instrument(skip_all, fields(agent = agent_name, topology = topology_name))]
@@ -516,6 +528,7 @@ pub fn podman_run(
     streams: &[String],
     broker_url: Option<&str>,
     persona_path: Option<&str>,
+    context_path: Option<&str>,
     extra_env: &[(String, String)],
 ) -> Result<(), DeployError> {
     let podman = find_podman()?;
@@ -526,6 +539,7 @@ pub fn podman_run(
         streams,
         broker_url,
         persona_path,
+        context_path,
         extra_env,
     );
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -631,6 +645,21 @@ fn resolve_persona_path(
         }
         _ => None,
     }
+}
+
+/// Resolve the context directory path for volume mounting.
+///
+/// Returns the absolute path to `.wh/context/` if the directory exists,
+/// or `None` if workspace_root is not available or the directory doesn't exist.
+fn resolve_context_path(workspace_root: Option<&std::path::Path>) -> Option<String> {
+    workspace_root.and_then(|ws_root| {
+        let context_dir = ws_root.join(".wh").join("context");
+        if context_dir.is_dir() {
+            Some(context_dir.to_string_lossy().to_string())
+        } else {
+            None
+        }
+    })
 }
 
 /// Provision containers based on plan changes.
@@ -811,6 +840,8 @@ pub fn provision_containers(
 
                 // Resolve persona path for volume mount (FR61)
                 let persona_abs = resolve_persona_path(agent, workspace_root);
+                // Resolve context path for volume mount (ADR-021)
+                let context_abs = resolve_context_path(workspace_root);
 
                 // Validate persona files before starting container (FR61)
                 // SOUL.md and IDENTITY.md are required — fail if missing
@@ -834,6 +865,7 @@ pub fn provision_containers(
                     &agent.streams,
                     Some(CONTAINER_BROKER_URL),
                     persona_abs.as_deref(),
+                    context_abs.as_deref(),
                     extra_env,
                 ) {
                     Ok(()) => result.created += 1,
@@ -871,6 +903,8 @@ pub fn provision_containers(
                 };
                 // Resolve persona path for volume mount (FR61)
                 let persona_abs = resolve_persona_path(agent, workspace_root);
+                // Resolve context path for volume mount (ADR-021)
+                let context_abs = resolve_context_path(workspace_root);
 
                 // Validate persona files before restarting container (FR61)
                 // SOUL.md and IDENTITY.md are required — fail if missing
@@ -897,6 +931,7 @@ pub fn provision_containers(
                     &agent.streams,
                     Some(CONTAINER_BROKER_URL),
                     persona_abs.as_deref(),
+                    context_abs.as_deref(),
                     extra_env,
                 ) {
                     Ok(()) => result.changed += 1,
@@ -949,6 +984,7 @@ mod tests {
             &["main".to_string()],
             None,
             None,
+            None,
             &[],
         );
         assert_eq!(args[0], "run");
@@ -973,6 +1009,7 @@ mod tests {
             &["events".to_string(), "logs".to_string()],
             Some("tcp://10.0.0.1:5555"),
             None,
+            None,
             &[],
         );
         assert_eq!(args[5], "WH_URL=tcp://10.0.0.1:5555");
@@ -988,6 +1025,7 @@ mod tests {
             &["main".to_string()],
             None,
             Some("/workspace/agents/donna"),
+            None,
             &[],
         );
         // Should contain volume mount
@@ -1013,6 +1051,7 @@ mod tests {
             "researcher",
             "r:latest",
             &["main".to_string()],
+            None,
             None,
             None,
             &[],

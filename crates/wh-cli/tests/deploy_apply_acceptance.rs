@@ -233,6 +233,7 @@ fn podman_module_builds_correct_run_command() {
         &["main".to_string()],
         None,
         None,
+        None,
         &[],
     );
 
