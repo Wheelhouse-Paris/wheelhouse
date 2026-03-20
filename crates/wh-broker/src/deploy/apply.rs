@@ -479,6 +479,14 @@ pub fn destroy(
         );
     }
 
+    // Remove named data volumes (ADR-027). Best-effort — log warn on failure.
+    if let Err(e) = podman::remove_volumes(&topology.name) {
+        tracing::warn!(
+            error = %e,
+            "failed to remove topology data volumes during destroy — continuing"
+        );
+    }
+
     // Write cleared state to .wh/state.json
     let wh_dir = workspace_root.join(".wh");
     std::fs::create_dir_all(&wh_dir).map_err(DeployError::FileRead)?;
