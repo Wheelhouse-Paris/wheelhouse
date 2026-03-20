@@ -285,6 +285,11 @@ pub fn sanitize_name(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
+/// Volume suffixes for named data volumes (ADR-027).
+///
+/// Each topology gets 5 named volumes: wal, users, skills, personas, context.
+const VOLUME_SUFFIXES: &[&str] = &["wal", "users", "skills", "personas", "context"];
+
 /// Build the Podman network name for a topology (ADR-024).
 ///
 /// Format: `wh-<sanitized_topology_name>`
@@ -335,6 +340,67 @@ pub fn remove_network(topology_name: &str) -> Result<(), DeployError> {
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         tracing::warn!(network = %net_name, error = %stderr, "failed to remove topology network");
+    }
+    Ok(())
+}
+
+/// Build the named volume names for a topology (ADR-027).
+///
+/// Returns a `Vec` of 5 volume names in deterministic order:
+/// `wh-<sanitized_topology>-{wal, users, skills, personas, context}`.
+pub fn volume_names(topology_name: &str) -> Vec<String> {
+    let topo = sanitize_name(topology_name);
+    VOLUME_SUFFIXES
+        .iter()
+        .map(|suffix| format!("wh-{topo}-{suffix}"))
+        .collect()
+}
+
+/// Create all named data volumes for the topology idempotently (ADR-027).
+///
+/// Runs `podman volume create <name> --ignore` for each of the 5 volumes.
+/// The `--ignore` flag makes this safe to call repeatedly — if a volume
+/// already exists, the command succeeds silently.
+///
+/// Fails fast on the first volume creation error (same pattern as
+/// `ensure_network()`).
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn ensure_volumes(topology_name: &str) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let names = volume_names(topology_name);
+
+    tracing::info!("ensuring topology data volumes exist");
+    for name in &names {
+        run_podman_checked(
+            podman,
+            &["volume", "create", name, "--ignore"],
+            PODMAN_CMD_TIMEOUT,
+        )?;
+    }
+    tracing::info!(count = names.len(), "topology data volumes ready");
+    Ok(())
+}
+
+/// Remove all named data volumes for the topology (ADR-027).
+///
+/// Runs `podman volume rm <name>` for each volume. Called during
+/// `deploy destroy` after all containers and the network have been removed.
+/// Best-effort: each volume removal is attempted independently. Failures
+/// are logged as warnings but do not abort the remaining removals.
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn remove_volumes(topology_name: &str) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let names = volume_names(topology_name);
+
+    tracing::info!("removing topology data volumes");
+    for name in &names {
+        let output = run_podman(podman, &["volume", "rm", name], PODMAN_CMD_TIMEOUT)?;
+        if output.status.success() {
+            tracing::info!(volume = %name, "volume removed");
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(volume = %name, error = %stderr, "failed to remove volume");
+        }
     }
     Ok(())
 }
@@ -767,6 +833,21 @@ pub fn provision_containers(
         };
     }
 
+    // Create named data volumes (ADR-027) before any container starts.
+    if let Err(e) = ensure_volumes(topology_name) {
+        tracing::error!(error = %e, "failed to create topology data volumes");
+        eprintln!("Error: {e}");
+        return ApplyResult {
+            created: 0,
+            changed: 0,
+            destroyed: 0,
+            streams_created,
+            surfaces_created: 0,
+            surfaces_changed: 0,
+            surfaces_destroyed: 0,
+        };
+    }
+
     // Ensure the broker is running before starting agent containers.
     // Agents connect to the broker at startup, so it must be available first.
     if let Err(e) = ensure_broker_running() {
@@ -1038,6 +1119,52 @@ mod tests {
     fn network_name_sanitizes_special_chars() {
         assert_eq!(network_name("my app"), "wh-my-app");
         assert_eq!(network_name("--bad--"), "wh-bad");
+    }
+
+    #[test]
+    fn volume_names_formats_correctly() {
+        let names = volume_names("dev");
+        assert_eq!(
+            names,
+            vec![
+                "wh-dev-wal",
+                "wh-dev-users",
+                "wh-dev-skills",
+                "wh-dev-personas",
+                "wh-dev-context",
+            ]
+        );
+    }
+
+    #[test]
+    fn volume_names_sanitizes_special_chars() {
+        let names = volume_names("my app");
+        assert_eq!(
+            names,
+            vec![
+                "wh-my-app-wal",
+                "wh-my-app-users",
+                "wh-my-app-skills",
+                "wh-my-app-personas",
+                "wh-my-app-context",
+            ]
+        );
+    }
+
+    #[test]
+    fn volume_names_count() {
+        let names = volume_names("dev");
+        assert_eq!(names.len(), 5);
+    }
+
+    #[test]
+    fn volume_suffixes_constant_has_five_entries() {
+        assert_eq!(VOLUME_SUFFIXES.len(), 5);
+        assert_eq!(VOLUME_SUFFIXES[0], "wal");
+        assert_eq!(VOLUME_SUFFIXES[1], "users");
+        assert_eq!(VOLUME_SUFFIXES[2], "skills");
+        assert_eq!(VOLUME_SUFFIXES[3], "personas");
+        assert_eq!(VOLUME_SUFFIXES[4], "context");
     }
 
     #[test]
