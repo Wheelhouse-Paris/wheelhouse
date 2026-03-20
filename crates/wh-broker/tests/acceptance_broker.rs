@@ -48,25 +48,26 @@ async fn send_control_command(endpoint: &str, command: &str) -> Value {
 }
 
 #[tokio::test]
-async fn test_broker_binds_localhost_only() {
+async fn test_broker_binds_all_interfaces_in_container() {
     let config = test_config();
 
-    // Verify all endpoints use 127.0.0.1
+    // ADR-025: broker runs inside a container on an isolated network.
+    // It binds 0.0.0.0 — security is via network isolation + 127.0.0.1 port publishing.
     assert!(
-        config.pub_endpoint().contains("127.0.0.1"),
-        "PUB endpoint must bind to 127.0.0.1"
+        config.pub_endpoint().contains("0.0.0.0"),
+        "PUB endpoint must bind to 0.0.0.0 (container context)"
     );
     assert!(
-        config.sub_endpoint().contains("127.0.0.1"),
-        "SUB endpoint must bind to 127.0.0.1"
+        config.sub_endpoint().contains("0.0.0.0"),
+        "SUB endpoint must bind to 0.0.0.0 (container context)"
     );
     assert!(
-        config.control_endpoint().contains("127.0.0.1"),
-        "Control endpoint must bind to 127.0.0.1"
+        config.control_endpoint().contains("0.0.0.0"),
+        "Control endpoint must bind to 0.0.0.0 (container context)"
     );
 
-    // Verify bind address is hardcoded
-    assert_eq!(config.bind_address(), "127.0.0.1");
+    // Verify bind address is 0.0.0.0
+    assert_eq!(config.bind_address(), "0.0.0.0");
 }
 
 #[tokio::test]

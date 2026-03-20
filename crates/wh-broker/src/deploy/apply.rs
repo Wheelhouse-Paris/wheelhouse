@@ -471,6 +471,15 @@ pub fn destroy(
         }
     }
 
+    // Stop and remove the broker container (ADR-025). Best-effort.
+    match podman::podman_stop("wh-broker") {
+        Ok(()) => tracing::info!("broker container stopped"),
+        Err(e) => tracing::warn!(
+            error = %e,
+            "failed to stop broker container during destroy — continuing"
+        ),
+    }
+
     // Remove the topology network (ADR-024). Best-effort — log warn on failure.
     if let Err(e) = podman::remove_network(&topology.name) {
         tracing::warn!(
