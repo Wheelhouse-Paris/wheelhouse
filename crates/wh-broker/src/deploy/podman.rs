@@ -23,16 +23,16 @@ const PODMAN_MACHINE_START_TIMEOUT: Duration = Duration::from_secs(90);
 /// Default broker endpoint for agent containers on Linux.
 const DEFAULT_BROKER_URL: &str = "tcp://127.0.0.1:5555";
 
-/// Broker endpoint for agent containers on macOS + Podman.
+/// Broker endpoint for agent containers running on a Podman topology network.
 ///
-/// On macOS, Podman runs containers in a Linux VM. `127.0.0.1` inside the
-/// container is the VM loopback, not the macOS host. `host.containers.internal`
-/// is a special hostname Podman resolves to the macOS host gateway (192.168.127.254),
-/// which reaches the broker bound on `0.0.0.0` on the macOS host.
-#[cfg(target_os = "macos")]
+/// With network-per-topology isolation (ADR-024), all containers are on a named
+/// Podman network. `host.containers.internal` resolves to the host gateway on
+/// both macOS (Podman VM) and Linux, allowing containers to reach the native
+/// broker process. This replaces the previous `#[cfg(target_os)]` conditional.
+///
+/// When the broker becomes a container (story 11-3), this will change to
+/// `tcp://wh-broker:5555` (DNS-based discovery within the topology network).
 const CONTAINER_BROKER_URL: &str = "tcp://host.containers.internal:5555";
-#[cfg(not(target_os = "macos"))]
-const CONTAINER_BROKER_URL: &str = DEFAULT_BROKER_URL;
 
 /// TCP address used to probe whether the broker control socket is reachable.
 /// Port 5557 = control REP socket (matches DEFAULT_CONTROL_PORT in config.rs).
@@ -285,6 +285,60 @@ pub fn sanitize_name(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
+/// Build the Podman network name for a topology (ADR-024).
+///
+/// Format: `wh-<sanitized_topology_name>`
+///
+/// Each topology gets its own isolated Podman network. All containers
+/// in the topology attach to this network for DNS-based discovery.
+pub fn network_name(topology_name: &str) -> String {
+    let topo = sanitize_name(topology_name);
+    format!("wh-{topo}")
+}
+
+/// Create the topology Podman network idempotently (ADR-024).
+///
+/// Runs `podman network create <name> --ignore`. The `--ignore` flag
+/// makes this safe to call repeatedly — if the network already exists,
+/// the command succeeds silently.
+///
+/// Returns an error if podman is not found or the command fails.
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn ensure_network(topology_name: &str) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let net_name = network_name(topology_name);
+
+    tracing::info!(network = %net_name, "ensuring topology network exists");
+    run_podman_checked(
+        podman,
+        &["network", "create", &net_name, "--ignore"],
+        PODMAN_CMD_TIMEOUT,
+    )?;
+    tracing::info!(network = %net_name, "topology network ready");
+    Ok(())
+}
+
+/// Remove the topology Podman network (ADR-024).
+///
+/// Runs `podman network rm <name>`. Called during `deploy destroy` after
+/// all containers have been stopped. Failure is logged but not fatal —
+/// the network may already be removed or may have lingering containers.
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn remove_network(topology_name: &str) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let net_name = network_name(topology_name);
+
+    tracing::info!(network = %net_name, "removing topology network");
+    let output = run_podman(podman, &["network", "rm", &net_name], PODMAN_CMD_TIMEOUT)?;
+    if output.status.success() {
+        tracing::info!(network = %net_name, "topology network removed");
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::warn!(network = %net_name, error = %stderr, "failed to remove topology network");
+    }
+    Ok(())
+}
+
 /// Build the deterministic container name for an agent.
 ///
 /// Format: `wh-<topology>-<agent>`
@@ -454,12 +508,15 @@ fn run_podman_checked(
 /// Build command arguments for `podman run`.
 ///
 /// Returns the argument list (without the "podman" binary itself).
+/// When `network` is provided, adds `--network <name>` to attach the
+/// container to the topology's isolated Podman network (ADR-024).
 /// When `persona_path` is provided, adds a read-only volume mount and
 /// `WH_PERSONA_PATH` environment variable for persona files.
 /// When `context_path` is provided, adds a read-only volume mount and
 /// `WH_CONTEXT_PATH` environment variable for per-stream context files.
 /// `extra_env` is a list of additional `(KEY, VALUE)` pairs injected as `-e` flags
 /// (used to pass secrets like `CLAUDE_CODE_OAUTH_TOKEN` from the CLI keychain).
+#[allow(clippy::too_many_arguments)]
 pub fn build_run_args(
     topology_name: &str,
     agent_name: &str,
@@ -469,6 +526,7 @@ pub fn build_run_args(
     persona_path: Option<&str>,
     context_path: Option<&str>,
     extra_env: &[(String, String)],
+    network: Option<&str>,
 ) -> Vec<String> {
     let name = container_name(topology_name, agent_name);
     let url = broker_url.unwrap_or(DEFAULT_BROKER_URL);
@@ -509,6 +567,12 @@ pub fn build_run_args(
         args.push("WH_CONTEXT_PATH=/context".to_string());
     }
 
+    // Attach to topology network (ADR-024)
+    if let Some(net) = network {
+        args.push("--network".to_string());
+        args.push(net.to_string());
+    }
+
     args.push(image.to_string());
     args
 }
@@ -518,8 +582,10 @@ pub fn build_run_args(
 /// Uses `podman run -d` with the appropriate environment variables.
 /// When `persona_path` is provided, mounts persona files read-only.
 /// When `context_path` is provided, mounts per-stream context files read-only.
+/// When `network` is provided, attaches the container to the named Podman network (ADR-024).
 /// `extra_env` is forwarded to `build_run_args` for secret injection.
 /// Timeout: 120s (image pull may be slow on first run).
+#[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(agent = agent_name, topology = topology_name))]
 pub fn podman_run(
     topology_name: &str,
@@ -530,6 +596,7 @@ pub fn podman_run(
     persona_path: Option<&str>,
     context_path: Option<&str>,
     extra_env: &[(String, String)],
+    network: Option<&str>,
 ) -> Result<(), DeployError> {
     let podman = find_podman()?;
     let args = build_run_args(
@@ -541,6 +608,7 @@ pub fn podman_run(
         persona_path,
         context_path,
         extra_env,
+        network,
     );
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
@@ -713,6 +781,21 @@ pub fn provision_containers(
         };
     }
 
+    // Create topology network (ADR-024) before any container starts.
+    if let Err(e) = ensure_network(topology_name) {
+        tracing::error!(error = %e, "failed to create topology network");
+        eprintln!("Error: {e}");
+        return ApplyResult {
+            created: 0,
+            changed: 0,
+            destroyed: 0,
+            streams_created,
+            surfaces_created: 0,
+            surfaces_changed: 0,
+            surfaces_destroyed: 0,
+        };
+    }
+
     // Ensure the broker is running before starting agent containers.
     // Agents connect to the broker at startup, so it must be available first.
     if let Err(e) = ensure_broker_running() {
@@ -728,6 +811,9 @@ pub fn provision_containers(
             surfaces_destroyed: 0,
         };
     }
+
+    // Pre-compute topology network name (ADR-024) for all agent containers.
+    let topo_network = network_name(topology_name);
 
     let mut result = ApplyResult {
         created: 0,
@@ -867,6 +953,7 @@ pub fn provision_containers(
                     persona_abs.as_deref(),
                     context_abs.as_deref(),
                     extra_env,
+                    Some(&topo_network),
                 ) {
                     Ok(()) => result.created += 1,
                     Err(e) => {
@@ -933,6 +1020,7 @@ pub fn provision_containers(
                     persona_abs.as_deref(),
                     context_abs.as_deref(),
                     extra_env,
+                    Some(&topo_network),
                 ) {
                     Ok(()) => result.changed += 1,
                     Err(e) => {
@@ -976,6 +1064,18 @@ mod tests {
     }
 
     #[test]
+    fn network_name_formats_correctly() {
+        assert_eq!(network_name("dev"), "wh-dev");
+        assert_eq!(network_name("my-app"), "wh-my-app");
+    }
+
+    #[test]
+    fn network_name_sanitizes_special_chars() {
+        assert_eq!(network_name("my app"), "wh-my-app");
+        assert_eq!(network_name("--bad--"), "wh-bad");
+    }
+
+    #[test]
     fn build_run_args_correct() {
         let args = build_run_args(
             "dev",
@@ -986,6 +1086,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         );
         assert_eq!(args[0], "run");
         assert_eq!(args[1], "-d");
@@ -998,6 +1099,32 @@ mod tests {
         assert_eq!(args[8], "-e");
         assert_eq!(args[9], "WH_STREAMS=main");
         assert_eq!(args[10], "researcher:latest");
+        // No --network when network is None
+        assert!(
+            !args.iter().any(|a| a == "--network"),
+            "should not have --network without network param"
+        );
+    }
+
+    #[test]
+    fn build_run_args_with_network() {
+        let args = build_run_args(
+            "dev",
+            "researcher",
+            "researcher:latest",
+            &["main".to_string()],
+            None,
+            None,
+            &[],
+            Some("wh-dev"),
+        );
+        let net_idx = args
+            .iter()
+            .position(|a| a == "--network")
+            .expect("should have --network flag");
+        assert_eq!(args[net_idx + 1], "wh-dev");
+        // Image should be the last arg
+        assert_eq!(args.last().unwrap(), "researcher:latest");
     }
 
     #[test]
@@ -1011,6 +1138,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         );
         assert_eq!(args[5], "WH_URL=tcp://10.0.0.1:5555");
         assert_eq!(args[9], "WH_STREAMS=events,logs");
@@ -1027,6 +1155,7 @@ mod tests {
             Some("/workspace/agents/donna"),
             None,
             &[],
+            None,
         );
         // Should contain volume mount
         let v_idx = args
@@ -1055,6 +1184,7 @@ mod tests {
             None,
             None,
             &[],
+            None,
         );
         assert!(
             !args
