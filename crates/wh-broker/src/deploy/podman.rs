@@ -306,11 +306,24 @@ pub fn surface_pid_path(topology_name: &str, surface_name: &str) -> PathBuf {
         .join(format!("{topo}-{surf}.pid"))
 }
 
-/// Resolve the binary name for a surface kind.
+/// Resolve the binary path for a surface kind.
 ///
 /// `kind: telegram` → `wh-telegram`, etc.
+///
+/// Looks for the binary in the same directory as the current executable
+/// first (co-installed binaries), then falls back to bare name for PATH
+/// resolution.
 fn binary_for_surface_kind(kind: &str) -> String {
-    format!("wh-{kind}")
+    let name = format!("wh-{kind}");
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join(&name);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    name
 }
 
 /// Spawn a surface as a native process and record its PID.
@@ -1099,8 +1112,11 @@ mod tests {
 
     #[test]
     fn binary_for_surface_kind_returns_wh_prefix() {
-        assert_eq!(binary_for_surface_kind("telegram"), "wh-telegram");
-        assert_eq!(binary_for_surface_kind("cli"), "wh-cli");
+        // When no co-installed binary exists, falls back to bare name
+        let tg = binary_for_surface_kind("telegram");
+        assert!(tg.ends_with("wh-telegram"), "got: {tg}");
+        let cli = binary_for_surface_kind("cli");
+        assert!(cli.ends_with("wh-cli"), "got: {cli}");
     }
 
     #[test]

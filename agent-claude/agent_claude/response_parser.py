@@ -59,15 +59,16 @@ def format_batch_instruction(streams: list[str]) -> str:
 
 
 def _strip_code_fences(text: str) -> str:
-    """Strip markdown code fences if present.
+    """Strip markdown code fences and surrounding text if present.
 
     Handles ```json ... ``` and ``` ... ``` wrapping that LLMs
-    sometimes produce despite instructions not to.
+    sometimes produce despite instructions not to.  Also tolerates
+    trailing commentary after the closing fence (a common LLM habit).
     """
     stripped = text.strip()
-    # Match ```json\n...\n``` or ```\n...\n```
-    m = re.match(
-        r"^```(?:json)?\s*\n(.*?)```\s*$", stripped, re.DOTALL
+    # Match ```json\n...\n``` with optional trailing text
+    m = re.search(
+        r"```(?:json)?\s*\n(.*?)```", stripped, re.DOTALL
     )
     if m:
         return m.group(1).strip()

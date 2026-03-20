@@ -200,6 +200,25 @@ class TestCodeFenceStripping:
         assert result is not None
         assert len(result) == 1
 
+    def test_json_code_fence_with_trailing_text(self) -> None:
+        """JSON wrapped in ```json ... ``` with trailing commentary is parsed."""
+        inner = json.dumps([{"stream": "wh-admin", "type": "TextMessage", "content": "Hi"}])
+        raw = f"```json\n{inner}\n```\n\nMessage envoyé! Tu veux tester autre chose ?"
+        result = parse_batch_response(raw)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["stream"] == "wh-admin"
+        assert result[0]["content"] == "Hi"
+
+    def test_code_fence_with_leading_and_trailing_text(self) -> None:
+        """JSON in fences with text before and after is parsed."""
+        inner = json.dumps([{"stream": "main", "type": "TextMessage", "content": "Ok"}])
+        raw = f"Here is the response:\n```json\n{inner}\n```\nDone!"
+        result = parse_batch_response(raw)
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["content"] == "Ok"
+
     def test_no_fence(self) -> None:
         """Raw JSON without fences works normally."""
         raw = json.dumps([{"stream": "main", "type": "TextMessage", "content": "Hi"}])
