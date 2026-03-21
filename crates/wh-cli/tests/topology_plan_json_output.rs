@@ -181,7 +181,13 @@ fn plan_malformed_wh_file_returns_error() {
 #[test]
 fn plan_missing_file_returns_error() {
     let output = wh_binary()
-        .args(["topology", "plan", "/nonexistent/path.wh", "--format", "json"])
+        .args([
+            "topology",
+            "plan",
+            "/nonexistent/path.wh",
+            "--format",
+            "json",
+        ])
         .output()
         .expect("failed to execute wh binary");
 

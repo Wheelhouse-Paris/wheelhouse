@@ -207,6 +207,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     "image": agent.image,
                     "replicas": agent.replicas,
                 })),
+                source_file: None,
             });
         }
     }
@@ -220,6 +221,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                 field: None,
                 from: None,
                 to: None,
+                source_file: None,
             });
         }
     }
@@ -234,6 +236,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("replicas".to_string()),
                     from: Some(serde_json::json!(current_agent.replicas)),
                     to: Some(serde_json::json!(desired_agent.replicas)),
+                    source_file: None,
                 });
             }
             if current_agent.image != desired_agent.image {
@@ -243,6 +246,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("image".to_string()),
                     from: Some(serde_json::json!(current_agent.image)),
                     to: Some(serde_json::json!(desired_agent.image)),
+                    source_file: None,
                 });
             }
             if current_agent.persona != desired_agent.persona {
@@ -252,6 +256,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("persona".to_string()),
                     from: Some(serde_json::json!(current_agent.persona)),
                     to: Some(serde_json::json!(desired_agent.persona)),
+                    source_file: None,
                 });
             }
         }
@@ -281,6 +286,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                 to: Some(serde_json::json!({
                     "provider": provider,
                 })),
+                source_file: None,
             });
         }
     }
@@ -293,6 +299,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                 field: None,
                 from: None,
                 to: None,
+                source_file: None,
             });
         }
     }
@@ -306,6 +313,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("retention".to_string()),
                     from: Some(serde_json::json!(current_stream.retention)),
                     to: Some(serde_json::json!(desired_stream.retention)),
+                    source_file: None,
                 });
             }
         }
@@ -335,6 +343,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     "kind": surface.kind,
                     "stream": surface.stream,
                 })),
+                source_file: None,
             });
         }
     }
@@ -348,6 +357,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                 field: None,
                 from: None,
                 to: None,
+                source_file: None,
             });
         }
     }
@@ -362,6 +372,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("stream".to_string()),
                     from: Some(serde_json::json!(current_surface.stream)),
                     to: Some(serde_json::json!(desired_surface.stream)),
+                    source_file: None,
                 });
             }
             if current_surface.kind != desired_surface.kind {
@@ -371,6 +382,7 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("kind".to_string()),
                     from: Some(serde_json::json!(current_surface.kind)),
                     to: Some(serde_json::json!(desired_surface.kind)),
+                    source_file: None,
                 });
             }
             if current_surface.env != desired_surface.env {
@@ -380,12 +392,32 @@ fn diff_topologies(current: &Topology, desired: &Topology) -> Vec<Change> {
                     field: Some("env".to_string()),
                     from: Some(serde_json::json!(current_surface.env)),
                     to: Some(serde_json::json!(desired_surface.env)),
+                    source_file: None,
                 });
             }
         }
     }
 
     changes
+}
+
+/// Enrich changes with source_file information from the component source map (E12-03).
+///
+/// Parses the component type and name from the `component` field (e.g., "agent researcher")
+/// and looks up the source file in the source map.
+fn enrich_changes_with_source(
+    changes: &mut [Change],
+    source_map: &crate::deploy::ComponentSourceMap,
+) {
+    for change in changes.iter_mut() {
+        // Parse "agent researcher" -> "agent:researcher"
+        if let Some((kind, name)) = change.component.split_once(' ') {
+            let key = format!("{kind}:{name}");
+            if let Some(file) = source_map.source_file(&key) {
+                change.source_file = Some(file.to_string());
+            }
+        }
+    }
 }
 
 /// Compute the canonical plan hash (SHA-256 over sorted, whitespace-normalized JSON).
@@ -464,7 +496,7 @@ pub fn plan_with_options(
 
     let current = load_current_state(workspace_root)?;
 
-    let changes = match &current {
+    let mut changes = match &current {
         Some(current_topo) => {
             let canonical_current = canonicalize_topology(current_topo.clone());
             diff_topologies(&canonical_current, &desired)
@@ -485,7 +517,12 @@ pub fn plan_with_options(
     };
 
     let has_changes = !changes.is_empty();
+    // Compute plan hash BEFORE enriching with source_file, so the hash
+    // is independent of which file each component came from (canonical ordering).
     let plan_hash = compute_plan_hash(&changes);
+
+    // Enrich changes with source file tracking (E12-03)
+    enrich_changes_with_source(&mut changes, &linted.source_map);
     let topology_name = desired.name.clone();
 
     // Guardrail validation (RT-04): check max_replicas constraint
@@ -938,6 +975,7 @@ mod tests {
                     field: None,
                     from: None,
                     to: Some(serde_json::json!({"image": "r:latest", "replicas": 1})),
+                    source_file: None,
                 },
                 Change {
                     op: "+".to_string(),
@@ -945,6 +983,7 @@ mod tests {
                     field: None,
                     from: None,
                     to: Some(serde_json::json!({"provider": "local"})),
+                    source_file: None,
                 },
             ],
             plan_hash: "sha256:abc123".to_string(),
@@ -1010,6 +1049,7 @@ mod tests {
                 field: None,
                 from: None,
                 to: None,
+                source_file: None,
             }],
             plan_hash: "sha256:abc".to_string(),
             topology_name: "dev".to_string(),

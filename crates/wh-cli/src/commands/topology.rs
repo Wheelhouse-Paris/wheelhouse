@@ -2,6 +2,8 @@
 //!
 //! Implements the operator-facing CLI for the topology pipeline.
 //! All output routed through the format switch (SCV-05).
+//! Supports both single `.wh` file paths and folders containing
+//! multiple `.wh` files (ADR-030: folder-based topology composition).
 
 use std::path::PathBuf;
 
@@ -17,18 +19,18 @@ use crate::output::{self, LintError, OutputFormat};
 /// Topology subcommands: lint, plan, apply, destroy.
 #[derive(Debug, Subcommand)]
 pub enum TopologyCommand {
-    /// Validate the syntax and semantics of a `.wh` topology file.
+    /// Validate the syntax and semantics of a `.wh` topology file or folder.
     Lint {
-        /// Path to the `.wh` file to validate.
-        file: PathBuf,
+        /// Path to a `.wh` file or folder containing `.wh` files.
+        path: PathBuf,
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
     },
     /// Preview changes before applying a topology
     Plan {
-        /// Path to the .wh topology file
-        file: PathBuf,
+        /// Path to a `.wh` file or folder containing `.wh` files.
+        path: PathBuf,
         /// Output format
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
@@ -42,8 +44,8 @@ pub enum TopologyCommand {
     },
     /// Apply a topology, optionally without prompting
     Apply {
-        /// Path to the .wh topology file
-        file: PathBuf,
+        /// Path to a `.wh` file or folder containing `.wh` files.
+        path: PathBuf,
         /// Skip interactive confirmation
         #[arg(long)]
         yes: bool,
@@ -56,8 +58,8 @@ pub enum TopologyCommand {
     },
     /// Destroy a deployed topology — stop all containers and clear state (FR3)
     Destroy {
-        /// Path to the .wh topology file
-        file: PathBuf,
+        /// Path to a `.wh` file or folder containing `.wh` files.
+        path: PathBuf,
         /// Skip interactive confirmation
         #[arg(long)]
         yes: bool,
@@ -74,36 +76,41 @@ impl TopologyCommand {
     /// Execute the topology subcommand. Returns the process exit code.
     pub fn execute(self) -> i32 {
         match self {
-            TopologyCommand::Lint { file, format } => execute_lint(&file, format),
+            TopologyCommand::Lint { path, format } => execute_lint(&path, format),
             TopologyCommand::Plan {
-                file,
+                path,
                 format,
                 force_destroy_all,
                 calling_agent,
-            } => execute_plan(&file, format, force_destroy_all, calling_agent.as_deref()),
+            } => execute_plan(&path, format, force_destroy_all, calling_agent.as_deref()),
             TopologyCommand::Apply {
-                file,
+                path,
                 yes,
                 format,
                 agent_name,
-            } => execute_apply(&file, yes, format, agent_name.as_deref()),
+            } => execute_apply(&path, yes, format, agent_name.as_deref()),
             TopologyCommand::Destroy {
-                file,
+                path,
                 yes,
                 format,
                 agent_name,
-            } => execute_destroy(&file, yes, format, agent_name.as_deref()),
+            } => execute_destroy(&path, yes, format, agent_name.as_deref()),
         }
     }
 }
 
-fn execute_lint(file: &std::path::Path, format: OutputFormat) -> i32 {
-    let (result, _linted) = match lint_engine::lint_file(file) {
+fn execute_lint(path: &std::path::Path, format: OutputFormat) -> i32 {
+    // If path is a directory, use folder-based lint (ADR-030, E12-02)
+    if path.is_dir() {
+        return execute_lint_folder(path, format);
+    }
+
+    let (result, _linted) = match lint_engine::lint_file(path) {
         Ok(r) => r,
         Err(LintError::FileReadError(e)) => {
             let msg = output::format_error(
                 "LINT_FILE_ERROR",
-                &format!("cannot read '{}': {e}", file.display()),
+                &format!("cannot read '{}': {e}", path.display()),
                 format,
             );
             eprintln!("{msg}");
@@ -129,7 +136,7 @@ fn execute_lint(file: &std::path::Path, format: OutputFormat) -> i32 {
                 eprintln!("{diag}");
             }
             if result.errors.is_empty() && result.warnings.is_empty() {
-                println!("{}: OK", file.display());
+                println!("{}: OK", path.display());
             }
         }
         OutputFormat::Json => {
@@ -173,13 +180,174 @@ fn execute_lint(file: &std::path::Path, format: OutputFormat) -> i32 {
     }
 }
 
+/// Lint a folder containing multiple `.wh` files (ADR-030, E12-02).
+///
+/// 1. Lint each `.wh` file individually — report per-file errors first.
+/// 2. If all files pass: validate the merged graph (cross-file duplicate detection).
+fn execute_lint_folder(dir: &std::path::Path, format: OutputFormat) -> i32 {
+    // Discover *.wh files
+    let mut wh_files: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if path.is_file() && path.extension().is_some_and(|ext| ext == "wh") {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Err(e) => {
+            let msg = output::format_error(
+                "LINT_FILE_ERROR",
+                &format!("cannot read directory '{}': {e}", dir.display()),
+                format,
+            );
+            eprintln!("{msg}");
+            return error::EXIT_ERROR;
+        }
+    };
+
+    if wh_files.is_empty() {
+        let msg = output::format_error(
+            "LINT_NO_FILES",
+            &format!("no .wh files found in folder '{}'", dir.display()),
+            format,
+        );
+        eprintln!("{msg}");
+        return error::EXIT_ERROR;
+    }
+
+    wh_files.sort_by(|a, b| {
+        a.file_name()
+            .unwrap_or_default()
+            .cmp(b.file_name().unwrap_or_default())
+    });
+
+    // Phase 1: Lint each file individually
+    let mut all_errors = Vec::new();
+    let mut all_warnings = Vec::new();
+    let mut had_per_file_errors = false;
+
+    for file in &wh_files {
+        match lint_engine::lint_file(file) {
+            Ok((result, _linted)) => {
+                all_errors.extend(result.errors.clone());
+                all_warnings.extend(result.warnings.clone());
+                if result.has_errors() {
+                    had_per_file_errors = true;
+                }
+            }
+            Err(LintError::FileReadError(e)) => {
+                let filename = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file.to_string_lossy().to_string());
+                all_errors.push(crate::lint::LintDiagnostic {
+                    file: filename,
+                    line: None,
+                    level: crate::lint::DiagnosticLevel::Error,
+                    message: format!("cannot read file: {e}"),
+                    hint: "check file permissions".to_string(),
+                });
+                had_per_file_errors = true;
+            }
+            Err(LintError::YamlParseError(detail)) => {
+                let filename = file
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file.to_string_lossy().to_string());
+                all_errors.push(crate::lint::LintDiagnostic {
+                    file: filename,
+                    line: None,
+                    level: crate::lint::DiagnosticLevel::Error,
+                    message: format!("YAML parse error: {detail}"),
+                    hint: "fix YAML syntax".to_string(),
+                });
+                had_per_file_errors = true;
+            }
+        }
+    }
+
+    // Phase 2: If per-file lint passed, validate merged graph (cross-file duplicates)
+    if !had_per_file_errors {
+        // Use broker-level merge which validates apiVersion consistency,
+        // name consistency, and detects duplicates
+        if let Err(e) = lint::lint(dir) {
+            all_errors.push(crate::lint::LintDiagnostic {
+                file: dir.to_string_lossy().to_string(),
+                line: None,
+                level: crate::lint::DiagnosticLevel::Error,
+                message: e.to_string(),
+                hint: "fix cross-file conflicts".to_string(),
+            });
+        }
+    }
+
+    // Output results
+    let has_errors = !all_errors.is_empty();
+
+    match format {
+        OutputFormat::Human => {
+            for diag in &all_errors {
+                eprintln!("{diag}");
+            }
+            for diag in &all_warnings {
+                eprintln!("{diag}");
+            }
+            if !has_errors && all_warnings.is_empty() {
+                println!("{}: OK ({} files)", dir.display(), wh_files.len());
+            }
+        }
+        OutputFormat::Json => {
+            if has_errors {
+                let envelope = serde_json::json!({
+                    "v": 1,
+                    "status": "error",
+                    "code": "LINT_ERROR",
+                    "message": "lint validation failed",
+                    "data": {
+                        "errors": all_errors,
+                        "warnings": all_warnings,
+                    }
+                });
+                println!("{}", serde_json::to_string_pretty(&envelope).unwrap());
+            } else {
+                use serde::Serialize;
+                #[derive(Serialize)]
+                struct LintJsonData {
+                    errors: Vec<crate::lint::LintDiagnostic>,
+                    warnings: Vec<crate::lint::LintDiagnostic>,
+                    files_count: usize,
+                }
+                let data = LintJsonData {
+                    errors: all_errors,
+                    warnings: all_warnings,
+                    files_count: wh_files.len(),
+                };
+                let envelope = output::OutputEnvelope::ok(data);
+                if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                    println!("{json}");
+                }
+            }
+        }
+    }
+
+    if has_errors {
+        error::EXIT_ERROR
+    } else {
+        error::EXIT_SUCCESS
+    }
+}
+
 fn execute_plan(
-    file: &PathBuf,
+    path: &PathBuf,
     format: OutputFormat,
     force_destroy_all: bool,
     calling_agent: Option<&str>,
 ) -> i32 {
-    let linted = match lint::lint(file) {
+    let linted = match lint::lint(path) {
         Ok(l) => l,
         Err(e) => {
             let msg = output::format_error(e.code(), &e.to_string(), format);
@@ -253,7 +421,7 @@ fn progress_done(msg: &str, is_tty: bool) {
     }
 }
 
-fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Option<&str>) -> i32 {
+fn execute_apply(path: &PathBuf, yes: bool, format: OutputFormat, agent_name: Option<&str>) -> i32 {
     let tty = is_tty();
 
     // AC #3: Non-interactive mode requires --yes
@@ -267,7 +435,7 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
         return error::EXIT_ERROR;
     }
 
-    let linted = match lint::lint(file) {
+    let linted = match lint::lint(path) {
         Ok(l) => l,
         Err(e) => {
             let msg = output::format_error(e.code(), &e.to_string(), format);
@@ -288,14 +456,23 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
 
     // Resolve Telegram surfaces regardless of topology changes — state may be missing
     // (e.g. first deploy after state file was deleted, or group migrated to supergroup).
-    let telegram_routing_file = match crate::commands::telegram::resolve_telegram_surfaces(file) {
-        Ok(path) => path,
-        Err(e) => {
-            let msg = output::format_error("TELEGRAM_RESOLVE_ERROR", &e, format);
-            eprintln!("{msg}");
-            return error::EXIT_ERROR;
-        }
+    // For folder-based topologies, use the source_path which is the directory itself.
+    let telegram_path = plan_output.source_path();
+    let telegram_resolve_path = if telegram_path.is_dir() {
+        // For folder-based composition, pick the first .wh file for telegram resolution
+        telegram_path.to_path_buf()
+    } else {
+        telegram_path.to_path_buf()
     };
+    let telegram_routing_file =
+        match crate::commands::telegram::resolve_telegram_surfaces(&telegram_resolve_path) {
+            Ok(path) => path,
+            Err(e) => {
+                let msg = output::format_error("TELEGRAM_RESOLVE_ERROR", &e, format);
+                eprintln!("{msg}");
+                return error::EXIT_ERROR;
+            }
+        };
 
     if !plan_output.has_changes() {
         match format {
@@ -389,7 +566,7 @@ fn execute_apply(file: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
 }
 
 fn execute_destroy(
-    file: &PathBuf,
+    path: &PathBuf,
     yes: bool,
     format: OutputFormat,
     agent_name: Option<&str>,
@@ -408,7 +585,7 @@ fn execute_destroy(
     }
 
     // Validate the topology file exists and is parseable
-    if let Err(e) = lint::lint(file) {
+    if let Err(e) = lint::lint(path) {
         let msg = output::format_error(e.code(), &e.to_string(), format);
         eprintln!("{msg}");
         return error::EXIT_ERROR;
@@ -418,7 +595,7 @@ fn execute_destroy(
     if !yes {
         eprintln!(
             "This will destroy all deployed components from topology '{}'.",
-            file.display()
+            path.display()
         );
         eprintln!("All Podman containers will be stopped and removed.");
         eprintln!();
@@ -431,7 +608,7 @@ fn execute_destroy(
 
     // Execute destroy
     progress_step("Destroying topology...", tty);
-    let destroy_result = match apply::destroy(file, agent_name) {
+    let destroy_result = match apply::destroy(path, agent_name) {
         Ok(r) => r,
         Err(e) => {
             progress_done("", tty);

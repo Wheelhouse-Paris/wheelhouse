@@ -1372,6 +1372,7 @@ mod tests {
             field: None,
             from: None,
             to: None,
+            source_file: None,
         }];
         let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None);
         assert_eq!(result.created, 0);
@@ -1428,6 +1429,7 @@ mod tests {
             field: None,
             from: None,
             to: None,
+            source_file: None,
         }];
         let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None);
         // Should skip gracefully, not panic, and not increment created
@@ -1526,8 +1528,8 @@ mod tests {
             "should bind-mount routing file into container"
         );
         assert!(
-            args.iter().any(|a| a
-                == "WH_TELEGRAM_ROUTING_FILE=/etc/wh/telegram-routing.json"),
+            args.iter()
+                .any(|a| a == "WH_TELEGRAM_ROUTING_FILE=/etc/wh/telegram-routing.json"),
             "should rewrite env var to container path"
         );
     }
@@ -1695,6 +1697,7 @@ mod tests {
                 field: None,
                 from: None,
                 to: None,
+                source_file: None,
             },
             Change {
                 op: "+".to_string(),
@@ -1702,6 +1705,7 @@ mod tests {
                 field: None,
                 from: None,
                 to: None,
+                source_file: None,
             },
             Change {
                 op: "+".to_string(),
@@ -1709,6 +1713,7 @@ mod tests {
                 field: None,
                 from: None,
                 to: None,
+                source_file: None,
             },
         ];
         // Count streams using the same logic as provision_containers
