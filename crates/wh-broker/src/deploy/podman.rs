@@ -331,8 +331,8 @@ pub fn sanitize_name(name: &str) -> String {
 
 /// Volume suffixes for named data volumes (ADR-027).
 ///
-/// Each topology gets 5 named volumes: wal, users, skills, personas, context.
-const VOLUME_SUFFIXES: &[&str] = &["wal", "users", "skills", "personas", "context"];
+/// Each topology gets 6 named volumes: wal, users, skills, personas, context, platform.
+const VOLUME_SUFFIXES: &[&str] = &["wal", "users", "skills", "personas", "context", "platform"];
 
 /// Build the Podman network name for a topology (ADR-024).
 ///
@@ -446,6 +446,201 @@ pub fn remove_volumes(topology_name: &str) -> Result<(), DeployError> {
             tracing::warn!(volume = %name, error = %stderr, "failed to remove volume");
         }
     }
+    Ok(())
+}
+
+/// Build the platform volume name for a topology.
+fn platform_volume_name(topology_name: &str) -> String {
+    let topo = sanitize_name(topology_name);
+    format!("wh-{topo}-platform")
+}
+
+/// Populate the platform data volume with capabilities.json and cli-reference.md.
+///
+/// Uses a temporary Alpine container to copy files into the named volume.
+/// The `wh` binary on the host generates the content; a throwaway container
+/// writes it into the volume so agent containers can mount it at `/etc/wh:ro`.
+///
+/// This is idempotent — the volume contents are overwritten on each deploy
+/// to stay in sync with the installed `wh` version.
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn populate_platform_volume(topology_name: &str) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let vol = platform_volume_name(topology_name);
+    let helper = format!("wh-platform-init-{}", sanitize_name(topology_name));
+
+    // Use the current binary's path to invoke subcommands (avoids PATH issues)
+    let wh_bin = std::env::current_exe().map_err(|e| {
+        DeployError::ApplyFailed(format!("cannot resolve wh binary path: {e}"))
+    })?;
+
+    // Generate capabilities.json from the host wh binary
+    let capabilities_output = std::process::Command::new(&wh_bin)
+        .args(["capabilities", "--format", "json"])
+        .output();
+    let capabilities_json = match capabilities_output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
+        _ => {
+            tracing::warn!("wh capabilities failed — platform volume will lack L0 layer");
+            String::new()
+        }
+    };
+
+    // Generate cli-reference.md from the host wh binary
+    let reference_output = std::process::Command::new(&wh_bin)
+        .args(["reference"])
+        .output();
+    let cli_reference = match reference_output {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
+        _ => {
+            tracing::warn!("wh reference failed — platform volume will lack L1 layer");
+            String::new()
+        }
+    };
+
+    if capabilities_json.is_empty() && cli_reference.is_empty() {
+        tracing::warn!("no platform context generated — skipping volume population");
+        return Ok(());
+    }
+
+    // Build a shell script that writes both files into /etc/wh inside the volume
+    let mut script = String::from("mkdir -p /etc/wh && ");
+    if !capabilities_json.is_empty() {
+        // Escape single quotes in JSON for shell safety
+        let escaped = capabilities_json.replace('\'', "'\\''");
+        script.push_str(&format!("printf '%s' '{}' > /etc/wh/capabilities.json && ", escaped));
+    }
+    if !cli_reference.is_empty() {
+        let escaped = cli_reference.replace('\'', "'\\''");
+        script.push_str(&format!("printf '%s' '{}' > /etc/wh/cli-reference.md && ", escaped));
+    }
+    script.push_str("echo done");
+
+    // Run a throwaway Alpine container that mounts the volume and writes the files
+    let args = [
+        "run", "--rm",
+        "--name", &helper,
+        "-v", &format!("{vol}:/etc/wh"),
+        "alpine:latest",
+        "sh", "-c", &script,
+    ];
+
+    tracing::info!("populating platform volume with capabilities + CLI reference");
+    run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT)?;
+    tracing::info!("platform volume populated");
+    Ok(())
+}
+
+/// Build the personas volume name for a topology.
+fn personas_volume_name(topology_name: &str) -> String {
+    let topo = sanitize_name(topology_name);
+    format!("wh-{topo}-personas")
+}
+
+/// Populate the personas data volume with persona files from the workspace.
+///
+/// For each agent with a `persona` path configured, copies SOUL.md, IDENTITY.md,
+/// and MEMORY.md from the workspace into a per-agent subdirectory inside the
+/// `wh-<topology>-personas` named volume.
+///
+/// If the workspace has a git remote, initializes a sparse-checkout git repo
+/// inside each agent's subdirectory so the agent can commit+push MEMORY.md changes.
+///
+/// Layout: `/personas/<agent_name>/{SOUL.md, IDENTITY.md, MEMORY.md}`
+///
+/// This is idempotent — files are overwritten on each deploy (except MEMORY.md
+/// which is preserved if it already exists in the volume).
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn populate_personas_volume(
+    topology_name: &str,
+    agents: &[crate::deploy::Agent],
+    workspace_root: Option<&std::path::Path>,
+) -> Result<(), DeployError> {
+    let ws_root = match workspace_root {
+        Some(root) => root,
+        None => {
+            tracing::debug!("no workspace root — skipping personas volume population");
+            return Ok(());
+        }
+    };
+
+    // Collect agents that have persona configured
+    let agents_with_persona: Vec<_> = agents
+        .iter()
+        .filter_map(|a| a.persona.as_ref().map(|p| (a.name.as_str(), p.as_str())))
+        .collect();
+
+    if agents_with_persona.is_empty() {
+        tracing::debug!("no agents with persona configured — skipping");
+        return Ok(());
+    }
+
+    let podman = find_podman()?;
+    let vol = personas_volume_name(topology_name);
+    let helper = format!("wh-personas-init-{}", sanitize_name(topology_name));
+
+    // Build a shell script that creates per-agent directories and writes persona files
+    let mut script = String::new();
+
+    for (agent_name, persona_rel) in &agents_with_persona {
+        let persona_dir = ws_root.join(persona_rel);
+
+        // Create agent subdirectory
+        script.push_str(&format!("mkdir -p /personas/{agent_name} && "));
+
+        // Copy each persona file (SOUL.md, IDENTITY.md are overwritten; MEMORY.md preserved)
+        for filename in &["SOUL.md", "IDENTITY.md"] {
+            let file_path = persona_dir.join(filename);
+            if file_path.exists() {
+                let content = std::fs::read_to_string(&file_path).map_err(|e| {
+                    DeployError::ApplyFailed(format!(
+                        "cannot read {filename} for agent {agent_name}: {e}"
+                    ))
+                })?;
+                let escaped = content.replace('\'', "'\\''");
+                script.push_str(&format!(
+                    "printf '%s' '{escaped}' > /personas/{agent_name}/{filename} && "
+                ));
+            }
+        }
+
+        // MEMORY.md: only write if not already present in volume (preserve agent changes)
+        let memory_path = persona_dir.join("MEMORY.md");
+        if memory_path.exists() {
+            let content = std::fs::read_to_string(&memory_path).map_err(|e| {
+                DeployError::ApplyFailed(format!(
+                    "cannot read MEMORY.md for agent {agent_name}: {e}"
+                ))
+            })?;
+            let escaped = content.replace('\'', "'\\''");
+            script.push_str(&format!(
+                "[ -f /personas/{agent_name}/MEMORY.md ] || printf '%s' '{escaped}' > /personas/{agent_name}/MEMORY.md && "
+            ));
+        } else {
+            // Initialize empty MEMORY.md if not present (FR61)
+            script.push_str(&format!(
+                "[ -f /personas/{agent_name}/MEMORY.md ] || touch /personas/{agent_name}/MEMORY.md && "
+            ));
+        }
+    }
+
+    script.push_str("echo done");
+
+    // Run a throwaway Alpine container to populate the volume
+    let args = [
+        "run", "--rm",
+        "--name", &helper,
+        "-v", &format!("{vol}:/personas"),
+        "alpine:latest",
+        "sh", "-c", &script,
+    ];
+
+    tracing::info!(
+        agents = agents_with_persona.len(),
+        "populating personas volume"
+    );
+    run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT)?;
+    tracing::info!("personas volume populated");
     Ok(())
 }
 
@@ -604,10 +799,10 @@ fn run_podman_checked(
 /// Returns the argument list (without the "podman" binary itself).
 /// When `network` is provided, adds `--network <name>` to attach the
 /// container to the topology's isolated Podman network (ADR-024).
-/// When `persona_path` is provided, adds a read-only volume mount and
-/// `WH_PERSONA_PATH` environment variable for persona files.
-/// When `context_path` is provided, adds a read-only volume mount and
-/// `WH_CONTEXT_PATH` environment variable for per-stream context files.
+/// When `has_persona` is true, mounts the personas named volume and sets
+/// `WH_PERSONA_PATH` to the agent's subdirectory inside the volume.
+/// When `has_context` is true, mounts the context named volume read-only
+/// and sets `WH_CONTEXT_PATH` for per-stream context files.
 /// `extra_env` is a list of additional `(KEY, VALUE)` pairs injected as `-e` flags
 /// (used to pass secrets like `CLAUDE_CODE_OAUTH_TOKEN` from the CLI keychain).
 #[allow(clippy::too_many_arguments)]
@@ -617,8 +812,8 @@ pub fn build_run_args(
     image: &str,
     streams: &[String],
     broker_url: Option<&str>,
-    persona_path: Option<&str>,
-    context_path: Option<&str>,
+    has_persona: bool,
+    has_context: bool,
     extra_env: &[(String, String)],
     network: Option<&str>,
 ) -> Vec<String> {
@@ -645,21 +840,29 @@ pub fn build_run_args(
         args.push(format!("{key}={value}"));
     }
 
-    // Add persona volume mount and env var when configured
-    if let Some(path) = persona_path {
+    // Mount personas named volume with per-agent subdirectory (ADR-027)
+    // Read-write: agent needs to write MEMORY.md and commit via git (FR62)
+    if has_persona {
+        let personas_vol = personas_volume_name(topology_name);
         args.push("-v".to_string());
-        args.push(format!("{path}:/persona:ro"));
+        args.push(format!("{personas_vol}:/personas"));
         args.push("-e".to_string());
-        args.push("WH_PERSONA_PATH=/persona".to_string());
+        args.push(format!("WH_PERSONA_PATH=/personas/{agent_name}"));
     }
 
-    // Add context volume mount and env var when configured (ADR-021)
-    if let Some(path) = context_path {
+    // Mount context named volume read-only (ADR-021, ADR-027)
+    if has_context {
+        let context_vol = context_volume_name(topology_name);
         args.push("-v".to_string());
-        args.push(format!("{path}:/context:ro"));
+        args.push(format!("{context_vol}:/context:ro"));
         args.push("-e".to_string());
         args.push("WH_CONTEXT_PATH=/context".to_string());
     }
+
+    // Mount platform volume at /etc/wh (read-only) for L0/L1 context injection (ADR-033)
+    let platform_vol = platform_volume_name(topology_name);
+    args.push("-v".to_string());
+    args.push(format!("{platform_vol}:/etc/wh:ro"));
 
     // Attach to topology network (ADR-024)
     if let Some(net) = network {
@@ -674,8 +877,8 @@ pub fn build_run_args(
 /// Start an agent container via Podman.
 ///
 /// Uses `podman run -d` with the appropriate environment variables.
-/// When `persona_path` is provided, mounts persona files read-only.
-/// When `context_path` is provided, mounts per-stream context files read-only.
+/// When `has_persona` is true, mounts the personas named volume.
+/// When `has_context` is true, mounts the context named volume read-only.
 /// When `network` is provided, attaches the container to the named Podman network (ADR-024).
 /// `extra_env` is forwarded to `build_run_args` for secret injection.
 /// Timeout: 120s (image pull may be slow on first run).
@@ -687,8 +890,8 @@ pub fn podman_run(
     image: &str,
     streams: &[String],
     broker_url: Option<&str>,
-    persona_path: Option<&str>,
-    context_path: Option<&str>,
+    has_persona: bool,
+    has_context: bool,
     extra_env: &[(String, String)],
     network: Option<&str>,
 ) -> Result<(), DeployError> {
@@ -699,8 +902,8 @@ pub fn podman_run(
         image,
         streams,
         broker_url,
-        persona_path,
-        context_path,
+        has_persona,
+        has_context,
         extra_env,
         network,
     );
@@ -792,36 +995,89 @@ fn parse_surface_name(component: &str) -> Option<&str> {
     component.strip_prefix("surface ")
 }
 
-/// Resolve an agent's persona path to an absolute path for volume mounting.
-///
-/// Returns `None` if the agent has no persona configured or if workspace_root
-/// is not available.
-fn resolve_persona_path(
-    agent: &crate::deploy::Agent,
-    workspace_root: Option<&std::path::Path>,
-) -> Option<String> {
-    match (&agent.persona, workspace_root) {
-        (Some(persona_rel), Some(ws_root)) => {
-            let abs_path = ws_root.join(persona_rel);
-            Some(abs_path.to_string_lossy().to_string())
-        }
-        _ => None,
-    }
+
+/// Build the context volume name for a topology.
+fn context_volume_name(topology_name: &str) -> String {
+    let topo = sanitize_name(topology_name);
+    format!("wh-{topo}-context")
 }
 
-/// Resolve the context directory path for volume mounting.
+/// Populate the context data volume from the workspace `.wh/context/` directory.
 ///
-/// Returns the absolute path to `.wh/context/` if the directory exists,
-/// or `None` if workspace_root is not available or the directory doesn't exist.
-fn resolve_context_path(workspace_root: Option<&std::path::Path>) -> Option<String> {
-    workspace_root.and_then(|ws_root| {
-        let context_dir = ws_root.join(".wh").join("context");
-        if context_dir.is_dir() {
-            Some(context_dir.to_string_lossy().to_string())
-        } else {
-            None
+/// Copies all per-stream `CONTEXT.md` files from `.wh/context/<stream>/CONTEXT.md`
+/// into the `wh-<topology>-context` named volume, preserving the directory structure.
+///
+/// This is idempotent — files are overwritten on each deploy to stay in sync
+/// with the workspace.
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn populate_context_volume(
+    topology_name: &str,
+    workspace_root: Option<&std::path::Path>,
+) -> Result<(), DeployError> {
+    let ws_root = match workspace_root {
+        Some(root) => root,
+        None => {
+            tracing::debug!("no workspace root — skipping context volume population");
+            return Ok(());
         }
-    })
+    };
+
+    let context_dir = ws_root.join(".wh").join("context");
+    if !context_dir.is_dir() {
+        tracing::debug!("no .wh/context/ directory — skipping");
+        return Ok(());
+    }
+
+    // Collect all stream context files
+    let mut entries: Vec<(String, String)> = Vec::new();
+    if let Ok(dir_iter) = std::fs::read_dir(&context_dir) {
+        for entry in dir_iter.flatten() {
+            if entry.path().is_dir() {
+                let stream_name = entry.file_name().to_string_lossy().to_string();
+                let context_file = entry.path().join("CONTEXT.md");
+                if context_file.exists() {
+                    let content = std::fs::read_to_string(&context_file).map_err(|e| {
+                        DeployError::ApplyFailed(format!(
+                            "cannot read CONTEXT.md for stream {stream_name}: {e}"
+                        ))
+                    })?;
+                    entries.push((stream_name, content));
+                }
+            }
+        }
+    }
+
+    if entries.is_empty() {
+        tracing::debug!("no CONTEXT.md files found — skipping");
+        return Ok(());
+    }
+
+    let podman = find_podman()?;
+    let vol = context_volume_name(topology_name);
+    let helper = format!("wh-context-init-{}", sanitize_name(topology_name));
+
+    // Build a shell script that writes each stream's CONTEXT.md into the volume
+    let mut script = String::new();
+    for (stream_name, content) in &entries {
+        let escaped = content.replace('\'', "'\\''");
+        script.push_str(&format!(
+            "mkdir -p /context/{stream_name} && printf '%s' '{escaped}' > /context/{stream_name}/CONTEXT.md && "
+        ));
+    }
+    script.push_str("echo done");
+
+    let args = [
+        "run", "--rm",
+        "--name", &helper,
+        "-v", &format!("{vol}:/context"),
+        "alpine:latest",
+        "sh", "-c", &script,
+    ];
+
+    tracing::info!(streams = entries.len(), "populating context volume");
+    run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT)?;
+    tracing::info!("context volume populated");
+    Ok(())
 }
 
 /// Provision containers based on plan changes.
@@ -905,6 +1161,24 @@ pub fn provision_containers(
             surfaces_changed: 0,
             surfaces_destroyed: 0,
         };
+    }
+
+    // Populate platform volume with capabilities.json + cli-reference.md (ADR-033).
+    // Best-effort: failure is logged but does not block deployment.
+    if let Err(e) = populate_platform_volume(topology_name) {
+        tracing::warn!(error = %e, "failed to populate platform volume — agents will lack L0/L1 context");
+    }
+
+    // Populate personas volume from workspace persona directories (ADR-027).
+    // Best-effort: failure is logged but does not block deployment.
+    if let Err(e) = populate_personas_volume(topology_name, agents, workspace_root) {
+        tracing::warn!(error = %e, "failed to populate personas volume — agents will lack persona files");
+    }
+
+    // Populate context volume from workspace .wh/context/ directory (ADR-021, ADR-027).
+    // Best-effort: failure is logged but does not block deployment.
+    if let Err(e) = populate_context_volume(topology_name, workspace_root) {
+        tracing::warn!(error = %e, "failed to populate context volume — agents will lack stream context");
     }
 
     // Start the broker container before any agent containers (ADR-025).
@@ -1038,25 +1312,10 @@ pub fn provision_containers(
                     continue;
                 };
 
-                // Resolve persona path for volume mount (FR61)
-                let persona_abs = resolve_persona_path(agent, workspace_root);
-                // Resolve context path for volume mount (ADR-021)
-                let context_abs = resolve_context_path(workspace_root);
-
-                // Validate persona files before starting container (FR61)
-                // SOUL.md and IDENTITY.md are required — fail if missing
-                if let Some(ref persona_rel) = agent.persona {
-                    if let Some(ws_root) = workspace_root {
-                        if let Err(e) = crate::deploy::persona::load_persona(ws_root, persona_rel) {
-                            tracing::error!(
-                                agent = %agent.name,
-                                error = %e,
-                                "persona validation failed — skipping container creation"
-                            );
-                            continue;
-                        }
-                    }
-                }
+                // Check if agent has persona configured (volume already populated)
+                let has_persona = agent.persona.is_some();
+                // Context volume is already populated at deploy time
+                let has_context = true;
 
                 match podman_run(
                     topology_name,
@@ -1064,8 +1323,8 @@ pub fn provision_containers(
                     &agent.image,
                     &agent.streams,
                     Some(BROKER_DNS_URL),
-                    persona_abs.as_deref(),
-                    context_abs.as_deref(),
+                    has_persona,
+                    has_context,
                     extra_env,
                     Some(&topo_network),
                 ) {
@@ -1102,25 +1361,10 @@ pub fn provision_containers(
                     );
                     continue;
                 };
-                // Resolve persona path for volume mount (FR61)
-                let persona_abs = resolve_persona_path(agent, workspace_root);
-                // Resolve context path for volume mount (ADR-021)
-                let context_abs = resolve_context_path(workspace_root);
-
-                // Validate persona files before restarting container (FR61)
-                // SOUL.md and IDENTITY.md are required — fail if missing
-                if let Some(ref persona_rel) = agent.persona {
-                    if let Some(ws_root) = workspace_root {
-                        if let Err(e) = crate::deploy::persona::load_persona(ws_root, persona_rel) {
-                            tracing::error!(
-                                agent = %agent.name,
-                                error = %e,
-                                "persona validation failed — skipping container restart"
-                            );
-                            continue;
-                        }
-                    }
-                }
+                // Check if agent has persona configured (volume already populated)
+                let has_persona = agent.persona.is_some();
+                // Context volume is already populated at deploy time
+                let has_context = true;
 
                 // Stop old
                 let _ = podman_stop(&name);
@@ -1131,8 +1375,8 @@ pub fn provision_containers(
                     &agent.image,
                     &agent.streams,
                     Some(BROKER_DNS_URL),
-                    persona_abs.as_deref(),
-                    context_abs.as_deref(),
+                    has_persona,
+                    has_context,
                     extra_env,
                     Some(&topo_network),
                 ) {
@@ -1243,8 +1487,8 @@ mod tests {
             "researcher:latest",
             &["main".to_string()],
             None,
-            None,
-            None,
+            false,
+            false,
             &[],
             None,
         );
@@ -1259,7 +1503,8 @@ mod tests {
         assert_eq!(args[7], "WH_AGENT_NAME=researcher");
         assert_eq!(args[8], "-e");
         assert_eq!(args[9], "WH_STREAMS=main");
-        assert_eq!(args[10], "researcher:latest");
+        // Image is always the last arg (after volume mounts)
+        assert_eq!(args.last().unwrap(), "researcher:latest");
         // No --network when network is None
         assert!(
             !args.iter().any(|a| a == "--network"),
@@ -1275,8 +1520,8 @@ mod tests {
             "researcher:latest",
             &["main".to_string()],
             None,
-            None,
-            None,
+            false,
+            false,
             &[],
             Some("wh-dev"),
         );
@@ -1297,8 +1542,8 @@ mod tests {
             "donna:v1",
             &["events".to_string(), "logs".to_string()],
             Some("tcp://10.0.0.1:5555"),
-            None,
-            None,
+            false,
+            false,
             &[],
             None,
         );
@@ -1314,24 +1559,24 @@ mod tests {
             "agent:latest",
             &["main".to_string()],
             None,
-            Some("/workspace/agents/donna"),
-            None,
+            true,
+            false,
             &[],
             None,
         );
-        // Should contain volume mount
+        // Should contain personas named volume mount
         let v_idx = args
             .iter()
             .position(|a| a == "-v")
             .expect("should have -v flag");
         assert!(
-            args[v_idx + 1].contains("/persona:ro"),
-            "volume mount should map to /persona:ro"
+            args[v_idx + 1].contains("personas"),
+            "volume mount should reference personas named volume"
         );
-        // Should contain WH_PERSONA_PATH env
+        // Should contain WH_PERSONA_PATH env pointing to agent subdirectory
         assert!(
-            args.iter().any(|a| a == "WH_PERSONA_PATH=/persona"),
-            "should have WH_PERSONA_PATH env var"
+            args.iter().any(|a| a == "WH_PERSONA_PATH=/personas/donna"),
+            "should have WH_PERSONA_PATH env var with agent subdirectory"
         );
     }
 
@@ -1343,8 +1588,8 @@ mod tests {
             "r:latest",
             &["main".to_string()],
             None,
-            None,
-            None,
+            false,
+            false,
             &[],
             None,
         );

@@ -210,11 +210,17 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
     let plan_hash = plan.plan_hash().to_string();
     let changes = plan.changes().to_vec();
 
-    let workspace_root = plan
-        .source_path()
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    // When source_path is a directory (folder-based composition), it IS the workspace root.
+    // When it's a file, the parent directory is the workspace root.
+    let source = plan.source_path();
+    let workspace_root = if source.is_dir() {
+        source
+    } else {
+        source
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+    };
 
     // Write the desired topology state to .wh/state.json
     let wh_dir = workspace_root.join(".wh");
@@ -225,10 +231,16 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
         .map_err(|e| DeployError::ApplyFailed(format!("failed to serialize state: {e}")))?;
     std::fs::write(&state_path, &state_json).map_err(DeployError::FileRead)?;
 
-    let wh_file_name = plan
-        .source_path()
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("topology.wh"));
+    // For folder-based topologies, stage all .wh files; for single-file, stage just that file.
+    let wh_file_name = if source.is_dir() {
+        None
+    } else {
+        Some(
+            source
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("topology.wh")),
+        )
+    };
 
     // Verify this is a git repository before attempting any git operations.
     let is_git_repo =
@@ -253,7 +265,12 @@ pub fn commit(plan: PlanOutput, agent_name: Option<&str>) -> Result<CommittedPla
     // The .wh/.gitignore excludes WAL, secrets, and lock files automatically.
     let stage_result = (|| -> Result<(), DeployError> {
         run_git_checked(workspace_root, &["add", ".wh/"])?;
-        run_git_checked(workspace_root, &["add", &wh_file_name.to_string_lossy()])?;
+        if let Some(name) = &wh_file_name {
+            run_git_checked(workspace_root, &["add", &name.to_string_lossy()])?;
+        } else {
+            // Folder-based: stage all .wh files in the workspace root
+            run_git_checked(workspace_root, &["add", "*.wh"])?;
+        }
         Ok(())
     })();
 
@@ -330,11 +347,17 @@ pub fn apply(
         });
     }
 
-    let workspace_root = committed
-        .source_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    // When source_path is a directory (folder-based composition), it IS the workspace root.
+    // When it's a file, the parent directory is the workspace root.
+    let workspace_root = if committed.source_path.is_dir() {
+        committed.source_path.as_path()
+    } else {
+        committed
+            .source_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+    };
 
     let result = podman::provision_containers(
         &committed.desired_topology.name,
@@ -401,10 +424,14 @@ pub fn destroy(
     agent_name: Option<&str>,
 ) -> Result<DestroyResult, DeployError> {
     let wh_path = wh_file_path.as_ref();
-    let workspace_root = wh_path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
+    let workspace_root = if wh_path.is_dir() {
+        wh_path
+    } else {
+        wh_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+    };
 
     let current_state = load_state(workspace_root)?;
 

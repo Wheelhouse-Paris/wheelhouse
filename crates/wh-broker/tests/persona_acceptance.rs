@@ -124,22 +124,22 @@ fn build_run_args_includes_persona_volume_when_set() {
         "agent-claude:latest",
         &["main".to_string()],
         None,
-        Some("/workspace/agents/donna/"),
-        None,
+        true,
+        false,
         &[],
         None,
     );
-    // Should include -v for persona mount
+    // Should include -v for personas named volume mount
     let has_volume = args
         .windows(2)
-        .any(|w| w[0] == "-v" && w[1].contains("/persona"));
+        .any(|w| w[0] == "-v" && w[1].contains("personas"));
     assert!(
         has_volume,
-        "Expected persona volume mount in args: {args:?}"
+        "Expected personas volume mount in args: {args:?}"
     );
 
-    // Should include WH_PERSONA_PATH env var
-    let has_env = args.iter().any(|a| a == "WH_PERSONA_PATH=/persona");
+    // Should include WH_PERSONA_PATH env var pointing to agent subdirectory
+    let has_env = args.iter().any(|a| a == "WH_PERSONA_PATH=/personas/donna");
     assert!(
         has_env,
         "Expected WH_PERSONA_PATH env var in args: {args:?}"
@@ -154,8 +154,8 @@ fn build_run_args_excludes_persona_when_not_set() {
         "researcher:latest",
         &["main".to_string()],
         None,
-        None,
-        None,
+        false,
+        false,
         &[],
         None,
     );
