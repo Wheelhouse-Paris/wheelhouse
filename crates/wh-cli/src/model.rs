@@ -67,6 +67,10 @@ pub struct AgentSpec {
 
     /// Streams this agent subscribes to. References must match declared stream names.
     pub streams: Option<Vec<String>>,
+
+    /// Whether this agent can create/modify `.wh` files and run `wh topology apply` (ADR-034).
+    /// Defaults to `false`. Must be declared in the `.wh` spec — not configurable at runtime (E12-13).
+    pub topology_edit: Option<bool>,
 }
 
 /// Stream specification within a `.wh` file.

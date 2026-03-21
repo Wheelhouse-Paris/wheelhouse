@@ -120,6 +120,10 @@ pub struct Agent {
     /// Optional list of skills available to this agent (FM-05 allowlist).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<SkillRefConfig>>,
+    /// Whether this agent can create/modify `.wh` files and run `wh topology apply` (ADR-034).
+    /// Defaults to `false`. Must be declared in the `.wh` spec — not configurable at runtime (E12-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topology_edit: Option<bool>,
 }
 
 fn default_replicas() -> u32 {
@@ -250,6 +254,9 @@ pub enum DeployError {
 
     #[error("approval required: {0}")]
     ApprovalRequired(String),
+
+    #[error("topology edit denied: {0}")]
+    TopologyEditDenied(String),
 }
 
 impl DeployError {
@@ -270,6 +277,7 @@ impl DeployError {
             DeployError::PersonaLoadFailed(_) => "PERSONA_LOAD_FAILED",
             DeployError::SecretsDetected(_) => "SECRETS_DETECTED",
             DeployError::ApprovalRequired(_) => "APPROVAL_REQUIRED",
+            DeployError::TopologyEditDenied(_) => "TOPOLOGY_EDIT_DENIED",
         }
     }
 }
@@ -610,6 +618,7 @@ agents:
                     persona: None,
                     skills_repo: None,
                     skills: None,
+                    topology_edit: None,
                 },
                 Agent {
                     name: "alpha".to_string(),
@@ -619,6 +628,7 @@ agents:
                     persona: None,
                     skills_repo: None,
                     skills: None,
+                    topology_edit: None,
                 },
             ],
             streams: vec![
@@ -743,6 +753,7 @@ streams:
                     name: "summarize".to_string(),
                     version: "1.0.0".to_string(),
                 }]),
+                topology_edit: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -1007,5 +1018,108 @@ broker:
             !yaml.contains("broker"),
             "broker: None should be omitted from YAML: {yaml}"
         );
+    }
+
+    #[test]
+    fn parse_topology_with_topology_edit_true() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: donna
+    image: agent-claude:latest
+    topology_edit: true
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.agents[0].topology_edit, Some(true));
+    }
+
+    #[test]
+    fn parse_topology_without_topology_edit_defaults_to_none() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.agents[0].topology_edit, None);
+    }
+
+    #[test]
+    fn topology_edit_false_explicit() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+    topology_edit: false
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert_eq!(topo.agents[0].topology_edit, Some(false));
+    }
+
+    #[test]
+    fn topology_edit_yaml_roundtrip() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            broker: None,
+            agents: vec![Agent {
+                name: "donna".to_string(),
+                image: "agent-claude:latest".to_string(),
+                replicas: 1,
+                streams: vec!["main".to_string()],
+                persona: None,
+                skills_repo: None,
+                skills: None,
+                topology_edit: Some(true),
+            }],
+            streams: vec![],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        assert!(
+            yaml.contains("topology_edit: true"),
+            "YAML should contain topology_edit: {yaml}"
+        );
+        let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.agents[0].topology_edit, Some(true));
+    }
+
+    #[test]
+    fn topology_edit_none_not_serialized() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            broker: None,
+            agents: vec![Agent {
+                name: "donna".to_string(),
+                image: "agent-claude:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+                persona: None,
+                skills_repo: None,
+                skills: None,
+                topology_edit: None,
+            }],
+            streams: vec![],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        assert!(
+            !yaml.contains("topology_edit"),
+            "topology_edit: None should be omitted from YAML: {yaml}"
+        );
+    }
+
+    #[test]
+    fn topology_edit_denied_error_code() {
+        let err = DeployError::TopologyEditDenied("test".to_string());
+        assert_eq!(err.code(), "TOPOLOGY_EDIT_DENIED");
     }
 }

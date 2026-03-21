@@ -421,6 +421,70 @@ fn progress_done(msg: &str, is_tty: bool) {
     }
 }
 
+/// Check whether an agent has `topology_edit: true` in the current topology state (ADR-034).
+///
+/// Returns `true` if the agent is authorized, `false` if denied (error already printed).
+/// The check loads `.wh/state.json` from the workspace root to find the agent's spec.
+/// If no state exists (first apply), the check loads the topology file being applied instead.
+fn check_topology_edit_permission(
+    path: &std::path::Path,
+    agent_name: &str,
+    format: OutputFormat,
+) -> bool {
+    let workspace_root = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+
+    // Try to load current state first; fall back to the file being applied
+    let topology = match apply::load_state(workspace_root) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            // No state yet — load the topology from path
+            match wh_broker::deploy::load_topology_from_path(path) {
+                Ok(t) => t.0,
+                Err(_) => return true, // Lint already validated; let plan step catch errors
+            }
+        }
+        Err(_) => return true, // Corrupt state — let plan step catch errors
+    };
+
+    // Look up the agent in the topology
+    let has_permission = topology
+        .agents
+        .iter()
+        .find(|a| a.name == agent_name)
+        .map(|spec| spec.topology_edit == Some(true));
+
+    match has_permission {
+        Some(true) => return true,
+        Some(false) => {} // Denied — fall through to error
+        None => {
+            // Agent not found in state — check the path being applied
+            if let Ok((desired, _)) = wh_broker::deploy::load_topology_from_path(path) {
+                let desired_has = desired
+                    .agents
+                    .iter()
+                    .find(|a| a.name == agent_name)
+                    .map(|spec| spec.topology_edit == Some(true));
+                if desired_has == Some(true) {
+                    return true;
+                }
+            } else {
+                return true; // Let plan step catch the error
+            }
+        }
+    }
+
+    let msg = output::format_error(
+        "TOPOLOGY_EDIT_DENIED",
+        &format!("agent '{agent_name}' does not have topology_edit capability"),
+        format,
+    );
+    eprintln!("{msg}");
+    false
+}
+
 fn execute_apply(path: &PathBuf, yes: bool, format: OutputFormat, agent_name: Option<&str>) -> i32 {
     let tty = is_tty();
 
@@ -443,6 +507,14 @@ fn execute_apply(path: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
             return error::EXIT_ERROR;
         }
     };
+
+    // ADR-034: Check topology_edit authorization when invoked by an agent.
+    // Operator mode (agent_name is None) always proceeds without checking.
+    if let Some(agent) = agent_name {
+        if !check_topology_edit_permission(path, agent, format) {
+            return error::EXIT_ERROR;
+        }
+    }
 
     // Use plan_with_options to ensure self-destruct detection (CM-05)
     let plan_output = match plan::plan_with_options(linted, false) {

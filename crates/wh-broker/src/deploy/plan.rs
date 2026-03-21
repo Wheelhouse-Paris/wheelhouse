@@ -667,6 +667,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -714,6 +715,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -837,6 +839,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -881,6 +884,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -931,6 +935,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -1088,6 +1093,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -1144,6 +1150,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![],
             surfaces: vec![Surface {
@@ -1202,6 +1209,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![
                 Stream {
@@ -1277,6 +1285,7 @@ mod tests {
                 persona: None,
                 skills_repo: None,
                 skills: None,
+                topology_edit: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
