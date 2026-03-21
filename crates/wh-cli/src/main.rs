@@ -5,6 +5,7 @@
 
 use clap::Parser;
 
+use wh_cli::commands::capabilities;
 use wh_cli::commands::completion;
 use wh_cli::commands::logs;
 use wh_cli::commands::ps;
@@ -29,6 +30,10 @@ async fn main() {
     };
 
     match command {
+        Commands::Capabilities(args) => {
+            let exit_code = capabilities::execute(&args);
+            std::process::exit(exit_code);
+        }
         Commands::Ps(args) => {
             let fmt = args.format;
             if let Err(e) = ps::execute(&args).await {
