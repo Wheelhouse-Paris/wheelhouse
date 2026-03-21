@@ -18,6 +18,7 @@ use commands::doctor::DoctorArgs;
 use commands::logs::LogsArgs;
 use commands::memory::MemoryCommand;
 use commands::ps::PsArgs;
+use commands::reference::ReferenceArgs;
 use commands::secrets::SecretsCmd;
 use commands::stream::StreamCommand;
 use commands::surface::SurfaceCommand;
@@ -91,4 +92,6 @@ pub enum Commands {
         #[command(subcommand)]
         command: TelegramCommand,
     },
+    /// Print the full CLI reference document (all commands, flags, exit codes).
+    Reference(ReferenceArgs),
 }

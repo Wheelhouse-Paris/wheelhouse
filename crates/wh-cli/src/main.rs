@@ -8,6 +8,7 @@ use clap::Parser;
 use wh_cli::commands::completion;
 use wh_cli::commands::logs;
 use wh_cli::commands::ps;
+use wh_cli::commands::reference;
 use wh_cli::commands::status;
 use wh_cli::commands::stream;
 use wh_cli::commands::surface::{self, SurfaceCommand};
@@ -149,6 +150,9 @@ async fn main() {
         Commands::Doctor(args) => {
             let exit_code = args.execute();
             std::process::exit(exit_code);
+        }
+        Commands::Reference(args) => {
+            reference::execute(&args);
         }
         Commands::Telegram { command } => {
             if let Err(e) = telegram::execute(&command).await {

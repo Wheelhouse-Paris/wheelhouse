@@ -1526,8 +1526,8 @@ mod tests {
             "should bind-mount routing file into container"
         );
         assert!(
-            args.iter().any(|a| a
-                == "WH_TELEGRAM_ROUTING_FILE=/etc/wh/telegram-routing.json"),
+            args.iter()
+                .any(|a| a == "WH_TELEGRAM_ROUTING_FILE=/etc/wh/telegram-routing.json"),
             "should rewrite env var to container path"
         );
     }

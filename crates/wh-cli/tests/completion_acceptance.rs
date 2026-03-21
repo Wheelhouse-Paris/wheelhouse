@@ -142,11 +142,17 @@ fn wh_topology_help_works_offline() {
         .output()
         .expect("failed to execute wh");
 
-    assert!(output.status.success(), "Expected exit 0 for topology --help");
+    assert!(
+        output.status.success(),
+        "Expected exit 0 for topology --help"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("lint"), "Expected 'lint' in topology help");
     assert!(stdout.contains("plan"), "Expected 'plan' in topology help");
-    assert!(stdout.contains("apply"), "Expected 'apply' in topology help");
+    assert!(
+        stdout.contains("apply"),
+        "Expected 'apply' in topology help"
+    );
 }
 
 /// AC #2: `wh ps --help` works offline and shows format flag.

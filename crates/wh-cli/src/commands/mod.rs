@@ -6,6 +6,7 @@ pub mod doctor;
 pub mod logs;
 pub mod memory;
 pub mod ps;
+pub mod reference;
 pub mod secrets;
 pub mod status;
 pub mod stream;
