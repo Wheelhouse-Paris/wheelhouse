@@ -1,5 +1,6 @@
 //! CLI command modules.
 
+pub mod capabilities;
 pub mod compact;
 pub mod completion;
 pub mod doctor;

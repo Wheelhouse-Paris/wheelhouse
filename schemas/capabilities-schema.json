@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wheelhouse.paris/schemas/capabilities-schema.json",
+  "title": "Wheelhouse Capabilities Manifest",
+  "description": "Build-time manifest listing available Wheelhouse features by category (ADR-031).",
+  "type": "object",
+  "required": ["version", "generated", "categories"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Wheelhouse version — must match CARGO_PKG_VERSION (E12-04)."
+    },
+    "generated": {
+      "type": "string",
+      "description": "ISO8601 datetime when the manifest was generated.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}"
+    },
+    "categories": {
+      "type": "object",
+      "required": ["streams", "skills", "surfaces", "topology", "cron", "cli", "sdk"],
+      "additionalProperties": false,
+      "properties": {
+        "streams": { "$ref": "#/definitions/featureList" },
+        "skills": { "$ref": "#/definitions/featureList" },
+        "surfaces": { "$ref": "#/definitions/featureList" },
+        "topology": { "$ref": "#/definitions/featureList" },
+        "cron": { "$ref": "#/definitions/featureList" },
+        "cli": { "$ref": "#/definitions/featureList" },
+        "sdk": { "$ref": "#/definitions/featureList" }
+      }
+    }
+  },
+  "definitions": {
+    "featureList": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/feature" }
+    },
+    "feature": {
+      "type": "object",
+      "required": ["name", "status", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Short identifier for the feature."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["available", "experimental", "deprecated"],
+          "description": "Feature maturity level."
+        },
+        "description": {
+          "type": "string",
+          "description": "One-line description of the feature."
+        }
+      }
+    }
+  }
+}

@@ -12,6 +12,7 @@ pub mod reconnect;
 
 use clap::{Parser, Subcommand};
 
+use commands::capabilities::CapabilitiesArgs;
 use commands::compact::CompactArgs;
 use commands::completion::CompletionArgs;
 use commands::doctor::DoctorArgs;
@@ -45,6 +46,8 @@ pub struct Cli {
 /// Top-level CLI subcommands.
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Inspect the Wheelhouse capabilities manifest (ADR-031).
+    Capabilities(CapabilitiesArgs),
     /// List all deployed components with their live status.
     Ps(PsArgs),
     /// Tail structured logs from a specific agent.
