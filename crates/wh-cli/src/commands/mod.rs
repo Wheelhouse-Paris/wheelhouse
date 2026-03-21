@@ -9,6 +9,7 @@ pub mod memory;
 pub mod ps;
 pub mod reference;
 pub mod secrets;
+pub mod skill;
 pub mod status;
 pub mod stream;
 pub mod surface;

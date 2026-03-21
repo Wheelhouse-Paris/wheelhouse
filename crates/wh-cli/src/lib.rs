@@ -21,6 +21,7 @@ use commands::memory::MemoryCommand;
 use commands::ps::PsArgs;
 use commands::reference::ReferenceArgs;
 use commands::secrets::SecretsCmd;
+use commands::skill::SkillCommand;
 use commands::stream::StreamCommand;
 use commands::surface::SurfaceCommand;
 use commands::telegram::TelegramCommand;
@@ -97,4 +98,9 @@ pub enum Commands {
     },
     /// Print the full CLI reference document (all commands, flags, exit codes).
     Reference(ReferenceArgs),
+    /// Manage skills in the topology's skills repository.
+    Skill {
+        #[command(subcommand)]
+        command: SkillCommand,
+    },
 }

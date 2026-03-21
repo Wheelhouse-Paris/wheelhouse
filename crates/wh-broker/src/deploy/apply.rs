@@ -368,6 +368,7 @@ pub fn apply(
         Some(workspace_root),
         extra_env,
         committed.desired_topology.broker.as_ref(),
+        committed.desired_topology.skills_repo.as_deref(),
     );
 
     Ok(result)
@@ -538,6 +539,7 @@ pub fn destroy(
         api_version: topology.api_version.clone(),
         name: topology.name.clone(),
         broker: topology.broker.clone(),
+        skills_repo: topology.skills_repo.clone(),
         agents: vec![],
         streams: vec![],
         surfaces: vec![],
@@ -639,6 +641,7 @@ mod tests {
                 api_version: "wheelhouse.dev/v1".to_string(),
                 name: "dev".to_string(),
                 broker: None,
+                skills_repo: None,
                 agents: vec![],
                 streams: vec![],
                 surfaces: vec![],
@@ -672,6 +675,7 @@ mod tests {
                 api_version: "wheelhouse.dev/v1".to_string(),
                 name: "dev".to_string(),
                 broker: None,
+                skills_repo: None,
                 agents: vec![],
                 streams: vec![],
                 surfaces: vec![],

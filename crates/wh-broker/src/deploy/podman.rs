@@ -195,6 +195,7 @@ fn is_broker_reachable() -> bool {
 pub fn ensure_broker_container(
     topology_name: &str,
     broker: Option<&crate::deploy::BrokerSpec>,
+    has_skills: bool,
 ) -> Result<(), DeployError> {
     // Idempotent: skip if already running.
     if podman_is_running(BROKER_CONTAINER_NAME)? {
@@ -238,6 +239,16 @@ pub fn ensure_broker_container(
     args.push(volume_mount);
     args.push("-e".to_string());
     args.push("WH_DATA_DIR=/data".to_string());
+
+    // Mount skills volume read-only on broker for skill definitions
+    if has_skills {
+        let skills_vol = skills_volume_name(topology_name);
+        args.push("-v".to_string());
+        args.push(format!("{skills_vol}:/skills:ro"));
+        args.push("-e".to_string());
+        args.push("WH_SKILLS_PATH=/skills".to_string());
+    }
+
     args.push(image.to_string());
 
     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -390,7 +401,7 @@ pub fn remove_network(topology_name: &str) -> Result<(), DeployError> {
 
 /// Build the named volume names for a topology (ADR-027).
 ///
-/// Returns a `Vec` of 5 volume names in deterministic order:
+/// Returns a `Vec` of 6 volume names in deterministic order:
 /// `wh-<sanitized_topology>-{wal, users, skills, personas, context}`.
 pub fn volume_names(topology_name: &str) -> Vec<String> {
     let topo = sanitize_name(topology_name);
@@ -402,7 +413,7 @@ pub fn volume_names(topology_name: &str) -> Vec<String> {
 
 /// Create all named data volumes for the topology idempotently (ADR-027).
 ///
-/// Runs `podman volume create <name> --ignore` for each of the 5 volumes.
+/// Runs `podman volume create <name> --ignore` for each of the 6 volumes.
 /// The `--ignore` flag makes this safe to call repeatedly — if a volume
 /// already exists, the command succeeds silently.
 ///
@@ -814,6 +825,7 @@ pub fn build_run_args(
     broker_url: Option<&str>,
     has_persona: bool,
     has_context: bool,
+    has_skills: bool,
     extra_env: &[(String, String)],
     network: Option<&str>,
 ) -> Vec<String> {
@@ -864,6 +876,15 @@ pub fn build_run_args(
     args.push("-v".to_string());
     args.push(format!("{platform_vol}:/etc/wh:ro"));
 
+    // Mount skills volume read-only for skill definitions
+    if has_skills {
+        let skills_vol = skills_volume_name(topology_name);
+        args.push("-v".to_string());
+        args.push(format!("{skills_vol}:/skills:ro"));
+        args.push("-e".to_string());
+        args.push("WH_SKILLS_PATH=/skills".to_string());
+    }
+
     // Attach to topology network (ADR-024)
     if let Some(net) = network {
         args.push("--network".to_string());
@@ -892,6 +913,7 @@ pub fn podman_run(
     broker_url: Option<&str>,
     has_persona: bool,
     has_context: bool,
+    has_skills: bool,
     extra_env: &[(String, String)],
     network: Option<&str>,
 ) -> Result<(), DeployError> {
@@ -904,6 +926,7 @@ pub fn podman_run(
         broker_url,
         has_persona,
         has_context,
+        has_skills,
         extra_env,
         network,
     );
@@ -1080,6 +1103,207 @@ pub fn populate_context_volume(
     Ok(())
 }
 
+/// Build the skills volume name for a topology.
+fn skills_volume_name(topology_name: &str) -> String {
+    let topo = sanitize_name(topology_name);
+    format!("wh-{topo}-skills")
+}
+
+/// Populate the skills data volume by sparse-cloning the skills git repo.
+///
+/// Collects all unique skill names referenced across agents, then runs a
+/// throwaway `alpine/git` container that sparse-clones only the needed
+/// skill directories from the repo into `/skills/<name>/` inside the volume.
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn populate_skills_volume(
+    topology_name: &str,
+    skills_repo_url: &str,
+    agents: &[crate::deploy::Agent],
+    ws_root: Option<&std::path::Path>,
+) -> Result<(), DeployError> {
+    // Collect unique skill names from all agents
+    let mut skill_names: Vec<String> = agents
+        .iter()
+        .filter_map(|a| a.skills.as_ref())
+        .flatten()
+        .map(|s| s.name.clone())
+        .collect();
+    skill_names.sort();
+    skill_names.dedup();
+
+    if skill_names.is_empty() {
+        tracing::debug!("no skills referenced by any agent — skipping");
+        return Ok(());
+    }
+
+    // Detect local path vs remote URL.
+    // Local: ".", "./skills", "/abs/path", or anything without "://"
+    let is_local = !skills_repo_url.contains("://");
+
+    if is_local {
+        populate_skills_volume_local(topology_name, skills_repo_url, &skill_names, ws_root)
+    } else {
+        populate_skills_volume_remote(topology_name, skills_repo_url, &skill_names)
+    }
+}
+
+/// Populate skills volume from a local directory on the host.
+/// Reads skill folders from disk and writes them into the volume via an Alpine helper.
+fn populate_skills_volume_local(
+    topology_name: &str,
+    skills_path: &str,
+    skill_names: &[String],
+    ws_root: Option<&std::path::Path>,
+) -> Result<(), DeployError> {
+    // Resolve the skills directory relative to workspace root
+    let skills_dir = if skills_path == "." || skills_path == "./" {
+        // "." means look for a `skills/` subfolder in the workspace root
+        ws_root
+            .ok_or_else(|| DeployError::ApplyFailed("skills_repo '.' requires a workspace root".into()))?
+            .join("skills")
+    } else {
+        let p = std::path::PathBuf::from(skills_path);
+        if p.is_absolute() {
+            // Absolute path — check for skills/ subfolder or use directly
+            if p.join("skills").is_dir() {
+                p.join("skills")
+            } else {
+                p
+            }
+        } else {
+            // Relative path — resolve from workspace root
+            ws_root
+                .ok_or_else(|| DeployError::ApplyFailed("relative skills_repo requires a workspace root".into()))?
+                .join(skills_path)
+        }
+    };
+
+    if !skills_dir.is_dir() {
+        return Err(DeployError::ApplyFailed(format!(
+            "skills directory not found: {}",
+            skills_dir.display()
+        )));
+    }
+
+    let podman = find_podman()?;
+    let vol = skills_volume_name(topology_name);
+    let helper = format!("wh-skills-init-{}", sanitize_name(topology_name));
+
+    // Build a shell script that creates skill directories and writes files
+    let mut script = String::from("rm -rf /skills/* && ");
+
+    for skill_name in skill_names {
+        let skill_dir = skills_dir.join(skill_name);
+        if !skill_dir.is_dir() {
+            tracing::warn!(skill = %skill_name, path = %skill_dir.display(), "skill directory not found — skipping");
+            continue;
+        }
+
+        script.push_str(&format!("mkdir -p /skills/{skill_name} && "));
+
+        // Walk the skill directory and write each file
+        if let Ok(entries) = std::fs::read_dir(&skill_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let filename = entry.file_name();
+                    let filename = filename.to_string_lossy();
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            let escaped = content.replace('\'', "'\\''");
+                            script.push_str(&format!(
+                                "printf '%s' '{escaped}' > /skills/{skill_name}/{filename} && "
+                            ));
+                        }
+                        Err(e) => {
+                            tracing::warn!(file = %path.display(), error = %e, "failed to read skill file");
+                        }
+                    }
+                } else if path.is_dir() {
+                    // Handle subdirectories (e.g., steps/)
+                    let subdir = entry.file_name();
+                    let subdir = subdir.to_string_lossy();
+                    script.push_str(&format!("mkdir -p /skills/{skill_name}/{subdir} && "));
+                    if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                        for sub_entry in sub_entries.flatten() {
+                            if sub_entry.path().is_file() {
+                                let sub_filename = sub_entry.file_name();
+                                let sub_filename = sub_filename.to_string_lossy();
+                                match std::fs::read_to_string(sub_entry.path()) {
+                                    Ok(content) => {
+                                        let escaped = content.replace('\'', "'\\''");
+                                        script.push_str(&format!(
+                                            "printf '%s' '{escaped}' > /skills/{skill_name}/{subdir}/{sub_filename} && "
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(file = %sub_entry.path().display(), error = %e, "failed to read skill subfile");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    script.push_str("echo done");
+
+    let vol_mount = format!("{vol}:/skills");
+    let args = [
+        "run", "--rm",
+        "--name", helper.as_str(),
+        "-v", vol_mount.as_str(),
+        "alpine:latest",
+        "sh", "-c", script.as_str(),
+    ];
+
+    tracing::info!(skills = skill_names.len(), path = %skills_dir.display(), "populating skills volume (local)");
+    run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT)?;
+    tracing::info!("skills volume populated");
+    Ok(())
+}
+
+/// Populate skills volume from a remote git repo via sparse checkout.
+fn populate_skills_volume_remote(
+    topology_name: &str,
+    skills_repo_url: &str,
+    skill_names: &[String],
+) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let vol = skills_volume_name(topology_name);
+    let helper = format!("wh-skills-init-{}", sanitize_name(topology_name));
+
+    let escaped_url = skills_repo_url.replace('\'', "'\\''");
+    let sparse_set = skill_names.join(" ");
+
+    let script = format!(
+        "apk add --no-cache git >/dev/null 2>&1 && \
+         git clone --no-checkout --filter=blob:none '{escaped_url}' /tmp/repo 2>/dev/null && \
+         cd /tmp/repo && \
+         git sparse-checkout init --cone && \
+         git sparse-checkout set {sparse_set} && \
+         git checkout 2>/dev/null && \
+         rm -rf /skills/* && \
+         for d in {sparse_set}; do [ -d \"$d\" ] && cp -r \"$d\" /skills/; done && \
+         echo done"
+    );
+
+    let args = [
+        "run", "--rm",
+        "--name", &helper,
+        "-v", &format!("{vol}:/skills"),
+        "alpine:latest",
+        "sh", "-c", &script,
+    ];
+
+    tracing::info!(skills = skill_names.len(), repo = %skills_repo_url, "populating skills volume (remote)");
+    run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT)?;
+    tracing::info!("skills volume populated");
+    Ok(())
+}
+
 /// Provision containers based on plan changes.
 ///
 /// Iterates over changes and starts/stops containers as needed.
@@ -1106,6 +1330,7 @@ pub fn provision_containers(
     workspace_root: Option<&std::path::Path>,
     extra_env: &[(String, String)],
     broker: Option<&crate::deploy::BrokerSpec>,
+    skills_repo: Option<&str>,
 ) -> ApplyResult {
     // Count stream additions upfront — streams require no container operation.
     let streams_created = changes
@@ -1181,9 +1406,17 @@ pub fn provision_containers(
         tracing::warn!(error = %e, "failed to populate context volume — agents will lack stream context");
     }
 
+    // Populate skills volume from git repo (sparse checkout).
+    // Best-effort: failure is logged but does not block deployment.
+    if let Some(repo_url) = skills_repo {
+        if let Err(e) = populate_skills_volume(topology_name, repo_url, agents, workspace_root) {
+            tracing::warn!(error = %e, "failed to populate skills volume — broker will lack skill definitions");
+        }
+    }
+
     // Start the broker container before any agent containers (ADR-025).
     // Agents connect to the broker via DNS at startup, so it must be available first.
-    if let Err(e) = ensure_broker_container(topology_name, broker) {
+    if let Err(e) = ensure_broker_container(topology_name, broker, skills_repo.is_some()) {
         tracing::error!(error = %e, "broker is not available");
         eprintln!("Error: {e}");
         return ApplyResult {
@@ -1316,6 +1549,7 @@ pub fn provision_containers(
                 let has_persona = agent.persona.is_some();
                 // Context volume is already populated at deploy time
                 let has_context = true;
+                let has_skills = skills_repo.is_some();
 
                 match podman_run(
                     topology_name,
@@ -1325,6 +1559,7 @@ pub fn provision_containers(
                     Some(BROKER_DNS_URL),
                     has_persona,
                     has_context,
+                    has_skills,
                     extra_env,
                     Some(&topo_network),
                 ) {
@@ -1365,6 +1600,7 @@ pub fn provision_containers(
                 let has_persona = agent.persona.is_some();
                 // Context volume is already populated at deploy time
                 let has_context = true;
+                let has_skills = skills_repo.is_some();
 
                 // Stop old
                 let _ = podman_stop(&name);
@@ -1377,6 +1613,7 @@ pub fn provision_containers(
                     Some(BROKER_DNS_URL),
                     has_persona,
                     has_context,
+                    has_skills,
                     extra_env,
                     Some(&topo_network),
                 ) {
@@ -1444,6 +1681,7 @@ mod tests {
                 "wh-dev-skills",
                 "wh-dev-personas",
                 "wh-dev-context",
+                "wh-dev-platform",
             ]
         );
     }
@@ -1459,6 +1697,7 @@ mod tests {
                 "wh-my-app-skills",
                 "wh-my-app-personas",
                 "wh-my-app-context",
+                "wh-my-app-platform",
             ]
         );
     }
@@ -1466,17 +1705,18 @@ mod tests {
     #[test]
     fn volume_names_count() {
         let names = volume_names("dev");
-        assert_eq!(names.len(), 5);
+        assert_eq!(names.len(), 6);
     }
 
     #[test]
-    fn volume_suffixes_constant_has_five_entries() {
-        assert_eq!(VOLUME_SUFFIXES.len(), 5);
+    fn volume_suffixes_constant_has_six_entries() {
+        assert_eq!(VOLUME_SUFFIXES.len(), 6);
         assert_eq!(VOLUME_SUFFIXES[0], "wal");
         assert_eq!(VOLUME_SUFFIXES[1], "users");
         assert_eq!(VOLUME_SUFFIXES[2], "skills");
         assert_eq!(VOLUME_SUFFIXES[3], "personas");
         assert_eq!(VOLUME_SUFFIXES[4], "context");
+        assert_eq!(VOLUME_SUFFIXES[5], "platform");
     }
 
     #[test]
@@ -1487,6 +1727,7 @@ mod tests {
             "researcher:latest",
             &["main".to_string()],
             None,
+            false,
             false,
             false,
             &[],
@@ -1522,6 +1763,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             &[],
             Some("wh-dev"),
         );
@@ -1544,6 +1786,7 @@ mod tests {
             Some("tcp://10.0.0.1:5555"),
             false,
             false,
+            false,
             &[],
             None,
         );
@@ -1560,6 +1803,7 @@ mod tests {
             &["main".to_string()],
             None,
             true,
+            false,
             false,
             &[],
             None,
@@ -1588,6 +1832,7 @@ mod tests {
             "r:latest",
             &["main".to_string()],
             None,
+            false,
             false,
             false,
             &[],
@@ -1619,7 +1864,7 @@ mod tests {
             to: None,
             source_file: None,
         }];
-        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None);
+        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None, None);
         assert_eq!(result.created, 0);
         assert_eq!(result.changed, 0);
         assert_eq!(result.destroyed, 0);
@@ -1676,7 +1921,7 @@ mod tests {
             to: None,
             source_file: None,
         }];
-        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None);
+        let result = provision_containers("dev", &changes, &[], &[], &[], None, &[], None, None);
         // Should skip gracefully, not panic, and not increment created
         assert_eq!(result.created, 0);
     }

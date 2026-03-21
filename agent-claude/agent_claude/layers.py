@@ -72,6 +72,9 @@ def load_l0_capabilities(path: str = DEFAULT_CAPABILITIES_PATH) -> str | None:
         )
         return None
 
+    logger.debug(
+        "L0 capabilities manifest loaded from %s (%d bytes)", path, len(raw)
+    )
     return f"## Wheelhouse Capabilities\n\n```json\n{raw.strip()}\n```"
 
 

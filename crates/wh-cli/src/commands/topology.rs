@@ -431,10 +431,13 @@ fn check_topology_edit_permission(
     agent_name: &str,
     format: OutputFormat,
 ) -> bool {
-    let workspace_root = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
+    let workspace_root = if path.is_dir() {
+        path
+    } else {
+        path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| std::path::Path::new("."))
+    };
 
     // Try to load current state first; fall back to the file being applied
     let topology = match apply::load_state(workspace_root) {
@@ -528,23 +531,44 @@ fn execute_apply(path: &PathBuf, yes: bool, format: OutputFormat, agent_name: Op
 
     // Resolve Telegram surfaces regardless of topology changes — state may be missing
     // (e.g. first deploy after state file was deleted, or group migrated to supergroup).
-    // For folder-based topologies, use the source_path which is the directory itself.
+    // For folder-based topologies, resolve each .wh file individually and merge results.
     let telegram_path = plan_output.source_path();
-    let telegram_resolve_path = if telegram_path.is_dir() {
-        // For folder-based composition, pick the first .wh file for telegram resolution
-        telegram_path.to_path_buf()
+    let telegram_routing_file = if telegram_path.is_dir() {
+        // Folder-based composition: find .wh files and resolve the first one with surfaces
+        let mut routing_file = None;
+        if let Ok(entries) = std::fs::read_dir(telegram_path) {
+            let mut wh_files: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|ext| ext == "wh"))
+                .collect();
+            wh_files.sort();
+            for wh_file in wh_files {
+                match crate::commands::telegram::resolve_telegram_surfaces(&wh_file) {
+                    Ok(Some(path)) => {
+                        routing_file = Some(path);
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(e) => {
+                        let msg = output::format_error("TELEGRAM_RESOLVE_ERROR", &e, format);
+                        eprintln!("{msg}");
+                        return error::EXIT_ERROR;
+                    }
+                }
+            }
+        }
+        routing_file
     } else {
-        telegram_path.to_path_buf()
-    };
-    let telegram_routing_file =
-        match crate::commands::telegram::resolve_telegram_surfaces(&telegram_resolve_path) {
+        match crate::commands::telegram::resolve_telegram_surfaces(telegram_path) {
             Ok(path) => path,
             Err(e) => {
                 let msg = output::format_error("TELEGRAM_RESOLVE_ERROR", &e, format);
                 eprintln!("{msg}");
                 return error::EXIT_ERROR;
             }
-        };
+        }
+    };
 
     if !plan_output.has_changes() {
         match format {

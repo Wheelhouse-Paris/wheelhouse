@@ -159,6 +159,10 @@ async fn main() {
         Commands::Reference(args) => {
             reference::execute(&args);
         }
+        Commands::Skill { command } => {
+            let exit_code = wh_cli::commands::skill::run(command);
+            std::process::exit(exit_code);
+        }
         Commands::Telegram { command } => {
             if let Err(e) = telegram::execute(&command).await {
                 let fmt = match &command {

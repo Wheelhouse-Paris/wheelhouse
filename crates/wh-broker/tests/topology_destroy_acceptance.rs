@@ -64,13 +64,14 @@ fn setup_deployed_repo() -> tempfile::TempDir {
     let topology = wh_broker::deploy::Topology {
         api_version: "wheelhouse.dev/v1".to_string(),
         name: "dev".to_string(),
+        broker: None,
+        skills_repo: None,
         agents: vec![wh_broker::deploy::Agent {
             name: "researcher".to_string(),
             image: "researcher:latest".to_string(),
             replicas: 1,
             streams: vec!["main".to_string()],
             persona: None,
-            skills_repo: None,
             skills: None,
             topology_edit: None,
         }],
@@ -81,7 +82,6 @@ fn setup_deployed_repo() -> tempfile::TempDir {
         }],
         surfaces: vec![],
         guardrails: None,
-        broker: None,
     };
     std::fs::write(
         wh_dir.join("state.json"),
@@ -249,11 +249,12 @@ fn destroy_on_empty_deployed_state_is_noop() {
     let empty_topo = wh_broker::deploy::Topology {
         api_version: "wheelhouse.dev/v1".to_string(),
         name: "dev".to_string(),
+        broker: None,
+        skills_repo: None,
         agents: vec![],
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
-        broker: None,
     };
     std::fs::write(
         wh_dir.join("state.json"),

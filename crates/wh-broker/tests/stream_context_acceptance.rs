@@ -236,6 +236,8 @@ fn description_yaml_roundtrip() {
     let topo = Topology {
         api_version: "wheelhouse.dev/v1".to_string(),
         name: "dev".to_string(),
+        broker: None,
+        skills_repo: None,
         agents: vec![],
         streams: vec![Stream {
             name: "main".to_string(),
@@ -244,7 +246,6 @@ fn description_yaml_roundtrip() {
         }],
         surfaces: vec![],
         guardrails: None,
-        broker: None,
     };
     let yaml = serde_yaml::to_string(&topo).unwrap();
     let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();

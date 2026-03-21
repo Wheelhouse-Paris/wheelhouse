@@ -62,7 +62,6 @@ fn high_impact_change_with_low_threshold_requires_approval() {
             replicas: 1,
             streams: vec![],
             persona: None,
-            skills_repo: None,
             skills: None,
             topology_edit: None,
         }],
@@ -74,6 +73,7 @@ fn high_impact_change_with_low_threshold_requires_approval() {
             ..Default::default()
         }),
         broker: None,
+        skills_repo: None,
     };
 
     // Signal triggers a scale from 1->2 = 100% increase = High impact
@@ -202,7 +202,6 @@ fn low_impact_change_with_low_threshold_proceeds_autonomously() {
             replicas: 5,
             streams: vec![],
             persona: None,
-            skills_repo: None,
             skills: None,
             topology_edit: None,
         }],
@@ -214,6 +213,7 @@ fn low_impact_change_with_low_threshold_proceeds_autonomously() {
             ..Default::default()
         }),
         broker: None,
+        skills_repo: None,
     };
 
     // 5 -> 6 = 20% increase = Low impact
@@ -248,7 +248,6 @@ fn any_change_without_threshold_proceeds_autonomously() {
             replicas: 1,
             streams: vec![],
             persona: None,
-            skills_repo: None,
             skills: None,
             topology_edit: None,
         }],
@@ -256,6 +255,7 @@ fn any_change_without_threshold_proceeds_autonomously() {
         surfaces: vec![],
         guardrails: None,
         broker: None,
+        skills_repo: None,
     };
 
     let eval = SignalEvaluation {
@@ -289,7 +289,6 @@ fn medium_threshold_allows_medium_but_blocks_high() {
             replicas: 2,
             streams: vec![],
             persona: None,
-            skills_repo: None,
             skills: None,
             topology_edit: None,
         }],
@@ -301,6 +300,7 @@ fn medium_threshold_allows_medium_but_blocks_high() {
             ..Default::default()
         }),
         broker: None,
+        skills_repo: None,
     };
 
     // 2 -> 3 = 50% = Medium impact -> should proceed with medium threshold
@@ -352,7 +352,6 @@ fn high_threshold_allows_all_changes() {
             replicas: 1,
             streams: vec![],
             persona: None,
-            skills_repo: None,
             skills: None,
             topology_edit: None,
         }],
@@ -364,6 +363,7 @@ fn high_threshold_allows_all_changes() {
             ..Default::default()
         }),
         broker: None,
+        skills_repo: None,
     };
 
     // 1 -> 3 = 200% = High impact -> should still proceed with high threshold
@@ -486,6 +486,7 @@ fn classify_impact_high_for_large_scaling() {
         surfaces: vec![],
         guardrails: None,
         broker: None,
+        skills_repo: None,
     };
 
     // 1 -> 3 = 200% increase = High
@@ -512,6 +513,7 @@ fn classify_impact_low_for_small_increase() {
         surfaces: vec![],
         guardrails: None,
         broker: None,
+        skills_repo: None,
     };
 
     // 5 -> 6 = 20% = Low

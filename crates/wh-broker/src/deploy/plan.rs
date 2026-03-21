@@ -489,10 +489,16 @@ pub fn plan_with_options(
     force_destroy_all: bool,
 ) -> Result<PlanOutput, DeployError> {
     let desired = canonicalize_topology(linted.topology.clone());
-    let workspace_root = linted
-        .source_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    // When source_path is a directory (folder-based composition), it IS the workspace root.
+    // When it's a file, the parent directory is the workspace root.
+    let workspace_root = if linted.source_path.is_dir() {
+        linted.source_path.as_path()
+    } else {
+        linted
+            .source_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+    };
 
     let current = load_current_state(workspace_root)?;
 
@@ -507,6 +513,7 @@ pub fn plan_with_options(
                 api_version: "wheelhouse.dev/v1".to_string(),
                 name: desired.name.clone(),
                 broker: None,
+                skills_repo: None,
                 agents: vec![],
                 streams: vec![],
                 surfaces: vec![],
@@ -659,13 +666,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec!["main".to_string()],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -707,13 +715,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -796,6 +805,7 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![],
             streams: vec![],
             surfaces: vec![],
@@ -831,13 +841,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -876,13 +887,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -927,13 +939,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -1085,13 +1098,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -1142,13 +1156,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -1201,13 +1216,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],
@@ -1277,13 +1293,14 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "researcher".to_string(),
                 image: "r:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
+
                 skills: None,
                 topology_edit: None,
             }],

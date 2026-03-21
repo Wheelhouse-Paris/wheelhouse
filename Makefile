@@ -11,7 +11,7 @@
 # ──────────────────────────────────────────────
 # Install config (override via env or make INSTALL_PREFIX=...)
 # ──────────────────────────────────────────────
-INSTALL_PREFIX ?= /opt/homebrew/bin
+INSTALL_PREFIX ?= $(HOME)/.local/bin
 
 PROTO_DIR := proto
 PROTO_FILES := $(shell find $(PROTO_DIR) -name '*.proto' 2>/dev/null)
@@ -106,8 +106,9 @@ check:
 build:
 	$(CARGO) build --release -p wh-cli -p wh-telegram
 
-## Copy built binaries to INSTALL_PREFIX (run with sudo if needed)
+## Copy built binaries to INSTALL_PREFIX (no sudo needed)
 install:
+	@mkdir -p $(INSTALL_PREFIX)
 	cp target/release/wh $(INSTALL_PREFIX)/wh
 	cp target/release/wh-telegram $(INSTALL_PREFIX)/wh-telegram
 	@echo "Installed to $(INSTALL_PREFIX)"

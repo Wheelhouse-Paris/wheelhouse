@@ -37,9 +37,9 @@ pub struct BrokerConfig {
     /// Compaction interval in seconds.
     /// Configured via `WH_COMPACTION_INTERVAL_SECS` env var, default 86400 (24h).
     compaction_interval_secs: u64,
-    /// Optional path to the git repository containing skills (Story 9.3).
-    /// Configured via `WH_SKILLS_REPO` env var. None means skill routing disabled.
-    skills_repo: Option<String>,
+    /// Optional filesystem path to skill definitions (volume mount point).
+    /// Configured via `WH_SKILLS_PATH` env var. None means skill routing disabled.
+    skills_path: Option<String>,
     /// Comma-separated list of allowed skill names (Story 9.3, FM-05).
     /// Configured via `WH_SKILLS_ALLOWLIST` env var. Empty means no skills allowed.
     skills_allowlist: Vec<String>,
@@ -61,7 +61,7 @@ impl BrokerConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_COMPACTION_INTERVAL_SECS);
 
-        let skills_repo = std::env::var("WH_SKILLS_REPO").ok();
+        let skills_path = std::env::var("WH_SKILLS_PATH").ok();
         let skills_allowlist = std::env::var("WH_SKILLS_ALLOWLIST")
             .ok()
             .map(|v| {
@@ -78,7 +78,7 @@ impl BrokerConfig {
             control_port: Self::read_port_env("WH_CONTROL_PORT", DEFAULT_CONTROL_PORT),
             data_dir,
             compaction_interval_secs,
-            skills_repo,
+            skills_path,
             skills_allowlist,
         }
     }
@@ -93,7 +93,7 @@ impl BrokerConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("/data")),
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
-            skills_repo: None,
+            skills_path: None,
             skills_allowlist: vec![],
         }
     }
@@ -111,7 +111,7 @@ impl BrokerConfig {
             control_port,
             data_dir,
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
-            skills_repo: None,
+            skills_path: None,
             skills_allowlist: vec![],
         }
     }
@@ -161,9 +161,9 @@ impl BrokerConfig {
         self.compaction_interval_secs
     }
 
-    /// Path to the git skills repository, if configured.
-    pub fn skills_repo(&self) -> Option<&str> {
-        self.skills_repo.as_deref()
+    /// Filesystem path to skill definitions, if configured.
+    pub fn skills_path(&self) -> Option<&str> {
+        self.skills_path.as_deref()
     }
 
     /// List of allowed skill names (FM-05).
@@ -187,7 +187,7 @@ impl Default for BrokerConfig {
             control_port: DEFAULT_CONTROL_PORT,
             data_dir: PathBuf::from("/data"),
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
-            skills_repo: None,
+            skills_path: None,
             skills_allowlist: vec![],
         }
     }

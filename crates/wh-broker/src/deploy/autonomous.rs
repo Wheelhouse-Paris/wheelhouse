@@ -570,6 +570,7 @@ mod tests {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents,
             streams: vec![],
             surfaces: vec![],
@@ -584,7 +585,6 @@ mod tests {
             replicas,
             streams: vec![],
             persona: None,
-            skills_repo: None,
             skills: None,
             topology_edit: None,
         }

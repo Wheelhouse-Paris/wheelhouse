@@ -77,6 +77,10 @@ pub struct Topology {
     /// fallback is used (deprecated).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broker: Option<BrokerSpec>,
+    /// Optional path or URL to the git repository containing skills.
+    /// Topology-level: shared across all agents in this topology.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills_repo: Option<String>,
     #[serde(default)]
     pub agents: Vec<Agent>,
     #[serde(default)]
@@ -114,9 +118,6 @@ pub struct Agent {
     /// Contains SOUL.md, IDENTITY.md, and MEMORY.md.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub persona: Option<String>,
-    /// Optional path to the git repository containing skills.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills_repo: Option<String>,
     /// Optional list of skills available to this agent (FM-05 allowlist).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<SkillRefConfig>>,
@@ -440,6 +441,7 @@ fn load_topology_folder(
         api_version: first_version.clone(),
         name: first_name.clone(),
         broker: None,
+        skills_repo: None,
         agents: Vec::new(),
         streams: Vec::new(),
         surfaces: Vec::new(),
@@ -454,6 +456,7 @@ fn load_topology_folder(
     let mut seen_surfaces: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
     let mut broker_file: Option<String> = None;
+    let mut skills_repo_file: Option<String> = None;
     let mut guardrails_file: Option<String> = None;
 
     for (filename, topo) in topologies {
@@ -466,6 +469,17 @@ fn load_topology_folder(
             }
             broker_file = Some(filename.clone());
             merged.broker = topo.broker;
+        }
+
+        // Check skills_repo conflicts
+        if topo.skills_repo.is_some() {
+            if let Some(ref prev_file) = skills_repo_file {
+                return Err(DeployError::InvalidTopology(format!(
+                    "conflicting skills_repo: declared in both '{prev_file}' and '{filename}'"
+                )));
+            }
+            skills_repo_file = Some(filename.clone());
+            merged.skills_repo = topo.skills_repo;
         }
 
         // Check guardrails conflicts
@@ -609,6 +623,7 @@ agents:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![
                 Agent {
                     name: "zeta".to_string(),
@@ -616,7 +631,7 @@ agents:
                     replicas: 1,
                     streams: vec![],
                     persona: None,
-                    skills_repo: None,
+
                     skills: None,
                     topology_edit: None,
                 },
@@ -626,7 +641,7 @@ agents:
                     replicas: 1,
                     streams: vec![],
                     persona: None,
-                    skills_repo: None,
+
                     skills: None,
                     topology_edit: None,
                 },
@@ -694,11 +709,11 @@ streams:
         let yaml = r#"
 api_version: wheelhouse.dev/v1
 name: dev
+skills_repo: /path/to/skills
 agents:
   - name: donna
     image: agent-claude:latest
     streams: [main]
-    skills_repo: /path/to/skills
     skills:
       - name: summarize
         version: "1.0.0"
@@ -709,7 +724,7 @@ streams:
 "#;
         let topo = parse_topology(yaml).unwrap();
         assert_eq!(
-            topo.agents[0].skills_repo,
+            topo.skills_repo,
             Some("/path/to/skills".to_string())
         );
         let skills = topo.agents[0].skills.as_ref().unwrap();
@@ -732,7 +747,7 @@ streams:
   - name: main
 "#;
         let topo = parse_topology(yaml).unwrap();
-        assert_eq!(topo.agents[0].skills_repo, None);
+        assert_eq!(topo.skills_repo, None);
         assert_eq!(topo.agents[0].skills, None);
     }
 
@@ -742,13 +757,13 @@ streams:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: Some("/skills".to_string()),
             agents: vec![Agent {
                 name: "donna".to_string(),
                 image: "agent-claude:latest".to_string(),
                 replicas: 1,
                 streams: vec!["main".to_string()],
                 persona: None,
-                skills_repo: Some("/skills".to_string()),
                 skills: Some(vec![SkillRefConfig {
                     name: "summarize".to_string(),
                     version: "1.0.0".to_string(),
@@ -828,6 +843,7 @@ agents:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![],
             streams: vec![],
             surfaces: vec![
@@ -888,6 +904,7 @@ streams:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -911,6 +928,7 @@ streams:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -992,6 +1010,7 @@ broker:
                     "127.0.0.1:5556:5556".to_string(),
                 ],
             }),
+            skills_repo: None,
             agents: vec![],
             streams: vec![],
             surfaces: vec![],
@@ -1008,6 +1027,7 @@ broker:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![],
             streams: vec![],
             surfaces: vec![],
@@ -1067,13 +1087,13 @@ agents:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "donna".to_string(),
                 image: "agent-claude:latest".to_string(),
                 replicas: 1,
                 streams: vec!["main".to_string()],
                 persona: None,
-                skills_repo: None,
                 skills: None,
                 topology_edit: Some(true),
             }],
@@ -1096,13 +1116,13 @@ agents:
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
             broker: None,
+            skills_repo: None,
             agents: vec![Agent {
                 name: "donna".to_string(),
                 image: "agent-claude:latest".to_string(),
                 replicas: 1,
                 streams: vec![],
                 persona: None,
-                skills_repo: None,
                 skills: None,
                 topology_edit: None,
             }],

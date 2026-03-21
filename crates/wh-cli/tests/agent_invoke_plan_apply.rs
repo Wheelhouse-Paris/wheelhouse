@@ -89,11 +89,12 @@ fn test_agent_apply_commit_with_agent_name() {
     let topology = Topology {
         api_version: "wheelhouse.dev/v1".to_string(),
         name: "dev".to_string(),
+        broker: None,
+        skills_repo: None,
         agents: vec![],
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
-        broker: None,
     };
     std::fs::write(
         wh_dir.join("state.json"),
