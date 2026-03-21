@@ -1,8 +1,11 @@
 """Startup sequence orchestrator for agent-claude.
 
-Startup order (ADR-018):
+Startup order (ADR-018, ADR-033):
   1. Validate environment variables
-  2. Load persona files
+  1b. Assemble platform context layers L0-L2 (ADR-033)
+  2. Load persona files (L3)
+  2b. Load stream contexts (L4)
+  2c. Log total context size (E12-12)
   3. Connect to Wheelhouse broker via SDK
 """
 
@@ -17,6 +20,7 @@ import wheelhouse
 
 from agent_claude.context import load_stream_contexts
 from agent_claude.errors import AgentConfigError
+from agent_claude.layers import assemble_platform_context
 from agent_claude.persona import load_persona
 
 logger = logging.getLogger("agent_claude")
@@ -91,7 +95,9 @@ def validate_env() -> dict[str, Any]:
 async def run_startup() -> dict[str, Any]:
     """Execute the full startup sequence.
 
-    Order: validate_env -> load_persona -> wheelhouse.connect
+    Order: validate_env -> assemble_platform_context (L0-L2)
+           -> load_persona (L3) -> load_stream_contexts (L4)
+           -> log total context size -> wheelhouse.connect
 
     Returns:
         Dict with 'config', 'persona', and 'connection' keys.
@@ -103,14 +109,26 @@ async def run_startup() -> dict[str, Any]:
     # Step 1: Validate environment
     config = validate_env()
 
-    # Step 2: Load persona
-    persona = load_persona(config["persona_path"])
+    # Step 1b: Assemble platform context layers L0-L2 (ADR-033)
+    platform_context = assemble_platform_context()
 
-    # Step 2b: Load stream contexts (ADR-021: once at startup, not per message)
+    # Step 2: Load persona (L3)
+    persona = load_persona(config["persona_path"])
+    persona.platform_context = platform_context
+
+    # Step 2b: Load stream contexts (L4, ADR-021: once at startup, not per message)
     stream_contexts = load_stream_contexts(
         config["context_path"], config["streams"]
     )
     persona.stream_contexts = stream_contexts
+
+    # Step 2c: Log total context size (E12-12)
+    total_context = persona.build_system_prompt()
+    total_size = len(total_context)
+    logger.info(
+        "Layered context assembled: %d total characters (L0-L4)",
+        total_size,
+    )
 
     # Step 3: Connect to Wheelhouse broker
     try:

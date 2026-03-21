@@ -24,30 +24,41 @@ class Persona:
     memory: str
     stream_contexts: dict[str, str] = field(default_factory=dict)
     streams: list[str] = field(default_factory=list)
+    platform_context: str = ""
 
     def build_system_prompt(self) -> str:
-        """Build the system prompt by concatenating persona files, stream contexts,
-        and batch output instructions.
+        """Build the system prompt by concatenating platform context, persona files,
+        stream contexts, and batch output instructions.
 
-        Format: SOUL + '\\n\\n' + IDENTITY + '\\n\\n' + MEMORY
-                + stream context sections (ADR-021)
-                + batch output instruction (ADR-022)
+        Layer order (ADR-033, E12-10):
+          L0-L2: platform_context (capabilities, CLI reference, topology state)
+          L3:    SOUL + IDENTITY + MEMORY
+          L4:    per-stream CONTEXT.md sections
+          +      batch output instruction (ADR-022)
 
         Stream context sections are appended in alphabetical order by stream name.
         Each section has a markdown header: '## Stream Context: <stream_name>'
         """
         from agent_claude.response_parser import format_batch_instruction
 
-        prompt = f"{self.soul}\n\n{self.identity}\n\n{self.memory}"
+        parts: list[str] = []
 
+        # L0-L2: Platform context (ADR-033)
+        if self.platform_context:
+            parts.append(self.platform_context)
+
+        # L3: Persona files
+        parts.append(f"{self.soul}\n\n{self.identity}\n\n{self.memory}")
+
+        # L4: Per-stream context sections
         for stream_name in sorted(self.stream_contexts):
             content = self.stream_contexts[stream_name]
-            prompt += f"\n\n## Stream Context: {stream_name}\n\n{content}"
+            parts.append(f"## Stream Context: {stream_name}\n\n{content}")
 
-        # Append batch output instruction (ADR-022)
-        prompt += f"\n\n{format_batch_instruction(self.streams)}"
+        # Batch output instruction (ADR-022)
+        parts.append(format_batch_instruction(self.streams))
 
-        return prompt
+        return "\n\n".join(parts)
 
     def reload_memory(self, persona_path: str) -> None:
         """Re-read MEMORY.md from disk before each Claude API call (AC-04).
