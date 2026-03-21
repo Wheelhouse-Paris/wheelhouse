@@ -299,6 +299,7 @@ fn plan_data_display_shows_context_files() {
             field: None,
             from: None,
             to: Some(serde_json::json!({"provider": "local"})),
+            source_file: None,
         }],
         plan_hash: "sha256:abc".to_string(),
         topology_name: "dev".to_string(),

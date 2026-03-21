@@ -201,6 +201,9 @@ pub struct Change {
     /// New value (for modifications)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<serde_json::Value>,
+    /// Source `.wh` file this component originated from (E12-03, folder-based composition).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_file: Option<String>,
 }
 
 /// Errors that can occur during deploy operations.
@@ -296,6 +299,225 @@ pub fn parse_topology(content: &str) -> Result<Topology, DeployError> {
 pub fn load_topology(path: &std::path::Path) -> Result<Topology, DeployError> {
     let content = std::fs::read_to_string(path)?;
     parse_topology(&content)
+}
+
+/// Load a topology from a path that may be a single `.wh` file or a folder
+/// containing multiple `.wh` files (ADR-030).
+///
+/// When `path` is a directory, all `*.wh` files are discovered, parsed
+/// independently, and merged into a single `Topology` in lexicographic order
+/// by filename. Duplicate agent/stream/surface names across files are errors.
+///
+/// Returns the merged topology and a mapping of component names to source files.
+pub fn load_topology_from_path(
+    path: &std::path::Path,
+) -> Result<(Topology, ComponentSourceMap), DeployError> {
+    if path.is_dir() {
+        load_topology_folder(path)
+    } else {
+        let topo = load_topology(path)?;
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let source_map = ComponentSourceMap::from_topology(&topo, &filename);
+        Ok((topo, source_map))
+    }
+}
+
+/// Tracks which source file each component (agent/stream/surface) came from.
+#[derive(Debug, Clone, Default)]
+pub struct ComponentSourceMap {
+    /// Maps component name -> source filename (e.g., "researcher" -> "agents.wh")
+    pub entries: std::collections::BTreeMap<String, String>,
+}
+
+impl ComponentSourceMap {
+    /// Build a source map from a single topology and filename.
+    pub fn from_topology(topo: &Topology, filename: &str) -> Self {
+        let mut entries = std::collections::BTreeMap::new();
+        for agent in &topo.agents {
+            entries.insert(format!("agent:{}", agent.name), filename.to_string());
+        }
+        for stream in &topo.streams {
+            entries.insert(format!("stream:{}", stream.name), filename.to_string());
+        }
+        for surface in &topo.surfaces {
+            entries.insert(format!("surface:{}", surface.name), filename.to_string());
+        }
+        Self { entries }
+    }
+
+    /// Look up the source file for a component.
+    pub fn source_file(&self, component_key: &str) -> Option<&str> {
+        self.entries.get(component_key).map(|s| s.as_str())
+    }
+}
+
+/// Discover all `*.wh` files in a folder, parse each, merge into a single
+/// `Topology` (ADR-030). Files are processed in lexicographic order by filename.
+///
+/// Errors on:
+/// - No `.wh` files found in folder
+/// - apiVersion mismatch across files (E12-01)
+/// - Topology name mismatch across files
+/// - Duplicate agent/stream/surface names across files
+/// - Multiple files declaring `broker` section
+/// - Multiple files declaring `guardrails` section
+fn load_topology_folder(
+    dir: &std::path::Path,
+) -> Result<(Topology, ComponentSourceMap), DeployError> {
+    // Discover *.wh files
+    let mut wh_files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "wh") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if wh_files.is_empty() {
+        return Err(DeployError::InvalidTopology(format!(
+            "no .wh files found in folder '{}'",
+            dir.display()
+        )));
+    }
+
+    // Sort lexicographically by filename (not full path)
+    wh_files.sort_by(|a, b| {
+        a.file_name()
+            .unwrap_or_default()
+            .cmp(b.file_name().unwrap_or_default())
+    });
+
+    // Parse each file
+    let mut topologies: Vec<(String, Topology)> = Vec::new();
+    for path in &wh_files {
+        let topo = load_topology(path)?;
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        topologies.push((filename, topo));
+    }
+
+    // Validate apiVersion consistency (E12-01)
+    let first_version = &topologies[0].1.api_version;
+    for (filename, topo) in &topologies[1..] {
+        if &topo.api_version != first_version {
+            return Err(DeployError::InvalidTopology(format!(
+                "apiVersion mismatch: '{}' declares '{}' but '{}' declares '{}'",
+                topologies[0].0, first_version, filename, topo.api_version
+            )));
+        }
+    }
+
+    // Validate topology name consistency
+    let first_name = &topologies[0].1.name;
+    for (filename, topo) in &topologies[1..] {
+        if &topo.name != first_name {
+            return Err(DeployError::InvalidTopology(format!(
+                "topology name mismatch: '{}' declares '{}' but '{}' declares '{}'",
+                topologies[0].0, first_name, filename, topo.name
+            )));
+        }
+    }
+
+    // Build merged topology and detect duplicates
+    let mut merged = Topology {
+        api_version: first_version.clone(),
+        name: first_name.clone(),
+        broker: None,
+        agents: Vec::new(),
+        streams: Vec::new(),
+        surfaces: Vec::new(),
+        guardrails: None,
+    };
+
+    let mut source_map = ComponentSourceMap::default();
+    let mut seen_agents: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let mut seen_streams: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let mut seen_surfaces: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let mut broker_file: Option<String> = None;
+    let mut guardrails_file: Option<String> = None;
+
+    for (filename, topo) in topologies {
+        // Check broker conflicts
+        if topo.broker.is_some() {
+            if let Some(ref prev_file) = broker_file {
+                return Err(DeployError::InvalidTopology(format!(
+                    "conflicting broker sections: declared in both '{prev_file}' and '{filename}'"
+                )));
+            }
+            broker_file = Some(filename.clone());
+            merged.broker = topo.broker;
+        }
+
+        // Check guardrails conflicts
+        if topo.guardrails.is_some() {
+            if let Some(ref prev_file) = guardrails_file {
+                return Err(DeployError::InvalidTopology(format!(
+                    "conflicting guardrails sections: declared in both '{prev_file}' and '{filename}'"
+                )));
+            }
+            guardrails_file = Some(filename.clone());
+            merged.guardrails = topo.guardrails;
+        }
+
+        // Merge agents with duplicate detection
+        for agent in topo.agents {
+            if let Some(prev_file) = seen_agents.get(&agent.name) {
+                return Err(DeployError::InvalidTopology(format!(
+                    "duplicate agent name '{}' across files: '{}' and '{}'",
+                    agent.name, prev_file, filename
+                )));
+            }
+            seen_agents.insert(agent.name.clone(), filename.clone());
+            source_map
+                .entries
+                .insert(format!("agent:{}", agent.name), filename.clone());
+            merged.agents.push(agent);
+        }
+
+        // Merge streams with duplicate detection
+        for stream in topo.streams {
+            if let Some(prev_file) = seen_streams.get(&stream.name) {
+                return Err(DeployError::InvalidTopology(format!(
+                    "duplicate stream name '{}' across files: '{}' and '{}'",
+                    stream.name, prev_file, filename
+                )));
+            }
+            seen_streams.insert(stream.name.clone(), filename.clone());
+            source_map
+                .entries
+                .insert(format!("stream:{}", stream.name), filename.clone());
+            merged.streams.push(stream);
+        }
+
+        // Merge surfaces with duplicate detection
+        for surface in topo.surfaces {
+            if let Some(prev_file) = seen_surfaces.get(&surface.name) {
+                return Err(DeployError::InvalidTopology(format!(
+                    "duplicate surface name '{}' across files: '{}' and '{}'",
+                    surface.name, prev_file, filename
+                )));
+            }
+            seen_surfaces.insert(surface.name.clone(), filename.clone());
+            source_map
+                .entries
+                .insert(format!("surface:{}", surface.name), filename.clone());
+            merged.surfaces.push(surface);
+        }
+    }
+
+    Ok((merged, source_map))
 }
 
 /// Canonicalize a topology for deterministic comparison.
