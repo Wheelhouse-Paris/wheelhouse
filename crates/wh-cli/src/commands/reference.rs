@@ -307,7 +307,7 @@ mod tests {
         let reference = generate_cli_reference();
         // The topology lint command has a `file` argument and `--format` flag
         assert!(
-            reference.contains("`file`"),
+            reference.contains("`path`"),
             "Reference should document positional arguments"
         );
         assert!(
