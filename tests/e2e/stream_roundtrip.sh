@@ -32,10 +32,15 @@ TAIL_PID=0
 trap cleanup EXIT
 
 # Wait for broker control socket to accept connections (max 5 s)
+BROKER_READY=0
 for i in $(seq 1 25); do
-    if "$WH" stream list &>/dev/null; then break; fi
+    if "$WH" stream list &>/dev/null; then BROKER_READY=1; break; fi
     sleep 0.2
 done
+if [[ $BROKER_READY -eq 0 ]]; then
+    echo "FATAL: broker did not start within 5 seconds" >&2
+    exit 1
+fi
 
 echo "Running stream E2E tests..."
 

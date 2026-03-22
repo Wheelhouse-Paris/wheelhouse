@@ -61,11 +61,20 @@ impl BrokerConfig {
     ///
     /// Reads `WH_PUB_PORT`, `WH_SUB_PORT`, `WH_CONTROL_PORT` from the environment.
     /// The bind address is always `0.0.0.0` (container context, ADR-025).
-    /// Default data directory is `/data` (container volume mount point).
+    /// Default data directory is `/data` when it exists (container volume mount),
+    /// otherwise `$HOME/.wh/` (native host).
     pub fn from_env() -> Self {
         let data_dir = std::env::var("WH_DATA_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/data"));
+            .unwrap_or_else(|_| {
+                if PathBuf::from("/data").exists() {
+                    PathBuf::from("/data")
+                } else {
+                    dirs::home_dir()
+                        .unwrap_or_else(|| PathBuf::from("."))
+                        .join(".wh")
+                }
+            });
 
         let compaction_interval_secs = std::env::var("WH_COMPACTION_INTERVAL_SECS")
             .ok()
@@ -112,7 +121,15 @@ impl BrokerConfig {
             control_port,
             data_dir: std::env::var("WH_DATA_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/data")),
+                .unwrap_or_else(|_| {
+                    if PathBuf::from("/data").exists() {
+                        PathBuf::from("/data")
+                    } else {
+                        dirs::home_dir()
+                            .unwrap_or_else(|| PathBuf::from("."))
+                            .join(".wh")
+                    }
+                }),
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
             skills_path: None,
             skills_allowlist: vec![],

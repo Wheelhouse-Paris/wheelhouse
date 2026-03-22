@@ -160,6 +160,7 @@ jobs:
     needs: [rust, python]
     if: always() && !failure() && !cancelled()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
