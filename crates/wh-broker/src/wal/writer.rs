@@ -264,7 +264,7 @@ mod tests {
         let payload = b"test payload for crc";
         let expected_crc = crc32fast::hash(payload) as i64;
 
-        writer.write(payload).await.unwrap();
+        let _ = writer.write(payload).await.unwrap();
 
         // Verify CRC in database
         let conn = writer.conn.lock().await;
