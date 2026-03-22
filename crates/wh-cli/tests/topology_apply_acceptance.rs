@@ -244,10 +244,23 @@ fn podman_module_builds_correct_run_command() {
     assert_eq!(args[2], "--name");
     assert_eq!(args[3], "wh-dev-researcher");
     assert!(args.contains(&"-e".to_string()), "must have -e flag");
-    assert!(args.iter().any(|a| a.starts_with("WH_URL=")), "must set WH_URL env var");
-    assert!(args.contains(&"WH_AGENT_NAME=researcher".to_string()), "must set agent name");
-    assert!(args.contains(&"WH_STREAMS=main".to_string()), "must set streams");
-    assert_eq!(args.last().unwrap(), "researcher:latest", "image must be last arg");
+    assert!(
+        args.iter().any(|a| a.starts_with("WH_URL=")),
+        "must set WH_URL env var"
+    );
+    assert!(
+        args.contains(&"WH_AGENT_NAME=researcher".to_string()),
+        "must set agent name"
+    );
+    assert!(
+        args.contains(&"WH_STREAMS=main".to_string()),
+        "must set streams"
+    );
+    assert_eq!(
+        args.last().unwrap(),
+        "researcher:latest",
+        "image must be last arg"
+    );
 }
 
 /// AC #3: Non-interactive mode (no TTY, no --yes) exits with error.
