@@ -283,9 +283,9 @@ mod tests {
 
         assert_eq!(writer.record_count().await.unwrap(), 0);
 
-        writer.write(b"msg1").await.unwrap();
-        writer.write(b"msg2").await.unwrap();
-        writer.write(b"msg3").await.unwrap();
+        let _ = writer.write(b"msg1").await.unwrap();
+        let _ = writer.write(b"msg2").await.unwrap();
+        let _ = writer.write(b"msg3").await.unwrap();
 
         assert_eq!(writer.record_count().await.unwrap(), 3);
     }
@@ -295,12 +295,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let writer = WalWriter::open(dir.path(), "test-stream").unwrap();
 
-        writer.write(b"old message").await.unwrap();
+        let _ = writer.write(b"old message").await.unwrap();
         // Small delay to separate timestamps
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let cutoff = chrono::Utc::now().timestamp_millis();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        writer.write(b"new message").await.unwrap();
+        let _ = writer.write(b"new message").await.unwrap();
 
         let deleted = writer.delete_before(cutoff).await.unwrap();
         assert_eq!(deleted, 1);
@@ -311,7 +311,7 @@ mod tests {
     async fn test_wal_delete_stream() {
         let dir = tempfile::tempdir().unwrap();
         let writer = WalWriter::open(dir.path(), "test-stream").unwrap();
-        writer.write(b"data").await.unwrap();
+        let _ = writer.write(b"data").await.unwrap();
 
         let db_path = writer.db_path().to_path_buf();
         assert!(db_path.exists());
@@ -327,7 +327,7 @@ mod tests {
     async fn test_wal_tombstone_column_exists() {
         let dir = tempfile::tempdir().unwrap();
         let writer = WalWriter::open(dir.path(), "test-stream").unwrap();
-        writer.write(b"data").await.unwrap();
+        let _ = writer.write(b"data").await.unwrap();
 
         // Verify tombstone column exists and defaults to 0
         let conn = writer.conn.lock().await;
