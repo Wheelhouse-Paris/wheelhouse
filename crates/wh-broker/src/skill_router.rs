@@ -22,6 +22,8 @@ use wh_skill::invocation::{
 };
 use wh_skill::{InvocationPipeline, SkillAllowlist, SkillRepository};
 
+use crate::builtin_skill::{WhCliHandler, WH_CLI_SKILL_NAME};
+
 /// Type URL for SkillInvocation messages.
 pub const TYPE_URL_SKILL_INVOCATION: &str = "wheelhouse.v1.SkillInvocation";
 /// Type URL for SkillResult messages.
@@ -48,10 +50,15 @@ pub struct SkillResponse {
 /// Each registered agent has its own `InvocationPipeline` behind a `Mutex`
 /// to serialize access (pipeline cache updates require `&mut self`).
 /// Agents don't contend with each other since each has its own lock.
+///
+/// The optional `WhCliHandler` intercepts invocations for `skill_name == "wh-cli"`
+/// before they reach the regular pipeline (ADR-035, E12-19).
 pub struct SkillRouter {
     /// Map of agent_id -> pipeline. Each pipeline is behind its own Mutex
     /// because `InvocationPipeline::process()` takes `&mut self`.
     pipelines: HashMap<String, Mutex<InvocationPipeline>>,
+    /// Built-in `wh-cli` handler (ADR-035). None if not configured.
+    wh_cli_handler: Option<WhCliHandler>,
 }
 
 impl Default for SkillRouter {
@@ -65,7 +72,13 @@ impl SkillRouter {
     pub fn new() -> Self {
         SkillRouter {
             pipelines: HashMap::new(),
+            wh_cli_handler: None,
         }
+    }
+
+    /// Set the built-in `wh-cli` handler (ADR-035).
+    pub fn set_wh_cli_handler(&mut self, handler: WhCliHandler) {
+        self.wh_cli_handler = Some(handler);
     }
 
     /// Register an agent's skill pipeline.
@@ -129,7 +142,10 @@ impl SkillRouter {
 
     /// Handle a `SkillInvocation`, returning response messages to publish.
     ///
-    /// Looks up the pipeline by `invocation.agent_id`. If no pipeline exists,
+    /// If `skill_name == "wh-cli"` and a built-in handler is configured,
+    /// routes to `WhCliHandler` (ADR-035, E12-19) instead of the git-based pipeline.
+    ///
+    /// Otherwise, looks up the pipeline by `invocation.agent_id`. If no pipeline exists,
     /// returns a `SkillResult` error with `SKILL_NOT_PERMITTED`.
     ///
     /// Every invocation produces exactly one terminal `SkillResult` (Story 5-4).
@@ -138,6 +154,30 @@ impl SkillRouter {
         &self,
         invocation: SkillInvocationRequest,
     ) -> Vec<SkillResponse> {
+        // Intercept wh-cli invocations (ADR-035, E12-19)
+        if invocation.skill_name == WH_CLI_SKILL_NAME {
+            if let Some(ref handler) = self.wh_cli_handler {
+                let args_str = invocation
+                    .parameters
+                    .get("args")
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+
+                tracing::info!(
+                    agent_id = %invocation.agent_id,
+                    invocation_id = %invocation.invocation_id,
+                    args = args_str,
+                    "wh-cli: built-in skill invocation"
+                );
+
+                return handler
+                    .execute(&invocation.agent_id, &invocation.invocation_id, args_str)
+                    .await;
+            }
+            // No handler configured — fall through to regular pipeline
+            // (which will likely reject as SKILL_FETCH_FAILED)
+        }
+
         let pipeline_mutex = match self.pipelines.get(&invocation.agent_id) {
             Some(p) => p,
             None => {

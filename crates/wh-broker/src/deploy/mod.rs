@@ -723,10 +723,7 @@ streams:
   - name: main
 "#;
         let topo = parse_topology(yaml).unwrap();
-        assert_eq!(
-            topo.skills_repo,
-            Some("/path/to/skills".to_string())
-        );
+        assert_eq!(topo.skills_repo, Some("/path/to/skills".to_string()));
         let skills = topo.agents[0].skills.as_ref().unwrap();
         assert_eq!(skills.len(), 2);
         assert_eq!(skills[0].name, "summarize");
