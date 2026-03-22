@@ -186,10 +186,29 @@ mod tests {
             progress_percent: 0.5,
             status_message: "halfway".to_string(),
             timestamp_ms: 1710000000000,
+            chunk: String::new(),
+            sequence: 0,
         };
         let encoded = original.encode_to_vec();
         let decoded = SkillProgress::decode(encoded.as_slice()).unwrap();
         assert!((decoded.progress_percent - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn skill_progress_chunk_roundtrip() {
+        let original = SkillProgress {
+            invocation_id: "inv-002".to_string(),
+            skill_name: "wh-cli".to_string(),
+            progress_percent: 0.0,
+            status_message: String::new(),
+            timestamp_ms: 1710000000000,
+            chunk: "Running topology plan...".to_string(),
+            sequence: 3,
+        };
+        let encoded = original.encode_to_vec();
+        let decoded = SkillProgress::decode(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.chunk, "Running topology plan...");
+        assert_eq!(decoded.sequence, 3);
     }
 
     // ── System types ────────────────────────────────────────

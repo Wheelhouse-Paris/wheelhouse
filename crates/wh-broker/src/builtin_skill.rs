@@ -21,7 +21,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 use wh_skill::invocation::{
-    build_skill_progress, build_skill_result_error, build_skill_result_success,
+    build_skill_progress_chunk, build_skill_result_error, build_skill_result_success,
 };
 
 use crate::skill_router::{SkillResponse, TYPE_URL_SKILL_PROGRESS, TYPE_URL_SKILL_RESULT};
@@ -210,22 +210,25 @@ impl WhCliHandler {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
-        // Read stdout and stderr concurrently, merge lines
+        // Read stdout and stderr concurrently, merge lines.
+        // Each line is published as a SkillProgress with incrementing sequence (E12-21).
         let read_future = async {
             let mut output_lines: Vec<String> = Vec::new();
+            let mut sequence: u32 = 0;
 
             if let Some(stdout) = stdout {
                 let reader = BufReader::new(stdout);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    // Send SkillProgress per line (E12-21)
+                    // Send SkillProgress per line (E12-21, Story 12-7)
                     let progress =
-                        build_skill_progress(invocation_id, WH_CLI_SKILL_NAME, 0.0, &line);
+                        build_skill_progress_chunk(invocation_id, WH_CLI_SKILL_NAME, &line, sequence);
                     responses.push(SkillResponse {
                         type_url: TYPE_URL_SKILL_PROGRESS.to_string(),
                         payload: progress.encode_to_vec(),
                     });
                     output_lines.push(line);
+                    sequence += 1;
                 }
             }
 
@@ -235,12 +238,13 @@ impl WhCliHandler {
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     let progress =
-                        build_skill_progress(invocation_id, WH_CLI_SKILL_NAME, 0.0, &line);
+                        build_skill_progress_chunk(invocation_id, WH_CLI_SKILL_NAME, &line, sequence);
                     responses.push(SkillResponse {
                         type_url: TYPE_URL_SKILL_PROGRESS.to_string(),
                         payload: progress.encode_to_vec(),
                     });
                     output_lines.push(line);
+                    sequence += 1;
                 }
             }
 

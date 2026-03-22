@@ -75,6 +75,29 @@ pub fn build_skill_progress(
         progress_percent,
         status_message: status_message.to_string(),
         timestamp_ms: now_ms(),
+        chunk: String::new(),
+        sequence: 0,
+    }
+}
+
+/// Build a `SkillProgress` protobuf message for streaming output (Story 12-7, E12-21).
+///
+/// Each line/chunk of output from a skill execution (e.g., wh-cli) is published
+/// as a separate `SkillProgress` with an incrementing `sequence` number.
+pub fn build_skill_progress_chunk(
+    invocation_id: &str,
+    skill_name: &str,
+    chunk: &str,
+    sequence: u32,
+) -> wh_proto::SkillProgress {
+    wh_proto::SkillProgress {
+        invocation_id: invocation_id.to_string(),
+        skill_name: skill_name.to_string(),
+        progress_percent: 0.0,
+        status_message: String::new(),
+        timestamp_ms: now_ms(),
+        chunk: chunk.to_string(),
+        sequence,
     }
 }
 
@@ -173,7 +196,31 @@ mod tests {
         assert_eq!(p.skill_name, "summarize");
         assert!((p.progress_percent - 0.5).abs() < f32::EPSILON);
         assert_eq!(p.status_message, "halfway");
+        assert!(p.chunk.is_empty());
+        assert_eq!(p.sequence, 0);
         assert!(p.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn build_progress_chunk_sets_fields() {
+        let p = build_skill_progress_chunk("inv-2", "wh-cli", "output line 1", 0);
+        assert_eq!(p.invocation_id, "inv-2");
+        assert_eq!(p.skill_name, "wh-cli");
+        assert_eq!(p.chunk, "output line 1");
+        assert_eq!(p.sequence, 0);
+        assert!((p.progress_percent - 0.0).abs() < f32::EPSILON);
+        assert!(p.status_message.is_empty());
+        assert!(p.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn build_progress_chunk_incrementing_sequence() {
+        let p0 = build_skill_progress_chunk("inv-3", "wh-cli", "line 0", 0);
+        let p1 = build_skill_progress_chunk("inv-3", "wh-cli", "line 1", 1);
+        let p2 = build_skill_progress_chunk("inv-3", "wh-cli", "line 2", 2);
+        assert_eq!(p0.sequence, 0);
+        assert_eq!(p1.sequence, 1);
+        assert_eq!(p2.sequence, 2);
     }
 
     #[test]

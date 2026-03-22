@@ -59,6 +59,8 @@ pub fn build_skill_progress(
         progress_percent: percent as f32,
         status_message: message.to_string(),
         timestamp_ms: now_ms(),
+        chunk: String::new(),
+        sequence: 0,
     }
 }
 

@@ -82,6 +82,10 @@ class SkillResult(betterproto.Message):
 class SkillProgress(betterproto.Message):
     """
     SkillProgress — intermediate progress update during skill execution (CM-06).
+
+    Used for two patterns:
+    1. General progress: progress_percent + status_message (e.g., agent starting)
+    2. Streaming output: chunk + sequence (e.g., wh-cli line-by-line output, E12-21)
     """
 
     invocation_id: str = betterproto.string_field(1)
@@ -89,6 +93,11 @@ class SkillProgress(betterproto.Message):
     progress_percent: float = betterproto.float_field(3)
     status_message: str = betterproto.string_field(4)
     timestamp_ms: int = betterproto.int64_field(5)
+    chunk: str = betterproto.string_field(6)
+    """One line/chunk of output (Story 12-7, E12-21)."""
+
+    sequence: int = betterproto.uint32_field(7)
+    """Ordering number for chunk reassembly (Story 12-7)."""
 
 
 @dataclass(eq=False, repr=False)

@@ -1827,3 +1827,134 @@ class TestMissingPersonaFilesGraceful:
         assert (tmp_path / "MEMORY.md").exists()
         assert (tmp_path / "MEMORY.md").read_text() == ""
         assert any(r.levelno == logging.WARNING and "MEMORY.md" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Story 12.7: SkillProgress handling — forward as TextMessage (FR78)
+# ---------------------------------------------------------------------------
+
+class TestSkillProgressHandling:
+    """Agent forwards SkillProgress as TextMessage for real-time surface feedback."""
+
+    async def test_skill_progress_forwarded_as_text_message(
+        self, mock_connection, config, persona, mock_claude_client
+    ):
+        """Given a SkillProgress with status_message 'Deploying container X',
+        When agent-claude receives it,
+        Then a TextMessage is published with the status_message as content (AC-1, AC-2).
+        """
+        from agent_claude.loop import _make_handler
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=config["persona_path"],
+        )
+
+        progress = SkillProgress(
+            invocation_id="inv-001",
+            skill_name="wh-cli",
+            progress_percent=0.0,
+            status_message="Deploying container X",
+        )
+        await handler(progress)
+
+        # Should publish a TextMessage
+        mock_connection.publish.assert_called_once()
+        published = mock_connection.publish.call_args[0]
+        assert published[0] == "main"
+        assert isinstance(published[1], TextMessage)
+        assert published[1].content == "Deploying container X"
+        assert published[1].publisher_id == "donna"
+
+    async def test_skill_progress_empty_status_message_skipped(
+        self, mock_connection, config, persona, mock_claude_client
+    ):
+        """Given a SkillProgress with empty status_message,
+        When agent-claude receives it,
+        Then no TextMessage is published (AC-5).
+        """
+        from agent_claude.loop import _make_handler
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=config["persona_path"],
+        )
+
+        progress = SkillProgress(
+            invocation_id="inv-002",
+            skill_name="wh-cli",
+            progress_percent=0.0,
+            status_message="",
+        )
+        await handler(progress)
+
+        mock_connection.publish.assert_not_called()
+
+    async def test_skill_progress_no_claude_api_call(
+        self, mock_connection, config, persona, mock_claude_client
+    ):
+        """Given a SkillProgress message,
+        When agent-claude handles it,
+        Then no Claude API call is made (AC-6).
+        """
+        from agent_claude.loop import _make_handler
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="main",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="donna",
+            persona_path=config["persona_path"],
+        )
+
+        progress = SkillProgress(
+            invocation_id="inv-003",
+            skill_name="wh-cli",
+            progress_percent=0.5,
+            status_message="Step 2 of 3: building image",
+        )
+        await handler(progress)
+
+        # Claude API should NOT be called
+        mock_claude_client.complete.assert_not_called()
+
+        # But a TextMessage should be published
+        mock_connection.publish.assert_called_once()
+
+    async def test_skill_progress_publisher_id_set_to_agent_name(
+        self, mock_connection, config, persona, mock_claude_client
+    ):
+        """Given a SkillProgress message,
+        When forwarded as TextMessage,
+        Then publisher_id is the agent's name (AC-2).
+        """
+        from agent_claude.loop import _make_handler
+
+        handler = _make_handler(
+            connection=mock_connection,
+            stream_name="events",
+            claude_client=mock_claude_client,
+            persona=persona,
+            agent_name="researcher",
+            persona_path=config["persona_path"],
+        )
+
+        progress = SkillProgress(
+            invocation_id="inv-004",
+            skill_name="wh-cli",
+            progress_percent=0.0,
+            status_message="Listing containers",
+        )
+        await handler(progress)
+
+        published_msg = mock_connection.publish.call_args[0][1]
+        assert published_msg.publisher_id == "researcher"

@@ -8,6 +8,7 @@ Dispatch table:
   CronEvent             -> structured cron prompt; call Claude API
   SkillInvocation (us)  -> skill prompt + SkillProgress; call Claude API
   SkillInvocation (other) -> drop silently
+  SkillProgress         -> forward as TextMessage (no LLM call, FR78)
   TopologyShutdown      -> graceful drain
   Any other type        -> log debug, skip
 """
@@ -166,6 +167,10 @@ def _make_handler(
                 await _handle_skill_invocation(
                     message, connection, stream_name, claude_client, persona,
                     agent_name, persona_path,
+                )
+            elif isinstance(message, SkillProgress):
+                await _handle_skill_progress(
+                    message, connection, stream_name, agent_name,
                 )
             else:
                 logger.debug(
@@ -468,3 +473,38 @@ async def _handle_skill_invocation(
             skill_result,
             f"type=SkillResult invocation_id={message.invocation_id} success=False",
         )
+
+
+async def _handle_skill_progress(
+    message: SkillProgress,
+    connection: Any,
+    stream_name: str,
+    agent_name: str,
+) -> None:
+    """Handle an incoming SkillProgress by forwarding as TextMessage (FR78).
+
+    SkillProgress messages are published by the broker per output line during
+    skill execution (E12-21). The agent forwards them as TextMessages so
+    surfaces (Telegram, CLI) display real-time progress.
+
+    No Claude API call is made — this is a direct pass-through.
+    """
+    # Skip empty progress updates (AC-5)
+    if not message.status_message:
+        logger.debug(
+            "SkillProgress skipped (empty status_message): invocation_id=%s stream=%s",
+            message.invocation_id,
+            stream_name,
+        )
+        return
+
+    progress_text = TextMessage(
+        content=message.status_message,
+        publisher_id=agent_name,
+    )
+    await _publish_response(
+        connection,
+        stream_name,
+        progress_text,
+        f"type=TextMessage(progress) invocation_id={message.invocation_id} stream={stream_name} chars={len(message.status_message)}",
+    )

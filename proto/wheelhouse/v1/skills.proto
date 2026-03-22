@@ -29,12 +29,20 @@ message SkillResult {
 }
 
 // SkillProgress — intermediate progress update during skill execution (CM-06).
+//
+// Used for two patterns:
+// 1. General progress: progress_percent + status_message (e.g., agent starting)
+// 2. Streaming output: chunk + sequence (e.g., wh-cli line-by-line output, E12-21)
 message SkillProgress {
   string invocation_id = 1;
   string skill_name = 2;
   float progress_percent = 3;
   string status_message = 4;
   int64 timestamp_ms = 5;
+
+  // Streaming output fields (Story 12-7, E12-21)
+  string chunk = 6;       // One line/chunk of output
+  uint32 sequence = 7;    // Ordering number for chunk reassembly
 
   // Reserved for future evolution (TT-02)
   reserved 50 to 100;
