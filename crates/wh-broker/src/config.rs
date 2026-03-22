@@ -9,6 +9,7 @@
 //! Default data directory is `/data` (container convention, mounted from a
 //! named Podman volume).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Bind address: always `0.0.0.0` inside the container (ADR-025).
@@ -24,6 +25,9 @@ const DEFAULT_CONTROL_PORT: u16 = 5557;
 
 /// Default compaction interval: 24 hours (86400 seconds).
 const DEFAULT_COMPACTION_INTERVAL_SECS: u64 = 86400;
+
+/// Default topology directory inside the broker container (ADR-035, FR79).
+const DEFAULT_TOPOLOGY_DIR: &str = "/topology";
 
 /// Broker configuration with localhost-only security invariant.
 #[derive(Debug, Clone)]
@@ -43,6 +47,13 @@ pub struct BrokerConfig {
     /// Comma-separated list of allowed skill names (Story 9.3, FM-05).
     /// Configured via `WH_SKILLS_ALLOWLIST` env var. Empty means no skills allowed.
     skills_allowlist: Vec<String>,
+    /// Topology folder path — working directory for `wh-cli` commands (ADR-035, FR79).
+    /// Configured via `WH_TOPOLOGY_DIR` env var, default `/topology`.
+    topology_dir: PathBuf,
+    /// Agent permissions map: agent_name -> topology_edit (ADR-035, FR77).
+    /// Configured via `WH_AGENT_PERMISSIONS` env var as comma-separated
+    /// `agent_name:topology_edit` pairs (e.g., `"donna:true,researcher:false"`).
+    agent_permissions: HashMap<String, bool>,
 }
 
 impl BrokerConfig {
@@ -72,6 +83,14 @@ impl BrokerConfig {
             })
             .unwrap_or_default();
 
+        let topology_dir = std::env::var("WH_TOPOLOGY_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_TOPOLOGY_DIR));
+
+        let agent_permissions = Self::parse_agent_permissions(
+            &std::env::var("WH_AGENT_PERMISSIONS").unwrap_or_default(),
+        );
+
         Self {
             pub_port: Self::read_port_env("WH_PUB_PORT", DEFAULT_PUB_PORT),
             sub_port: Self::read_port_env("WH_SUB_PORT", DEFAULT_SUB_PORT),
@@ -80,6 +99,8 @@ impl BrokerConfig {
             compaction_interval_secs,
             skills_path,
             skills_allowlist,
+            topology_dir,
+            agent_permissions,
         }
     }
 
@@ -95,6 +116,8 @@ impl BrokerConfig {
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
             skills_path: None,
             skills_allowlist: vec![],
+            topology_dir: PathBuf::from(DEFAULT_TOPOLOGY_DIR),
+            agent_permissions: HashMap::new(),
         }
     }
 
@@ -113,6 +136,8 @@ impl BrokerConfig {
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
             skills_path: None,
             skills_allowlist: vec![],
+            topology_dir: PathBuf::from(DEFAULT_TOPOLOGY_DIR),
+            agent_permissions: HashMap::new(),
         }
     }
 
@@ -171,6 +196,41 @@ impl BrokerConfig {
         &self.skills_allowlist
     }
 
+    /// Topology folder path — working directory for `wh-cli` commands (ADR-035, FR79).
+    pub fn topology_dir(&self) -> &Path {
+        &self.topology_dir
+    }
+
+    /// Agent permissions map (ADR-035, FR77).
+    pub fn agent_permissions(&self) -> &HashMap<String, bool> {
+        &self.agent_permissions
+    }
+
+    /// Parse `WH_AGENT_PERMISSIONS` env var value into a HashMap.
+    ///
+    /// Format: comma-separated `agent_name:topology_edit` pairs.
+    /// Example: `"donna:true,researcher:false"`.
+    /// Invalid entries are silently skipped.
+    fn parse_agent_permissions(value: &str) -> HashMap<String, bool> {
+        value
+            .split(',')
+            .filter_map(|pair| {
+                let pair = pair.trim();
+                if pair.is_empty() {
+                    return None;
+                }
+                let mut parts = pair.splitn(2, ':');
+                let name = parts.next()?.trim();
+                let perm = parts.next()?.trim();
+                if name.is_empty() {
+                    return None;
+                }
+                let topology_edit = perm.eq_ignore_ascii_case("true");
+                Some((name.to_string(), topology_edit))
+            })
+            .collect()
+    }
+
     fn read_port_env(var: &str, default: u16) -> u16 {
         std::env::var(var)
             .ok()
@@ -189,6 +249,8 @@ impl Default for BrokerConfig {
             compaction_interval_secs: DEFAULT_COMPACTION_INTERVAL_SECS,
             skills_path: None,
             skills_allowlist: vec![],
+            topology_dir: PathBuf::from(DEFAULT_TOPOLOGY_DIR),
+            agent_permissions: HashMap::new(),
         }
     }
 }
@@ -234,5 +296,54 @@ mod tests {
         assert_eq!(config.pub_endpoint(), "tcp://0.0.0.0:6000");
         assert_eq!(config.sub_endpoint(), "tcp://0.0.0.0:6001");
         assert_eq!(config.control_endpoint(), "tcp://0.0.0.0:6002");
+    }
+
+    #[test]
+    fn test_config_default_topology_dir() {
+        let config = BrokerConfig::default();
+        assert_eq!(config.topology_dir(), std::path::Path::new("/topology"));
+    }
+
+    #[test]
+    fn test_config_default_agent_permissions_empty() {
+        let config = BrokerConfig::default();
+        assert!(config.agent_permissions().is_empty());
+    }
+
+    #[test]
+    fn test_parse_agent_permissions_valid() {
+        let perms = BrokerConfig::parse_agent_permissions("donna:true,researcher:false");
+        assert_eq!(perms.len(), 2);
+        assert_eq!(perms.get("donna"), Some(&true));
+        assert_eq!(perms.get("researcher"), Some(&false));
+    }
+
+    #[test]
+    fn test_parse_agent_permissions_with_spaces() {
+        let perms = BrokerConfig::parse_agent_permissions(" donna : true , researcher : false ");
+        assert_eq!(perms.len(), 2);
+        assert_eq!(perms.get("donna"), Some(&true));
+        assert_eq!(perms.get("researcher"), Some(&false));
+    }
+
+    #[test]
+    fn test_parse_agent_permissions_empty_string() {
+        let perms = BrokerConfig::parse_agent_permissions("");
+        assert!(perms.is_empty());
+    }
+
+    #[test]
+    fn test_parse_agent_permissions_invalid_entries_skipped() {
+        let perms = BrokerConfig::parse_agent_permissions("donna:true,invalid,researcher:false");
+        assert_eq!(perms.len(), 2);
+        assert_eq!(perms.get("donna"), Some(&true));
+        assert_eq!(perms.get("researcher"), Some(&false));
+    }
+
+    #[test]
+    fn test_parse_agent_permissions_case_insensitive() {
+        let perms = BrokerConfig::parse_agent_permissions("donna:TRUE,bob:True");
+        assert_eq!(perms.get("donna"), Some(&true));
+        assert_eq!(perms.get("bob"), Some(&true));
     }
 }

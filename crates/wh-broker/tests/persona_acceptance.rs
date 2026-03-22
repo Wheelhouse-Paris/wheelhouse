@@ -126,6 +126,7 @@ fn build_run_args_includes_persona_volume_when_set() {
         None,
         true,
         false,
+        false,
         &[],
         None,
     );
@@ -154,6 +155,7 @@ fn build_run_args_excludes_persona_when_not_set() {
         "researcher:latest",
         &["main".to_string()],
         None,
+        false,
         false,
         false,
         &[],

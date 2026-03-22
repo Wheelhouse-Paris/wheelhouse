@@ -50,7 +50,10 @@ fn run_create(name: &str, topology_path: &str) -> i32 {
 
     let skill_dir = repo_path.join(name);
     if skill_dir.exists() {
-        eprintln!("Error: skill '{name}' already exists at {}", skill_dir.display());
+        eprintln!(
+            "Error: skill '{name}' already exists at {}",
+            skill_dir.display()
+        );
         return 1;
     }
 

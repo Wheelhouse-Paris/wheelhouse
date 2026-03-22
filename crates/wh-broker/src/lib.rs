@@ -4,6 +4,7 @@
 //! control socket, metrics, WAL persistence, and stream management.
 //! The broker binds exclusively on `127.0.0.1` as a security invariant (ADR-001, NFR-S1).
 
+pub mod builtin_skill;
 pub mod config;
 pub mod control;
 pub mod cron;
@@ -54,34 +55,42 @@ pub async fn run_broker(config: BrokerConfig) -> Result<(), BrokerError> {
         .map_err(|e| BrokerError::RoutingError(format!("spawn_blocking join error: {e}")))?
         .map_err(|e| BrokerError::RoutingError(format!("Failed to create data directory: {e}")))?;
 
-    // Initialize skill router if configured (Story 9.3)
-    let skill_router_opt = if let Some(skills_path) = config.skills_path() {
-        let allowlist_names = config.skills_allowlist().to_vec();
-        if !allowlist_names.is_empty() {
-            let skill_refs: Vec<wh_skill::config::SkillRef> = allowlist_names
-                .iter()
-                .map(|name| wh_skill::config::SkillRef {
-                    name: name.clone(),
-                    // Version already resolved at deploy time — use filesystem path
-                    version: "branch:main".to_string(),
-                })
-                .collect();
+    // Initialize skill router (Story 9.3, ADR-035)
+    // Always created because the wh-cli built-in handler is always available.
+    let skill_router_opt = {
+        let mut router = skill_router::SkillRouter::new();
 
-            let mut router = skill_router::SkillRouter::new();
-            router.register_agent(
-                "default",
-                allowlist_names,
-                Some(skills_path),
-                skill_refs,
-            );
+        // Register git-based skill pipeline if configured
+        if let Some(skills_path) = config.skills_path() {
+            let allowlist_names = config.skills_allowlist().to_vec();
+            if !allowlist_names.is_empty() {
+                let skill_refs: Vec<wh_skill::config::SkillRef> = allowlist_names
+                    .iter()
+                    .map(|name| wh_skill::config::SkillRef {
+                        name: name.clone(),
+                        // Version already resolved at deploy time — use filesystem path
+                        version: "branch:main".to_string(),
+                    })
+                    .collect();
 
-            tracing::info!(skills_path = skills_path, "skill routing enabled");
-            Some(router)
-        } else {
-            None
+                router.register_agent("default", allowlist_names, Some(skills_path), skill_refs);
+
+                tracing::info!(skills_path = skills_path, "skill routing enabled");
+            }
         }
-    } else {
-        None
+
+        // Register built-in wh-cli handler (ADR-035, Story 12.6)
+        let agent_permissions = config.agent_permissions().clone();
+        let topology_dir = config.topology_dir().to_path_buf();
+        let wh_cli_handler =
+            builtin_skill::WhCliHandler::new(topology_dir.clone(), agent_permissions);
+        router.set_wh_cli_handler(wh_cli_handler);
+        tracing::info!(
+            topology_dir = %topology_dir.display(),
+            "wh-cli built-in skill handler registered (ADR-035)"
+        );
+
+        Some(router)
     };
 
     let state =

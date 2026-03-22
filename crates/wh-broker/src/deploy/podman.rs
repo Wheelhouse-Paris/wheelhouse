@@ -191,11 +191,28 @@ fn is_broker_reachable() -> bool {
 /// - `-e WH_DATA_DIR=/data`
 ///
 /// After starting, polls the control socket via TCP until reachable (up to 5s).
+/// Build the `WH_AGENT_PERMISSIONS` env var value from agent specs.
+///
+/// Format: comma-separated `agent_name:topology_edit` pairs.
+/// Agents without `topology_edit` are included with `false`.
+pub fn build_agent_permissions_env(agents: &[crate::deploy::Agent]) -> String {
+    agents
+        .iter()
+        .map(|a| {
+            let edit = a.topology_edit.unwrap_or(false);
+            format!("{}:{}", a.name, edit)
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 #[tracing::instrument(skip_all, fields(topology = %topology_name))]
 pub fn ensure_broker_container(
     topology_name: &str,
     broker: Option<&crate::deploy::BrokerSpec>,
     has_skills: bool,
+    agent_permissions_env: &str,
+    workspace_root: Option<&std::path::Path>,
 ) -> Result<(), DeployError> {
     // Idempotent: skip if already running.
     if podman_is_running(BROKER_CONTAINER_NAME)? {
@@ -247,6 +264,23 @@ pub fn ensure_broker_container(
         args.push(format!("{skills_vol}:/skills:ro"));
         args.push("-e".to_string());
         args.push("WH_SKILLS_PATH=/skills".to_string());
+    }
+
+    // Mount workspace root as topology folder for wh-cli built-in skill (ADR-035, FR79).
+    // The broker container needs access to the topology folder as working directory
+    // for `wh` child processes.
+    if let Some(ws_root) = workspace_root {
+        let topo_mount = format!("{}:/topology:ro", ws_root.display());
+        args.push("-v".to_string());
+        args.push(topo_mount);
+        args.push("-e".to_string());
+        args.push("WH_TOPOLOGY_DIR=/topology".to_string());
+    }
+
+    // Pass agent permissions for wh-cli tier-2 command authorization (ADR-035, FR77).
+    if !agent_permissions_env.is_empty() {
+        args.push("-e".to_string());
+        args.push(format!("WH_AGENT_PERMISSIONS={agent_permissions_env}"));
     }
 
     args.push(image.to_string());
@@ -481,9 +515,8 @@ pub fn populate_platform_volume(topology_name: &str) -> Result<(), DeployError> 
     let helper = format!("wh-platform-init-{}", sanitize_name(topology_name));
 
     // Use the current binary's path to invoke subcommands (avoids PATH issues)
-    let wh_bin = std::env::current_exe().map_err(|e| {
-        DeployError::ApplyFailed(format!("cannot resolve wh binary path: {e}"))
-    })?;
+    let wh_bin = std::env::current_exe()
+        .map_err(|e| DeployError::ApplyFailed(format!("cannot resolve wh binary path: {e}")))?;
 
     // Generate capabilities.json from the host wh binary
     let capabilities_output = std::process::Command::new(&wh_bin)
@@ -519,21 +552,30 @@ pub fn populate_platform_volume(topology_name: &str) -> Result<(), DeployError> 
     if !capabilities_json.is_empty() {
         // Escape single quotes in JSON for shell safety
         let escaped = capabilities_json.replace('\'', "'\\''");
-        script.push_str(&format!("printf '%s' '{}' > /etc/wh/capabilities.json && ", escaped));
+        script.push_str(&format!(
+            "printf '%s' '{escaped}' > /etc/wh/capabilities.json && ",
+        ));
     }
     if !cli_reference.is_empty() {
         let escaped = cli_reference.replace('\'', "'\\''");
-        script.push_str(&format!("printf '%s' '{}' > /etc/wh/cli-reference.md && ", escaped));
+        script.push_str(&format!(
+            "printf '%s' '{escaped}' > /etc/wh/cli-reference.md && ",
+        ));
     }
     script.push_str("echo done");
 
     // Run a throwaway Alpine container that mounts the volume and writes the files
     let args = [
-        "run", "--rm",
-        "--name", &helper,
-        "-v", &format!("{vol}:/etc/wh"),
+        "run",
+        "--rm",
+        "--name",
+        &helper,
+        "-v",
+        &format!("{vol}:/etc/wh"),
         "alpine:latest",
-        "sh", "-c", &script,
+        "sh",
+        "-c",
+        &script,
     ];
 
     tracing::info!("populating platform volume with capabilities + CLI reference");
@@ -639,11 +681,16 @@ pub fn populate_personas_volume(
 
     // Run a throwaway Alpine container to populate the volume
     let args = [
-        "run", "--rm",
-        "--name", &helper,
-        "-v", &format!("{vol}:/personas"),
+        "run",
+        "--rm",
+        "--name",
+        &helper,
+        "-v",
+        &format!("{vol}:/personas"),
         "alpine:latest",
-        "sh", "-c", &script,
+        "sh",
+        "-c",
+        &script,
     ];
 
     tracing::info!(
@@ -1018,7 +1065,6 @@ fn parse_surface_name(component: &str) -> Option<&str> {
     component.strip_prefix("surface ")
 }
 
-
 /// Build the context volume name for a topology.
 fn context_volume_name(topology_name: &str) -> String {
     let topo = sanitize_name(topology_name);
@@ -1090,11 +1136,16 @@ pub fn populate_context_volume(
     script.push_str("echo done");
 
     let args = [
-        "run", "--rm",
-        "--name", &helper,
-        "-v", &format!("{vol}:/context"),
+        "run",
+        "--rm",
+        "--name",
+        &helper,
+        "-v",
+        &format!("{vol}:/context"),
         "alpine:latest",
-        "sh", "-c", &script,
+        "sh",
+        "-c",
+        &script,
     ];
 
     tracing::info!(streams = entries.len(), "populating context volume");
@@ -1159,7 +1210,9 @@ fn populate_skills_volume_local(
     let skills_dir = if skills_path == "." || skills_path == "./" {
         // "." means look for a `skills/` subfolder in the workspace root
         ws_root
-            .ok_or_else(|| DeployError::ApplyFailed("skills_repo '.' requires a workspace root".into()))?
+            .ok_or_else(|| {
+                DeployError::ApplyFailed("skills_repo '.' requires a workspace root".into())
+            })?
             .join("skills")
     } else {
         let p = std::path::PathBuf::from(skills_path);
@@ -1173,7 +1226,11 @@ fn populate_skills_volume_local(
         } else {
             // Relative path — resolve from workspace root
             ws_root
-                .ok_or_else(|| DeployError::ApplyFailed("relative skills_repo requires a workspace root".into()))?
+                .ok_or_else(|| {
+                    DeployError::ApplyFailed(
+                        "relative skills_repo requires a workspace root".into(),
+                    )
+                })?
                 .join(skills_path)
         }
     };
@@ -1252,11 +1309,16 @@ fn populate_skills_volume_local(
 
     let vol_mount = format!("{vol}:/skills");
     let args = [
-        "run", "--rm",
-        "--name", helper.as_str(),
-        "-v", vol_mount.as_str(),
+        "run",
+        "--rm",
+        "--name",
+        helper.as_str(),
+        "-v",
+        vol_mount.as_str(),
         "alpine:latest",
-        "sh", "-c", script.as_str(),
+        "sh",
+        "-c",
+        script.as_str(),
     ];
 
     tracing::info!(skills = skill_names.len(), path = %skills_dir.display(), "populating skills volume (local)");
@@ -1291,11 +1353,16 @@ fn populate_skills_volume_remote(
     );
 
     let args = [
-        "run", "--rm",
-        "--name", &helper,
-        "-v", &format!("{vol}:/skills"),
+        "run",
+        "--rm",
+        "--name",
+        &helper,
+        "-v",
+        &format!("{vol}:/skills"),
         "alpine:latest",
-        "sh", "-c", &script,
+        "sh",
+        "-c",
+        &script,
     ];
 
     tracing::info!(skills = skill_names.len(), repo = %skills_repo_url, "populating skills volume (remote)");
@@ -1414,9 +1481,18 @@ pub fn provision_containers(
         }
     }
 
+    // Build agent permissions env var for wh-cli built-in skill (ADR-035, FR77).
+    let agent_permissions_env = build_agent_permissions_env(agents);
+
     // Start the broker container before any agent containers (ADR-025).
     // Agents connect to the broker via DNS at startup, so it must be available first.
-    if let Err(e) = ensure_broker_container(topology_name, broker, skills_repo.is_some()) {
+    if let Err(e) = ensure_broker_container(
+        topology_name,
+        broker,
+        skills_repo.is_some(),
+        &agent_permissions_env,
+        workspace_root,
+    ) {
         tracing::error!(error = %e, "broker is not available");
         eprintln!("Error: {e}");
         return ApplyResult {
