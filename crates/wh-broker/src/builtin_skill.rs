@@ -221,8 +221,12 @@ impl WhCliHandler {
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
                     // Send SkillProgress per line (E12-21, Story 12-7)
-                    let progress =
-                        build_skill_progress_chunk(invocation_id, WH_CLI_SKILL_NAME, &line, sequence);
+                    let progress = build_skill_progress_chunk(
+                        invocation_id,
+                        WH_CLI_SKILL_NAME,
+                        &line,
+                        sequence,
+                    );
                     responses.push(SkillResponse {
                         type_url: TYPE_URL_SKILL_PROGRESS.to_string(),
                         payload: progress.encode_to_vec(),
@@ -237,8 +241,12 @@ impl WhCliHandler {
                 let reader = BufReader::new(stderr);
                 let mut lines = reader.lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let progress =
-                        build_skill_progress_chunk(invocation_id, WH_CLI_SKILL_NAME, &line, sequence);
+                    let progress = build_skill_progress_chunk(
+                        invocation_id,
+                        WH_CLI_SKILL_NAME,
+                        &line,
+                        sequence,
+                    );
                     responses.push(SkillResponse {
                         type_url: TYPE_URL_SKILL_PROGRESS.to_string(),
                         payload: progress.encode_to_vec(),
