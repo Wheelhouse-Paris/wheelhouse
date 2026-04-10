@@ -523,8 +523,12 @@ pub fn destroy(
         );
     }
 
-    // Remove named data volumes (ADR-027). Best-effort — log warn on failure.
-    if let Err(e) = podman::remove_volumes(&topology.name) {
+    // Remove named data volumes (ADR-027, ADR-036). Per-agent workspace
+    // volumes (Epic 13 story 13-3 FW-1.3) are enumerated from the loaded
+    // state so each agent's Library volume is reclaimed alongside the
+    // shared volumes. Best-effort — log warn on failure.
+    let destroy_agent_names: Vec<&str> = topology.agents.iter().map(|a| a.name.as_str()).collect();
+    if let Err(e) = podman::remove_volumes(&topology.name, &destroy_agent_names) {
         tracing::warn!(
             error = %e,
             "failed to remove topology data volumes during destroy — continuing"
