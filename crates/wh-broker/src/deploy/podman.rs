@@ -593,6 +593,16 @@ fn render_default_schema(agent_name: &str, domain: &str) -> String {
 /// `_bmad-output/planning-artifacts/wh/library-default-schema-template.md`.
 const DEFAULT_LIBRARY_DOMAIN: &str = "general knowledge";
 
+/// UID of the `agent` user inside the `agent-claude` container image.
+///
+/// Pinned to 1000 by the image Dockerfile (`useradd --create-home agent`).
+/// The broker pre-creates `/workspace/.library/` owned by this UID so the
+/// unprivileged agent process can write to it without needing `/workspace/`
+/// itself to be world-writable. Keeping `/workspace/` root-owned preserves
+/// the ADR-037 invariant that `.wh-schema.md` cannot be clobbered even if
+/// `LibrarySandbox` is bypassed via shell access.
+const AGENT_CONTAINER_UID: u32 = 1000;
+
 /// Build the shell script that the workspace-populate helper container runs.
 ///
 /// Factored out from `populate_workspace_volumes` so it can be unit-tested
@@ -607,7 +617,14 @@ const DEFAULT_LIBRARY_DOMAIN: &str = "general knowledge";
 ///    the resolved schema to the workspace ROOT (NOT inside `.library/`).
 /// 3. `chmod 444 /workspace/.wh-schema.md` — ADR-037 defense-in-depth: even
 ///    if `LibrarySandbox` is bypassed via the Bash tool, the OS rejects writes.
-/// 4. `echo done` — sentinel for the helper exit-code path.
+/// 4. `mkdir -p /workspace/.library` — pre-create the Library root so the
+///    unprivileged agent process can write to it at boot (13-7
+///    `build_library_sandbox` calls `os.makedirs`). Without this, a fresh
+///    volume is owned by `root:root` and the `agent` UID cannot create
+///    subdirectories.
+/// 5. `chown 1000:1000 /workspace/.library` — match `AGENT_CONTAINER_UID`.
+/// 6. `chmod 755 /workspace/.library` — agent can read/write, others can read.
+/// 7. `echo done` — sentinel for the helper exit-code path.
 fn build_workspace_populate_script(schema_content: &str) -> String {
     // Escape single quotes for the outer shell single-quoted string.
     // Pattern: ' becomes '\'' (close quote, literal quote, reopen quote).
@@ -619,9 +636,16 @@ fn build_workspace_populate_script(schema_content: &str) -> String {
     script.push_str(&format!(
         "printf '%s' '{escaped}' > /workspace/.wh-schema.md && "
     ));
-    // Step 3: ADR-037 / NFR10 defense-in-depth read-only.
+    // Step 3: ADR-037 / NFR10 defense-in-depth read-only on the schema file.
     script.push_str("chmod 444 /workspace/.wh-schema.md && ");
-    // Step 4: sentinel.
+    // Step 4: pre-create .library/ so the unprivileged agent can write to it.
+    script.push_str("mkdir -p /workspace/.library && ");
+    // Step 5: chown to the agent UID (pinned in the image Dockerfile).
+    let uid = AGENT_CONTAINER_UID;
+    script.push_str(&format!("chown {uid}:{uid} /workspace/.library && "));
+    // Step 6: agent can read/write; others read-only.
+    script.push_str("chmod 755 /workspace/.library && ");
+    // Step 7: sentinel.
     script.push_str("echo done");
     script
 }
@@ -2832,6 +2856,45 @@ mod tests {
         assert!(
             script.trim_end().ends_with("echo done"),
             "script must end with `echo done` sentinel"
+        );
+    }
+
+    /// The populate script must pre-create `/workspace/.library/` owned by
+    /// the agent container's UID so the unprivileged `agent` process can
+    /// write to it at boot. Without this, a fresh per-agent volume is
+    /// owned by `root:root` and `agent_claude.library.build_library_sandbox`
+    /// crashes with `PermissionError` on `os.makedirs(library_root)`.
+    #[test]
+    fn populate_workspace_volumes_script_pre_creates_library_dir() {
+        let script = build_workspace_populate_script("body");
+        assert!(
+            script.contains("mkdir -p /workspace/.library"),
+            "script must pre-create /workspace/.library/"
+        );
+        assert!(
+            script.contains("chown 1000:1000 /workspace/.library"),
+            "script must chown .library/ to the agent UID"
+        );
+        assert!(
+            script.contains("chmod 755 /workspace/.library"),
+            "script must chmod .library/ so the agent can write into it"
+        );
+        // Ordering: the chmod 444 on the schema file must come BEFORE the
+        // .library/ pre-creation, otherwise the schema's read-only mode is
+        // not yet in place and a writer racing the populate could clobber
+        // it. The mkdir must come BEFORE the chown / chmod for .library/.
+        let chmod_444 = script
+            .find("chmod 444 /workspace/.wh-schema.md")
+            .expect("script must contain schema chmod 444");
+        let mkdir_lib = script
+            .find("mkdir -p /workspace/.library")
+            .expect("script must contain mkdir -p /workspace/.library");
+        let chown_lib = script
+            .find("chown 1000:1000 /workspace/.library")
+            .expect("script must contain chown of /workspace/.library");
+        assert!(
+            chmod_444 < mkdir_lib && mkdir_lib < chown_lib,
+            "ordering: chmod 444 on schema → mkdir .library → chown .library"
         );
     }
 }
