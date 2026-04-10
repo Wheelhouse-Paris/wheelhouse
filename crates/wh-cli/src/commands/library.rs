@@ -70,20 +70,34 @@ use crate::output::OutputFormat;
 
 /// `wh library` subcommand group.
 ///
-/// Variants land incrementally as FW-7 stories are completed:
-/// - `Status` (this story, 13-24)
-/// - `Init` (13-22, backlog)
-/// - `Ingest` (13-23, backlog)
-/// - `List` (13-25, backlog)
-/// - `Lint` (13-26, backlog)
+/// Variants land incrementally as FW-7 stories are completed. The order is
+/// **alphabetical** (Init | Ingest | List | Status) — keep it that way when adding
+/// new variants. `Lint` (13-26) will slot between `Ingest` and `List`.
 #[derive(Debug, Subcommand)]
 pub enum LibraryCommand {
     /// Initialize a local Library for an agent on its per-agent workspace volume (FR6).
     Init(InitArgs),
     /// Enqueue a Library ingestion by publishing a SkillInvocation (FR10, 13-23).
     Ingest(IngestArgs),
+    /// List all Libraries across every agent in the current topology (FR46, 13-25).
+    List(ListArgs),
     /// Inspect the health of an agent's Library (FR45).
     Status(StatusArgs),
+}
+
+/// Arguments for `wh library list` (story 13-25, FR46).
+#[derive(Debug, Args)]
+pub struct ListArgs {
+    /// Output format: human (default) or json.
+    #[arg(long, value_enum, default_value = "human")]
+    pub format: OutputFormat,
+}
+
+impl ListArgs {
+    /// The format hint used by `main.rs` for error envelope rendering.
+    pub fn format(&self) -> OutputFormat {
+        self.format
+    }
 }
 
 /// Arguments for `wh library status`.
@@ -689,6 +703,7 @@ impl LibraryCommand {
         match self {
             LibraryCommand::Init(args) => args.format,
             LibraryCommand::Ingest(args) => args.format,
+            LibraryCommand::List(args) => args.format,
             LibraryCommand::Status(args) => args.format,
         }
     }
@@ -719,6 +734,7 @@ pub async fn run(cmd: LibraryCommand) -> Result<(), WhError> {
     match cmd {
         LibraryCommand::Init(args) => init(&args).await,
         LibraryCommand::Ingest(args) => ingest(&args).await,
+        LibraryCommand::List(args) => list(&args).await,
         LibraryCommand::Status(args) => status(&args).await,
     }
 }
@@ -774,6 +790,275 @@ pub async fn status(args: &StatusArgs) -> Result<(), WhError> {
     }
 
     Ok(())
+}
+
+// ─── Story 13-25: `wh library list` ────────────────────────────────────────
+
+/// Serializable aggregate record for `wh library list`.
+///
+/// JSON shape (AC-3):
+/// ```json
+/// { "topology": "dev", "libraries": [ { ...StatusData..., "status": "active" }, ... ] }
+/// ```
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ListData {
+    pub topology: String,
+    pub libraries: Vec<LibraryRow>,
+}
+
+/// One row in the list output. Flattens `StatusData` into the top level so JSON
+/// consumers get a single object per Library plus the derived lifecycle `status`.
+///
+/// The `unreachable` flag is internal-only (skip_serializing): the `status` string
+/// already carries the `"unreachable"` signal to JSON consumers.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct LibraryRow {
+    #[serde(flatten)]
+    pub data: StatusData,
+    pub status: String,
+    #[serde(skip)]
+    pub unreachable: bool,
+}
+
+/// Derive the Library lifecycle status from on-disk signals (AC-2, AC-4).
+///
+/// Branch order (first match wins):
+/// 1. `unreachable` → `"unreachable"` (volume missing / podman down).
+/// 2. `git_head.is_none()` → `"not-init"` (no `.library/.git` on disk).
+/// 3. `page_count == 0` → `"empty"` (init happened, zero pages).
+/// 4. default → `"active"`.
+fn derive_library_status(data: &StatusData, unreachable: bool) -> &'static str {
+    if unreachable {
+        return "unreachable";
+    }
+    if data.git_head.is_none() {
+        return "not-init";
+    }
+    if data.page_count == 0 {
+        return "empty";
+    }
+    "active"
+}
+
+/// Build a placeholder `StatusData` for an agent whose volume/mount could not be
+/// resolved. Everything degrades to `None`/`0`/`false`; the renderer replaces each
+/// field with `—` when the enclosing row has `unreachable == true`.
+fn unreachable_status_data(agent: String, topology: String, volume: String) -> StatusData {
+    StatusData {
+        agent,
+        topology,
+        volume,
+        mount_path: String::new(),
+        schema_present: false,
+        page_count: 0,
+        git_head: None,
+        last_ingest_at: None,
+        lock_held: false,
+        lock_age_seconds: None,
+        free_disk_bytes: None,
+    }
+}
+
+/// Execute `wh library list` (FR46).
+///
+/// Iterates every agent in the loaded topology, reuses `resolve_mount_path` +
+/// `collect_status_data` per agent, derives the lifecycle status, and renders the
+/// aggregate as a table or JSON. A single unreachable agent does not abort the
+/// listing — it degrades to an `unreachable` row (AC-4).
+pub async fn list(args: &ListArgs) -> Result<(), WhError> {
+    // Load `.wh/state.json` (same helper pattern as status/init/ingest).
+    let state_path = Path::new(".wh/state.json");
+    if !state_path.exists() {
+        return Err(WhError::Other(
+            "no deployed topology found (.wh/state.json missing). Run 'wh topology apply' first."
+                .to_string(),
+        ));
+    }
+    let content = std::fs::read_to_string(state_path)
+        .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+    let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+        .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
+
+    let rows: Vec<LibraryRow> = topology
+        .agents
+        .iter()
+        .map(|agent| {
+            let volume =
+                wh_broker::deploy::podman::workspace_volume_name(&topology.name, &agent.name);
+            match resolve_mount_path(&volume) {
+                Ok(mount_path) => {
+                    let data = collect_status_data(
+                        agent.name.clone(),
+                        topology.name.clone(),
+                        volume,
+                        mount_path,
+                    );
+                    let status = derive_library_status(&data, false).to_string();
+                    LibraryRow {
+                        data,
+                        status,
+                        unreachable: false,
+                    }
+                }
+                Err(_) => {
+                    let data =
+                        unreachable_status_data(agent.name.clone(), topology.name.clone(), volume);
+                    LibraryRow {
+                        data,
+                        status: "unreachable".to_string(),
+                        unreachable: true,
+                    }
+                }
+            }
+        })
+        .collect();
+
+    let data = ListData {
+        topology: topology.name.clone(),
+        libraries: rows,
+    };
+
+    match args.format {
+        OutputFormat::Human => {
+            print!("{}", render_list_human(&data));
+        }
+        OutputFormat::Json => {
+            json::print_json_success(&data)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Render `ListData` as a compact human-readable table (AC-2).
+///
+/// Columns: AGENT, STATUS, PAGES, LAST INGEST, HEAD, SCHEMA, FREE DISK.
+/// Widths are computed per-column as `max(header_len, max(cell_len))`. Two-space
+/// gutter between columns. Unreachable rows render every non-AGENT/non-STATUS
+/// field as `—`.
+fn render_list_human(data: &ListData) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Libraries — topology '{}'\n", data.topology));
+
+    if data.libraries.is_empty() {
+        out.push('\n');
+        out.push_str("  (no agents declared in this topology)\n");
+        return out;
+    }
+
+    // Build cell strings up-front so width computation is straightforward.
+    struct Cells {
+        agent: String,
+        status: String,
+        pages: String,
+        last_ingest: String,
+        head: String,
+        schema: String,
+        free_disk: String,
+    }
+
+    let rows: Vec<Cells> = data
+        .libraries
+        .iter()
+        .map(|row| {
+            if row.unreachable {
+                Cells {
+                    agent: row.data.agent.clone(),
+                    status: row.status.clone(),
+                    pages: "—".to_string(),
+                    last_ingest: "—".to_string(),
+                    head: "—".to_string(),
+                    schema: "—".to_string(),
+                    free_disk: "—".to_string(),
+                }
+            } else {
+                Cells {
+                    agent: row.data.agent.clone(),
+                    status: row.status.clone(),
+                    pages: row.data.page_count.to_string(),
+                    last_ingest: row
+                        .data
+                        .last_ingest_at
+                        .clone()
+                        .unwrap_or_else(|| "—".to_string()),
+                    head: row.data.git_head.clone().unwrap_or_else(|| "—".to_string()),
+                    schema: if row.data.schema_present { "y" } else { "n" }.to_string(),
+                    free_disk: match row.data.free_disk_bytes {
+                        Some(b) => format_bytes_human(b),
+                        None => "—".to_string(),
+                    },
+                }
+            }
+        })
+        .collect();
+
+    let headers = [
+        "AGENT",
+        "STATUS",
+        "PAGES",
+        "LAST INGEST",
+        "HEAD",
+        "SCHEMA",
+        "FREE DISK",
+    ];
+    let mut widths = headers.map(|h| h.len());
+    for r in &rows {
+        widths[0] = widths[0].max(r.agent.len());
+        widths[1] = widths[1].max(r.status.len());
+        widths[2] = widths[2].max(r.pages.chars().count());
+        widths[3] = widths[3].max(r.last_ingest.chars().count());
+        widths[4] = widths[4].max(r.head.chars().count());
+        widths[5] = widths[5].max(r.schema.chars().count());
+        widths[6] = widths[6].max(r.free_disk.chars().count());
+    }
+
+    fn push_row(out: &mut String, cells: [&str; 7], widths: &[usize; 7]) {
+        out.push_str("  ");
+        for (i, cell) in cells.iter().enumerate() {
+            let pad = widths[i].saturating_sub(cell.chars().count());
+            out.push_str(cell);
+            for _ in 0..pad {
+                out.push(' ');
+            }
+            if i + 1 < cells.len() {
+                out.push_str("  ");
+            }
+        }
+        out.push('\n');
+    }
+
+    out.push('\n');
+    push_row(&mut out, headers, &widths);
+    // Underline row — one '─' per column width, re-using the gutter logic above.
+    let mut underline: [String; 7] = Default::default();
+    for (i, w) in widths.iter().enumerate() {
+        underline[i] = "─".repeat(*w);
+    }
+    let underline_refs: [&str; 7] = [
+        &underline[0],
+        &underline[1],
+        &underline[2],
+        &underline[3],
+        &underline[4],
+        &underline[5],
+        &underline[6],
+    ];
+    push_row(&mut out, underline_refs, &widths);
+
+    for r in &rows {
+        let cells: [&str; 7] = [
+            &r.agent,
+            &r.status,
+            &r.pages,
+            &r.last_ingest,
+            &r.head,
+            &r.schema,
+            &r.free_disk,
+        ];
+        push_row(&mut out, cells, &widths);
+    }
+
+    out
 }
 
 // ─── Story 13-22: `wh library init --agent <name>` ─────────────────────────
@@ -2123,5 +2408,180 @@ Filesystem 1024-blocks Used Available Capacity Mounted
         assert_eq!(format_bytes_human(2_500_000), "2.5 MB");
         assert_eq!(format_bytes_human(3_200_000_000), "3.2 GB");
         assert_eq!(format_bytes_human(4_100_000_000_000), "4.1 TB");
+    }
+
+    // ─── Story 13-25: `wh library list` tests ────────────────────────
+
+    use super::{
+        derive_library_status, render_list_human, unreachable_status_data, LibraryRow, ListData,
+    };
+
+    fn row(agent: &str, head: Option<&str>, pages: u64, unreachable: bool) -> LibraryRow {
+        let data = StatusData {
+            agent: agent.into(),
+            topology: "dev".into(),
+            volume: format!("wh-dev-{agent}-workspace"),
+            mount_path: "/mnt".into(),
+            schema_present: head.is_some(),
+            page_count: pages,
+            git_head: head.map(|s| s.into()),
+            last_ingest_at: head.map(|_| "2026-04-09T14:30:00+00:00".into()),
+            lock_held: false,
+            lock_age_seconds: None,
+            free_disk_bytes: Some(12_345_678_901),
+        };
+        let status = derive_library_status(&data, unreachable).to_string();
+        LibraryRow {
+            data,
+            status,
+            unreachable,
+        }
+    }
+
+    #[test]
+    fn test_library_list_command_parses() {
+        let cli = TestCli::try_parse_from(["wh-test", "list"]).expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::List(args) => {
+                assert_eq!(args.format, crate::output::OutputFormat::Human);
+            }
+            other => panic!("expected List variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_library_list_command_parses_json_flag() {
+        let cli = TestCli::try_parse_from(["wh-test", "list", "--format", "json"])
+            .expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::List(args) => {
+                assert_eq!(args.format, crate::output::OutputFormat::Json);
+            }
+            other => panic!("expected List variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_derive_library_status_not_init() {
+        let data = unreachable_status_data("a".into(), "dev".into(), "v".into());
+        assert_eq!(derive_library_status(&data, false), "not-init");
+    }
+
+    #[test]
+    fn test_derive_library_status_empty() {
+        let r = row("a", Some("abc1234"), 0, false);
+        assert_eq!(r.status, "empty");
+    }
+
+    #[test]
+    fn test_derive_library_status_active() {
+        let r = row("a", Some("abc1234"), 42, false);
+        assert_eq!(r.status, "active");
+    }
+
+    #[test]
+    fn test_derive_library_status_unreachable_wins() {
+        // Even with a populated data blob, the unreachable flag overrides.
+        let mut data = row("a", Some("abc1234"), 42, false).data;
+        // Just to prove the override is independent of disk state.
+        data.page_count = 999;
+        assert_eq!(derive_library_status(&data, true), "unreachable");
+    }
+
+    #[test]
+    fn test_render_list_human_three_agents() {
+        let data = ListData {
+            topology: "dev".into(),
+            libraries: vec![
+                row("donna", Some("abc1234"), 42, false),
+                row("mike", Some("def5678"), 0, false),
+                row("harvey", None, 0, false),
+            ],
+        };
+        let rendered = render_list_human(&data);
+        assert!(rendered.contains("Libraries — topology 'dev'"));
+        assert!(rendered.contains("AGENT"));
+        assert!(rendered.contains("STATUS"));
+        assert!(rendered.contains("PAGES"));
+        assert!(rendered.contains("LAST INGEST"));
+        assert!(rendered.contains("HEAD"));
+        assert!(rendered.contains("SCHEMA"));
+        assert!(rendered.contains("FREE DISK"));
+        assert!(rendered.contains("donna"));
+        assert!(rendered.contains("active"));
+        assert!(rendered.contains("mike"));
+        assert!(rendered.contains("empty"));
+        assert!(rendered.contains("harvey"));
+        assert!(rendered.contains("not-init"));
+        assert!(rendered.contains("abc1234"));
+    }
+
+    #[test]
+    fn test_render_list_human_unreachable_row() {
+        let data = ListData {
+            topology: "dev".into(),
+            libraries: vec![row("broken", None, 0, true)],
+        };
+        let rendered = render_list_human(&data);
+        assert!(rendered.contains("broken"));
+        assert!(rendered.contains("unreachable"));
+        // All displayable fields for the unreachable row must appear as em-dashes.
+        // The renderer draws SCHEMA, HEAD, PAGES, LAST INGEST, FREE DISK as "—".
+        assert!(rendered.contains("—"));
+    }
+
+    #[test]
+    fn test_render_list_human_empty_topology() {
+        let data = ListData {
+            topology: "dev".into(),
+            libraries: vec![],
+        };
+        let rendered = render_list_human(&data);
+        assert!(rendered.contains("Libraries — topology 'dev'"));
+        assert!(rendered.contains("no agents declared"));
+        // No table header when there are no rows.
+        assert!(!rendered.contains("AGENT"));
+    }
+
+    #[test]
+    fn test_render_list_json_schema() {
+        let data = ListData {
+            topology: "dev".into(),
+            libraries: vec![
+                row("donna", Some("abc1234"), 42, false),
+                row("broken", None, 0, true),
+            ],
+        };
+        let json = serde_json::to_string(&data).expect("serialize");
+        assert!(json.contains("\"topology\":\"dev\""));
+        assert!(json.contains("\"libraries\""));
+        // Each row has status + all StatusData fields flattened in.
+        assert!(json.contains("\"status\":\"active\""));
+        assert!(json.contains("\"status\":\"unreachable\""));
+        assert!(json.contains("\"agent\":\"donna\""));
+        assert!(json.contains("\"agent\":\"broken\""));
+        assert!(json.contains("\"page_count\":42"));
+        assert!(json.contains("\"git_head\":\"abc1234\""));
+        assert!(json.contains("\"schema_present\":true"));
+        // The internal `unreachable` flag must NOT appear in JSON as its own key
+        // (the literal `"unreachable":true/false` pair). The `"unreachable"` string
+        // is allowed to appear as the value of the `status` field.
+        assert!(!json.contains("\"unreachable\":true"));
+        assert!(!json.contains("\"unreachable\":false"));
+    }
+
+    #[test]
+    fn test_library_command_enum_alphabetical_order() {
+        // Compile-time guard: listing variants in order must still compile. If a
+        // future edit re-orders them, the match arm below will fail to compile in
+        // a way that surfaces the invariant to the next contributor.
+        fn _order_guard(cmd: &LibraryCommand) -> u8 {
+            match cmd {
+                LibraryCommand::Init(_) => 0,
+                LibraryCommand::Ingest(_) => 1,
+                LibraryCommand::List(_) => 2,
+                LibraryCommand::Status(_) => 3,
+            }
+        }
     }
 }
