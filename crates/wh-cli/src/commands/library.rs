@@ -76,6 +76,8 @@ use crate::output::OutputFormat;
 pub enum LibraryCommand {
     /// Inspect the health of an agent's Library (FR45).
     Status(StatusArgs),
+    /// Initialize a local Library for an agent on its per-agent workspace volume (FR6).
+    Init(InitArgs),
 }
 
 /// Arguments for `wh library status`.
@@ -96,11 +98,47 @@ impl StatusArgs {
     }
 }
 
+/// Arguments for `wh library init --agent <name>` (story 13-22, FR6).
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Name of the agent whose Library to initialize.
+    ///
+    /// Per FR6 this is a named flag (not a positional) to match the documented
+    /// invocation `wh library init --agent <name>`.
+    #[arg(long)]
+    pub agent: String,
+
+    /// Output format: human (default) or json.
+    #[arg(long, value_enum, default_value = "human")]
+    pub format: OutputFormat,
+
+    /// Re-initialize `.library/.git` even if the Library already exists.
+    ///
+    /// User-content (`pages/*.md`, `index.md`, etc.) is preserved; only the git
+    /// metadata directory is removed and recreated. The schema file is always
+    /// re-written and re-chmodded.
+    #[arg(long)]
+    pub force: bool,
+
+    /// Substitute text for the `{{domain_description}}` placeholder in the
+    /// schema template. Defaults to a neutral R1 placeholder when absent.
+    #[arg(long)]
+    pub domain_description: Option<String>,
+}
+
+impl InitArgs {
+    /// The format hint used by `main.rs` for error envelope rendering.
+    pub fn format(&self) -> OutputFormat {
+        self.format
+    }
+}
+
 impl LibraryCommand {
     /// The format hint used by `main.rs` to render error envelopes in the right shape.
     pub fn format(&self) -> OutputFormat {
         match self {
             LibraryCommand::Status(args) => args.format,
+            LibraryCommand::Init(args) => args.format,
         }
     }
 }
@@ -129,6 +167,7 @@ pub struct StatusData {
 pub async fn run(cmd: LibraryCommand) -> Result<(), WhError> {
     match cmd {
         LibraryCommand::Status(args) => status(&args).await,
+        LibraryCommand::Init(args) => init(&args).await,
     }
 }
 
@@ -183,6 +222,269 @@ pub async fn status(args: &StatusArgs) -> Result<(), WhError> {
     }
 
     Ok(())
+}
+
+// ─── Story 13-22: `wh library init --agent <name>` ─────────────────────────
+
+/// Default substitution for `{{domain_description}}` when the user does not
+/// supply `--domain-description`. R1-safe neutral wording; the user can edit
+/// `.wh-schema.md` later via a future `wh library schema` command or by
+/// bind-mounting the volume and editing the file directly (it will be
+/// re-chmodded to 444 by 13-20's boot-time enforcement).
+const DEFAULT_DOMAIN_DESCRIPTION: &str =
+    "(Set this to describe your Library's domain — the topics you want the agent to remember across conversations.)";
+
+/// Serializable result record for `wh library init`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct InitData {
+    pub agent: String,
+    pub topology: String,
+    pub volume: String,
+    pub mount_path: String,
+    pub library_initialized: bool,
+    pub schema_written: bool,
+    pub force: bool,
+}
+
+/// Execute `wh library init --agent <name>`.
+///
+/// Resolves the agent's per-agent workspace volume (same path as `status`),
+/// creates `.library/` with a git repo + initial empty commit, and writes the
+/// schema file at `.wh-schema.md` with mode 444. Refuses a pre-existing
+/// `.library/.git` unless `--force` is set. Does **not** auto-provision the
+/// volume — that is the job of `wh topology apply` (FR6 scope boundary).
+pub async fn init(args: &InitArgs) -> Result<(), WhError> {
+    // Load `.wh/state.json` (same pattern as `status`).
+    let state_path = Path::new(".wh/state.json");
+    if !state_path.exists() {
+        return Err(WhError::Other(
+            "no deployed topology found (.wh/state.json missing). Run 'wh topology apply' first."
+                .to_string(),
+        ));
+    }
+    let content = std::fs::read_to_string(state_path)
+        .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+    let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+        .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
+
+    let agent = topology
+        .agents
+        .iter()
+        .find(|a| a.name == args.agent)
+        .ok_or_else(|| WhError::AgentNotFound(args.agent.clone()))?;
+
+    let volume = wh_broker::deploy::podman::workspace_volume_name(&topology.name, &agent.name);
+
+    // AC-2: when the volume is missing, resolve_mount_path already produces
+    // a pointer to topology apply, but we wrap it to guarantee the literal
+    // `wh topology apply` phrase is in the error (the 13-24 helper says
+    // "Has the topology been applied?" — close but not identical).
+    let mount_path = resolve_mount_path(&volume).map_err(|e| {
+        WhError::Other(format!(
+            "{e} Run `wh topology apply` to provision the workspace volume before initializing the Library."
+        ))
+    })?;
+
+    // Perform the filesystem work in a pure helper that tests can drive
+    // against a tempdir without mocking podman.
+    init_library_at(
+        &mount_path,
+        &args.agent,
+        args.domain_description.as_deref(),
+        args.force,
+    )?;
+
+    let data = InitData {
+        agent: args.agent.clone(),
+        topology: topology.name.clone(),
+        volume,
+        mount_path: mount_path.to_string_lossy().into_owned(),
+        library_initialized: true,
+        schema_written: true,
+        force: args.force,
+    };
+
+    match args.format {
+        OutputFormat::Human => {
+            print!("{}", render_init_human(&data));
+        }
+        OutputFormat::Json => {
+            json::print_json_success(&data)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Perform the filesystem-level init work at a given mount path.
+///
+/// Split from `init()` so tests can cover the fresh / already-initialized /
+/// `--force` branches without touching podman or `.wh/state.json`.
+///
+/// Steps:
+/// 1. `mkdir -p <mount>/.library`
+/// 2. If `.library/.git` exists and `!force` → refuse with "already initialized"
+/// 3. If `.library/.git` exists and `force` → `remove_dir_all(.library/.git)`
+/// 4. `git init` + `git commit --allow-empty -m "wh library init"`
+/// 5. Write rendered schema to `<mount>/.wh-schema.md`, chmod 444
+fn init_library_at(
+    mount_path: &Path,
+    agent_name: &str,
+    domain_description: Option<&str>,
+    force: bool,
+) -> Result<(), WhError> {
+    if !mount_path.exists() {
+        return Err(WhError::Other(format!(
+            "workspace mount path '{}' does not exist. Run 'wh topology apply' to provision the volume.",
+            mount_path.display()
+        )));
+    }
+
+    let library_root = mount_path.join(".library");
+    std::fs::create_dir_all(&library_root)
+        .map_err(|e| WhError::Other(format!("failed to create .library directory: {e}")))?;
+
+    let git_dir = library_root.join(".git");
+    if git_dir.exists() {
+        if !force {
+            return Err(WhError::Other(format!(
+                "Library already initialized at {}. Use --force to reinitialize (pages will be preserved, only .git metadata is reset).",
+                library_root.display()
+            )));
+        }
+        std::fs::remove_dir_all(&git_dir)
+            .map_err(|e| WhError::Other(format!("failed to remove existing .library/.git: {e}")))?;
+    }
+
+    // `git init` — bounded, local, millisecond-scale. Subprocess (not git2)
+    // to keep wh-cli's dependency surface minimal; same pattern as 13-24.
+    run_git_init(&library_root)?;
+    run_git_initial_commit(&library_root)?;
+
+    // Schema file write + chmod 444 (AC-3).
+    //
+    // If a previous init already chmodded the file to 444, a plain
+    // `fs::write` would fail with EACCES. Remove the existing file first
+    // (ignoring NotFound) so the write always lands on a fresh inode.
+    let schema_path = mount_path.join(".wh-schema.md");
+    match std::fs::remove_file(&schema_path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            return Err(WhError::Other(format!(
+                "failed to clear existing schema file before rewrite: {e}"
+            )));
+        }
+    }
+    let rendered = render_schema(agent_name, domain_description);
+    std::fs::write(&schema_path, rendered)
+        .map_err(|e| WhError::Other(format!("failed to write schema file: {e}")))?;
+    set_readonly_444(&schema_path)?;
+
+    Ok(())
+}
+
+/// Render `DEFAULT_SCHEMA_TEMPLATE` with `{{agent_name}}` and
+/// `{{domain_description}}` substituted. `domain_description=None` uses the
+/// neutral `DEFAULT_DOMAIN_DESCRIPTION` placeholder.
+///
+/// The allow-list of placeholders is enforced by the 13-19 test
+/// `test_template_no_undocumented_placeholders`. AC-8 is verified by
+/// `test_render_schema_no_residual_placeholders` below.
+fn render_schema(agent_name: &str, domain_description: Option<&str>) -> String {
+    let domain = domain_description.unwrap_or(DEFAULT_DOMAIN_DESCRIPTION);
+    DEFAULT_SCHEMA_TEMPLATE
+        .replace("{{agent_name}}", agent_name)
+        .replace("{{domain_description}}", domain)
+}
+
+/// Run `git -C <library_root> init -q`.
+fn run_git_init(library_root: &Path) -> Result<(), WhError> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(library_root)
+        .args(["init", "-q"])
+        .output()
+        .map_err(|e| WhError::Other(format!("failed to run git init: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WhError::Other(format!(
+            "git init failed: {}",
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Run `git -C <library_root> commit --allow-empty -q -m "wh library init"`.
+///
+/// The initial empty commit guarantees downstream callers (`status`, the
+/// ingest skill from 13-7, `git rev-parse HEAD`) see a valid HEAD even on a
+/// freshly-initialized Library with zero pages. We inject `user.name` /
+/// `user.email` via `-c` flags so the command works even when the invoking
+/// user has no global git identity configured (CI containers, fresh laptops).
+fn run_git_initial_commit(library_root: &Path) -> Result<(), WhError> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(library_root)
+        .args([
+            "-c",
+            "user.name=wh",
+            "-c",
+            "user.email=wh@wheelhouse.local",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "wh library init",
+        ])
+        .output()
+        .map_err(|e| WhError::Other(format!("failed to run git commit: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WhError::Other(format!(
+            "git initial commit failed: {}",
+            stderr.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Set file mode to `0o444` (read-only for all) — mirrors the boot-time
+/// enforcement in 13-20 so `wh library status` run immediately after
+/// `wh library init` sees a correctly-locked schema file.
+#[cfg(unix)]
+fn set_readonly_444(path: &Path) -> Result<(), WhError> {
+    use std::os::unix::fs::PermissionsExt;
+    let perms = std::fs::Permissions::from_mode(0o444);
+    std::fs::set_permissions(path, perms)
+        .map_err(|e| WhError::Other(format!("failed to chmod 444 schema file: {e}")))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_readonly_444(_path: &Path) -> Result<(), WhError> {
+    // The wh toolchain is Unix-only (podman host). This branch exists so the
+    // crate still type-checks on Windows in case a future contributor runs
+    // cargo check there; it is a no-op because Windows has no equivalent
+    // POSIX mode.
+    Ok(())
+}
+
+/// Human-readable output for `wh library init` (AC-6).
+fn render_init_human(data: &InitData) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Library initialized — {}\n", data.agent));
+    out.push_str(&format!("  Topology:   {}\n", data.topology));
+    out.push_str(&format!("  Volume:     {}\n", data.volume));
+    out.push_str(&format!("  Mount:      {}\n", data.mount_path));
+    out.push('\n');
+    out.push_str("  .library/ created and git-initialized (initial empty commit)\n");
+    out.push_str("  .wh-schema.md written (read-only, mode 444)\n");
+    if data.force {
+        out.push_str("  --force: existing .git metadata was reset; pages preserved\n");
+    }
+    out
 }
 
 /// Resolve the host-side mount path for a podman named volume.
@@ -592,6 +894,7 @@ mod tests {
                 assert_eq!(args.agent, "donna");
                 assert_eq!(args.format, crate::output::OutputFormat::Human);
             }
+            _ => panic!("expected Status variant"),
         }
     }
 
@@ -604,6 +907,7 @@ mod tests {
                 assert_eq!(args.agent, "donna");
                 assert_eq!(args.format, crate::output::OutputFormat::Json);
             }
+            _ => panic!("expected Status variant"),
         }
     }
 
@@ -731,6 +1035,257 @@ Filesystem 1024-blocks Used Available Capacity Mounted
         std::fs::write(root.join("sub").join("c.md"), "x").unwrap();
         std::fs::write(root.join("sub").join("ignore.yaml"), "x").unwrap();
         assert_eq!(count_pages_under(root), 3);
+    }
+
+    // ─── Story 13-22: `wh library init` tests ─────────────────────────
+
+    use super::{init_library_at, render_init_human, render_schema, InitData};
+
+    #[test]
+    fn test_library_init_command_parses() {
+        let cli = TestCli::try_parse_from(["wh-test", "init", "--agent", "donna"])
+            .expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::Init(args) => {
+                assert_eq!(args.agent, "donna");
+                assert_eq!(args.format, crate::output::OutputFormat::Human);
+                assert!(!args.force);
+                assert_eq!(args.domain_description, None);
+            }
+            _ => panic!("expected Init variant"),
+        }
+    }
+
+    #[test]
+    fn test_library_init_command_parses_all_flags() {
+        let cli = TestCli::try_parse_from([
+            "wh-test",
+            "init",
+            "--agent",
+            "donna",
+            "--force",
+            "--format",
+            "json",
+            "--domain-description",
+            "cats",
+        ])
+        .expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::Init(args) => {
+                assert_eq!(args.agent, "donna");
+                assert_eq!(args.format, crate::output::OutputFormat::Json);
+                assert!(args.force);
+                assert_eq!(args.domain_description.as_deref(), Some("cats"));
+            }
+            _ => panic!("expected Init variant"),
+        }
+    }
+
+    #[test]
+    fn test_library_init_requires_agent_flag() {
+        // `wh library init` without --agent must fail to parse.
+        let err = TestCli::try_parse_from(["wh-test", "init"]);
+        assert!(err.is_err(), "missing --agent must be a clap error");
+    }
+
+    #[test]
+    fn test_render_schema_substitutes_both_placeholders() {
+        let rendered = render_schema("donna", Some("cat care"));
+        assert!(rendered.contains("donna"));
+        assert!(rendered.contains("cat care"));
+        // AC-8: zero residual placeholders.
+        let re = Regex::new(r"\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}").expect("placeholder regex compiles");
+        assert!(
+            re.find(&rendered).is_none(),
+            "rendered template must not contain any {{...}} tokens"
+        );
+    }
+
+    #[test]
+    fn test_render_schema_default_domain_description() {
+        let rendered = render_schema("donna", None);
+        assert!(rendered.contains("donna"));
+        // Default domain description substring from the constant.
+        assert!(rendered.contains("Set this to describe"));
+        let re = Regex::new(r"\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}").expect("placeholder regex compiles");
+        assert!(
+            re.find(&rendered).is_none(),
+            "rendered template with default domain must not contain {{...}} tokens"
+        );
+    }
+
+    #[test]
+    fn test_init_library_at_fresh_creates_git_and_schema() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mount = tmp.path();
+        init_library_at(mount, "donna", Some("testing"), false).expect("fresh init should succeed");
+
+        // .library/.git exists
+        assert!(mount.join(".library").is_dir());
+        assert!(mount.join(".library/.git").is_dir());
+        // HEAD resolves (initial empty commit)
+        let head = std::process::Command::new("git")
+            .arg("-C")
+            .arg(mount.join(".library"))
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse");
+        assert!(
+            head.status.success(),
+            "git rev-parse HEAD must succeed on freshly initialized library"
+        );
+        // schema file exists with content
+        let schema_path = mount.join(".wh-schema.md");
+        assert!(schema_path.exists());
+        let schema_content = std::fs::read_to_string(&schema_path).expect("read schema file");
+        assert!(schema_content.contains("donna"));
+        assert!(schema_content.contains("testing"));
+        // mode 444
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&schema_path)
+                .expect("stat schema")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o444, "schema file must be chmod 444");
+        }
+    }
+
+    #[test]
+    fn test_init_library_at_refuses_existing_without_force() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mount = tmp.path();
+        init_library_at(mount, "donna", None, false).expect("first init");
+        let err = init_library_at(mount, "donna", None, false)
+            .expect_err("second init without --force must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("already initialized") && msg.contains("--force"),
+            "error must mention already-initialized and --force; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_init_library_at_force_preserves_pages() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mount = tmp.path();
+        init_library_at(mount, "donna", None, false).expect("first init");
+
+        // Put a page in place after first init.
+        let pages_dir = mount.join(".library").join("pages");
+        std::fs::create_dir_all(&pages_dir).unwrap();
+        let page_path = pages_dir.join("persisted.md");
+        std::fs::write(&page_path, "important content").unwrap();
+
+        // Capture HEAD before.
+        let head_before = std::process::Command::new("git")
+            .arg("-C")
+            .arg(mount.join(".library"))
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse before");
+        let head_before_str = String::from_utf8_lossy(&head_before.stdout)
+            .trim()
+            .to_string();
+
+        // Re-init with --force.
+        init_library_at(mount, "donna", None, true).expect("force re-init");
+
+        // Page still exists and has same content.
+        assert!(
+            page_path.exists(),
+            "pages/persisted.md must survive --force"
+        );
+        let content = std::fs::read_to_string(&page_path).unwrap();
+        assert_eq!(content, "important content");
+
+        // git HEAD still resolves (new commit).
+        let head_after = std::process::Command::new("git")
+            .arg("-C")
+            .arg(mount.join(".library"))
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .expect("git rev-parse after");
+        assert!(head_after.status.success());
+        let head_after_str = String::from_utf8_lossy(&head_after.stdout)
+            .trim()
+            .to_string();
+        // New empty commit — hash is identical for a brand-new repo with a
+        // "wh library init" empty commit because git hashes are content-
+        // addressed and the tree is empty + the message + author are fixed.
+        // We therefore only assert HEAD resolves; we do NOT assert inequality.
+        assert!(!head_after_str.is_empty());
+        // Suppress unused warning on head_before_str.
+        let _ = head_before_str;
+    }
+
+    #[test]
+    fn test_init_library_at_missing_mount_path_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("does-not-exist");
+        let err = init_library_at(&missing, "donna", None, false)
+            .expect_err("missing mount path must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("wh topology apply"),
+            "error must point to `wh topology apply`; got: {msg}"
+        );
+    }
+
+    fn sample_init_data(force: bool) -> InitData {
+        InitData {
+            agent: "donna".into(),
+            topology: "dev".into(),
+            volume: "wh-dev-donna-workspace".into(),
+            mount_path: "/mnt/donna".into(),
+            library_initialized: true,
+            schema_written: true,
+            force,
+        }
+    }
+
+    #[test]
+    fn test_render_init_human_contains_key_fields() {
+        let rendered = render_init_human(&sample_init_data(false));
+        assert!(rendered.contains("Library initialized — donna"));
+        assert!(rendered.contains("/mnt/donna"));
+        assert!(rendered.contains("initialized"));
+        assert!(rendered.contains("read-only, mode 444"));
+        assert!(!rendered.contains("--force"));
+    }
+
+    #[test]
+    fn test_render_init_human_force_message() {
+        let rendered = render_init_human(&sample_init_data(true));
+        assert!(rendered.contains("--force"));
+    }
+
+    #[test]
+    fn test_render_init_json_envelope_has_all_keys() {
+        let data = sample_init_data(true);
+        let json = serde_json::to_string(&data).expect("serialize");
+        for key in [
+            "\"agent\"",
+            "\"topology\"",
+            "\"volume\"",
+            "\"mount_path\"",
+            "\"library_initialized\"",
+            "\"schema_written\"",
+            "\"force\"",
+        ] {
+            assert!(json.contains(key), "json output must contain {key}");
+        }
+    }
+
+    /// 13-22 also covers the format() dispatcher branch for Init.
+    #[test]
+    fn test_library_command_format_dispatches_init() {
+        let cli =
+            TestCli::try_parse_from(["wh-test", "init", "--agent", "donna", "--format", "json"])
+                .expect("parse");
+        assert_eq!(cli.library.format(), crate::output::OutputFormat::Json);
     }
 
     #[test]
