@@ -21,6 +21,7 @@ import wheelhouse
 from agent_claude.context import load_stream_contexts
 from agent_claude.errors import AgentConfigError
 from agent_claude.layers import assemble_platform_context
+from agent_claude.library import build_library_sandbox
 from agent_claude.persona import load_persona
 
 logger = logging.getLogger("agent_claude")
@@ -157,6 +158,29 @@ async def run_startup() -> dict[str, Any]:
     config["library_status"] = library_status
     if library_status == "disabled" and "WH_LIBRARY_STATUS" not in os.environ:
         os.environ["WH_LIBRARY_STATUS"] = "disabled"
+
+    # Story 13-7: fold the cloud-side WH_LIBRARY_STATUS into the
+    # runtime vocabulary. 13-20's boot probe only distinguishes
+    # "enabled" vs "disabled" from the filesystem; the cloud may have
+    # set `WH_LIBRARY_STATUS=read-only` via the agent container env
+    # (ADR-038 Cross-Codebase Contract §3), and the ingest skill needs
+    # to see that value on `config["library_status"]` to surface the
+    # FR37 refusal. Map the three accepted env values onto the
+    # internal three-value vocabulary; unknown values fall through to
+    # the schema-probe result (no silent promotion).
+    env_status = os.environ.get("WH_LIBRARY_STATUS", "").strip()
+    if env_status == "active":
+        # Cloud "active" is the same as framework "enabled".
+        config["library_status"] = "enabled"
+    elif env_status in ("enabled", "read-only", "disabled"):
+        config["library_status"] = env_status
+
+    # Step 1c: Build the per-agent LibrarySandbox (story 13-7). Runs
+    # `recover_from_crash()` exactly once before any skill dispatch can
+    # see an unrecovered repo. Returns None when the Library is
+    # disabled or recovery fails — the dispatch layer degrades to a
+    # clean LIBRARY_DISABLED refusal in that case.
+    config["library_sandbox"] = build_library_sandbox(config)
 
     # Step 1b: Assemble platform context layers L0-L2 (ADR-033)
     platform_context = assemble_platform_context()
