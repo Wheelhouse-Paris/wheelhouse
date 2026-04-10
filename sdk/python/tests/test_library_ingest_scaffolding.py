@@ -22,12 +22,14 @@ from wheelhouse.skills.library_ingest import (
     ACCEPTED_SOURCE_TYPES,
     LIBRARY_DISABLED,
     LIBRARY_INGEST_INVALID_ARGS,
+    LIBRARY_INGEST_NO_SUMMARIZER,
     LIBRARY_INGEST_NOT_IMPLEMENTED,
     LIBRARY_READ_ONLY,
     REQUIRED_PARAMS,
     SKILL_NAME,
     SKILL_REGISTRY,
     run_library_ingest,
+    set_summarizer,
 )
 from wheelhouse.skills.library_sandbox import LibrarySandbox
 from wheelhouse.types import SkillResult
@@ -217,13 +219,19 @@ def test_run_library_ingest_read_only_does_not_touch_sandbox(
     sandbox_mock.transaction.assert_not_called()
 
 
-# ─── AC-9: Scaffold NOT_IMPLEMENTED sentinel ──────────────────────────
+# ─── AC-9: No-summarizer default (updated by 13-8) ────────────────────
+#
+# 13-7 shipped a NOT_IMPLEMENTED sentinel; 13-8 replaced the pipeline
+# body with the real text/markdown path and the new default when no
+# summarizer is wired is LIBRARY_INGEST_NO_SUMMARIZER. Validation
+# passes but the pipeline refuses BEFORE opening a transaction.
 
 
-def test_run_library_ingest_happy_path_scaffold_sentinel(
+def test_run_library_ingest_happy_path_without_summarizer(
     sandbox_mock: MagicMock,
     valid_params: dict[str, str],
 ) -> None:
+    set_summarizer(None)  # explicit default
     result = run_library_ingest(
         sandbox_mock,
         valid_params,
@@ -231,11 +239,9 @@ def test_run_library_ingest_happy_path_scaffold_sentinel(
         invocation_id="inv-009",
     )
     assert result.success is False
-    assert result.error_code == LIBRARY_INGEST_NOT_IMPLEMENTED
-    assert "13-8" in result.error_message
-    assert "13-9" in result.error_message
+    assert result.error_code == LIBRARY_INGEST_NO_SUMMARIZER
     # Validation passed but no transaction was opened — the
-    # scaffold never touches the sandbox.
+    # no-summarizer path never touches the sandbox write surface.
     sandbox_mock.begin.assert_not_called()
     sandbox_mock.transaction.assert_not_called()
 
@@ -244,6 +250,7 @@ def test_run_library_ingest_echoes_invocation_id_and_skill_name(
     sandbox_mock: MagicMock,
     valid_params: dict[str, str],
 ) -> None:
+    set_summarizer(None)
     result = run_library_ingest(
         sandbox_mock,
         valid_params,
@@ -273,16 +280,22 @@ def test_library_skill_error_is_a_wheelhouse_error() -> None:
     assert isinstance(exc, WheelhouseError)
 
 
-def test_ingest_pipeline_raises_not_implemented(
+def test_ingest_pipeline_unsupported_type_after_13_8(
     sandbox_mock: MagicMock,
 ) -> None:
-    """The extension seam that 13-8 / 13-9 replace."""
+    """13-7 raised NOT_IMPLEMENTED unconditionally. 13-8 shipped the
+    text/markdown body and now raises UNSUPPORTED_TYPE for pdf/url
+    until 13-9 replaces the pdf branch. This test pins the new
+    behaviour without losing the 13-7 coverage — NOT_IMPLEMENTED stays
+    in the catalogue as the historical sentinel.
+    """
+    assert LIBRARY_INGEST_NOT_IMPLEMENTED  # constant still exported
     with pytest.raises(LibrarySkillError) as excinfo:
         ingest_mod._ingest_pipeline(
             sandbox_mock,
-            {"source_type": "text", "source_ref": "foo"},
+            {"source_type": "pdf", "source_ref": "foo.pdf"},
         )
-    assert excinfo.value.code == LIBRARY_INGEST_NOT_IMPLEMENTED
+    assert excinfo.value.code == ingest_mod.LIBRARY_INGEST_UNSUPPORTED_TYPE
 
 
 # ─── AC-12: No real git in this test file ─────────────────────────────
@@ -303,6 +316,12 @@ def test_no_subprocess_invocation_during_scaffolding(
         )
 
     monkeypatch.setattr(subprocess, "run", _boom)
+    # 13-8: make sandbox.read return a real string so the source
+    # resolver doesn't blow up on a MagicMock comparison, and ensure
+    # no summarizer is wired so the pipeline short-circuits before
+    # opening a transaction.
+    sandbox_mock.read.return_value = "# brief\n"
+    set_summarizer(None)
 
     # Every top-level branch of run_library_ingest, once.
     run_library_ingest(None, {}, library_status="disabled", invocation_id="a")
