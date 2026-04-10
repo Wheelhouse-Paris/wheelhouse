@@ -54,11 +54,15 @@ pub const DEFAULT_SCHEMA_TEMPLATE: &str = include_str!("../../templates/library/
 
 // ─── Story 13-24: `wh library status <agent>` ─────────────────────────────
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Subcommand};
+use prost::Message;
 use serde::Serialize;
+use wh_proto::{SkillInvocation, SkillResult, StreamEnvelope};
+use zeromq::{PubSocket, Socket, SocketRecv, SocketSend, SubSocket, ZmqMessage};
 
 use crate::output::error::WhError;
 use crate::output::json;
@@ -76,6 +80,8 @@ use crate::output::OutputFormat;
 pub enum LibraryCommand {
     /// Inspect the health of an agent's Library (FR45).
     Status(StatusArgs),
+    /// Enqueue a Library ingestion by publishing a SkillInvocation (FR10, 13-23).
+    Ingest(IngestArgs),
 }
 
 /// Arguments for `wh library status`.
@@ -96,11 +102,556 @@ impl StatusArgs {
     }
 }
 
+// ─── Story 13-23: `wh library ingest <file> --agent <name>` ──────────────
+
+/// Arguments for `wh library ingest`.
+///
+/// Story 13-23 — CLI publisher for the `library_ingest` skill registered by 13-7
+/// (`sdk/python/wheelhouse/skills/library_ingest.py::SKILL_NAME = "library_ingest"`).
+/// The CLI never reads the file itself; it resolves the container-side path and
+/// publishes a `SkillInvocation` on an agent-observed stream. The agent runtime
+/// (`agent-claude::loop::_handle_skill_invocation`) intercepts the invocation via
+/// the `LIBRARY_SKILL_REGISTRY` dispatch gate and runs `run_library_ingest`.
+#[derive(Debug, Args)]
+pub struct IngestArgs {
+    /// Path to the source file. Either a host-side path inside the agent's
+    /// workspace mount, OR a container-side path (`/workspace/...`).
+    pub file: PathBuf,
+
+    /// Name of the agent whose Library to ingest into. Must exist in
+    /// `.wh/state.json`.
+    #[arg(long)]
+    pub agent: String,
+
+    /// Override the inferred `source_type`. Must be one of the closed
+    /// enum accepted by the 13-7 skill: text | markdown | pdf | url.
+    #[arg(long = "type")]
+    pub r#type: Option<String>,
+
+    /// Optional free-form `user_summary_hint` passed to the ingest skill.
+    #[arg(long)]
+    pub hint: Option<String>,
+
+    /// Publish on this specific stream instead of `agent.streams[0]`. Must be
+    /// a stream the target agent is already subscribed to.
+    #[arg(long)]
+    pub stream: Option<String>,
+
+    /// Wait for the matching SkillResult and print its 13-27 piggyback fields.
+    /// Timeout: 120 seconds (NFR2 ingest budget).
+    #[arg(long, default_value_t = false)]
+    pub wait: bool,
+
+    /// Output format: human (default) or json.
+    #[arg(long, value_enum, default_value = "human")]
+    pub format: OutputFormat,
+}
+
+impl IngestArgs {
+    /// The format hint used by `main.rs` for error envelope rendering.
+    pub fn format(&self) -> OutputFormat {
+        self.format
+    }
+}
+
+/// Skill name key registered by story 13-7. Frozen — see
+/// `sdk/python/wheelhouse/skills/library_ingest.py:44`.
+const LIBRARY_INGEST_SKILL_NAME: &str = "library_ingest";
+
+/// Closed enum of accepted `source_type` values, mirrored from the 13-7 Python
+/// constant `ACCEPTED_SOURCE_TYPES`. Kept as a single source of truth in Rust
+/// so the CLI can reject bad `--type` overrides before the zmq round-trip.
+const ACCEPTED_SOURCE_TYPES: &[&str] = &["text", "markdown", "pdf", "url"];
+
+/// Protobuf type URL of `SkillInvocation` — matches the value agents expect on
+/// the wire.
+const SKILL_INVOCATION_TYPE_URL: &str = "wheelhouse.v1.SkillInvocation";
+
+/// Protobuf type URL of `SkillResult` — used by `--wait` to filter incoming
+/// envelopes.
+const SKILL_RESULT_TYPE_URL: &str = "wheelhouse.v1.SkillResult";
+
+/// Fixed wait deadline for `--wait` (NFR2 ingest budget).
+const WAIT_DEADLINE: Duration = Duration::from_secs(120);
+
+/// Serializable publish record for `wh library ingest`.
+///
+/// JSON parity with 13-24's `StatusData` — all snake_case per SCV-01.
+#[derive(Debug, Clone, Serialize)]
+pub struct IngestData {
+    pub invocation_id: String,
+    pub agent: String,
+    pub stream: String,
+    pub source_type: String,
+    pub source_ref: String,
+    pub waited: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<IngestResultData>,
+}
+
+/// Subset of `SkillResult` we echo back to the operator when `--wait` fires.
+/// Includes the 13-27 piggyback fields so operators can see token usage and
+/// page-count progression directly.
+#[derive(Debug, Clone, Serialize)]
+pub struct IngestResultData {
+    pub success: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub error_code: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub error_message: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_page_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_last_ingest_at: Option<String>,
+}
+
+impl From<&SkillResult> for IngestResultData {
+    fn from(r: &SkillResult) -> Self {
+        Self {
+            success: r.success,
+            error_code: r.error_code.clone(),
+            error_message: r.error_message.clone(),
+            output: r.output.clone(),
+            library_tokens: r.library_tokens,
+            library_page_count: r.library_page_count,
+            library_last_ingest_at: r.library_last_ingest_at.clone(),
+        }
+    }
+}
+
+/// Execute `wh library ingest <file> --agent <name>`.
+///
+/// Pipeline:
+///   1. Load `.wh/state.json` and find the target agent (same as 13-24 `status`).
+///   2. Resolve the per-agent workspace volume and host mount path.
+///   3. Translate the host-shaped or container-shaped source path into a
+///      canonical container path (`/workspace/...`).
+///   4. Infer `source_type` from extension or the `--type` override.
+///   5. Resolve the target stream from `agent.streams` (first or `--stream`).
+///   6. Build the `SkillInvocation` and publish it over zmq.
+///   7. If `--wait`, subscribe to the same stream and await the matching
+///      `SkillResult`, then render it.
+pub async fn ingest(args: &IngestArgs) -> Result<(), WhError> {
+    // (1) Load state.
+    let state_path = Path::new(".wh/state.json");
+    if !state_path.exists() {
+        return Err(WhError::Other(
+            "no deployed topology found (.wh/state.json missing). Run 'wh topology apply' first."
+                .to_string(),
+        ));
+    }
+    let content = std::fs::read_to_string(state_path)
+        .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+    let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+        .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
+
+    let agent = topology
+        .agents
+        .iter()
+        .find(|a| a.name == args.agent)
+        .ok_or_else(|| WhError::AgentNotFound(args.agent.clone()))?;
+
+    // (2) Resolve mount path.
+    let volume = wh_broker::deploy::podman::workspace_volume_name(&topology.name, &agent.name);
+    let mount_path = resolve_mount_path(&volume)?;
+
+    // (3) Translate source path.
+    let source_ref = translate_source_path(&args.file, &mount_path)?;
+
+    // (4) Infer source_type.
+    let source_type = infer_source_type(&args.file, args.r#type.as_deref())?;
+
+    // (5) Resolve stream.
+    let stream_name = resolve_target_stream(&agent.streams, args.stream.as_deref())?;
+
+    // (6) Build & publish the invocation.
+    let invocation_id = uuid::Uuid::new_v4().to_string();
+    let parameters = build_invocation_parameters(&source_type, &source_ref, args.hint.as_deref());
+    let invocation = SkillInvocation {
+        skill_name: LIBRARY_INGEST_SKILL_NAME.to_string(),
+        agent_id: args.agent.clone(),
+        invocation_id: invocation_id.clone(),
+        parameters,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+    };
+
+    publish_skill_invocation(&stream_name, &invocation).await?;
+
+    // (7) Optionally wait for SkillResult.
+    let waited = args.wait;
+    let result_data = if args.wait {
+        Some(wait_for_skill_result(&stream_name, &invocation_id).await?)
+    } else {
+        None
+    };
+
+    let data = IngestData {
+        invocation_id: invocation_id.clone(),
+        agent: args.agent.clone(),
+        stream: stream_name.clone(),
+        source_type: source_type.clone(),
+        source_ref: source_ref.clone(),
+        waited,
+        result: result_data.clone(),
+    };
+
+    match args.format {
+        OutputFormat::Human => {
+            print!("{}", render_ingest_human(&data));
+        }
+        OutputFormat::Json => {
+            json::print_json_success(&data)?;
+        }
+    }
+
+    // (AC-10) Non-zero exit on `--wait` + failed SkillResult.
+    if let Some(r) = result_data.as_ref() {
+        if !r.success {
+            return Err(WhError::Other(format!(
+                "Ingest failed: {code}{sep}{msg}",
+                code = if r.error_code.is_empty() {
+                    "INGEST_FAILED".to_string()
+                } else {
+                    r.error_code.clone()
+                },
+                sep = if r.error_message.is_empty() {
+                    ""
+                } else {
+                    " — "
+                },
+                msg = r.error_message,
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Translate a user-provided file path into the canonical container-side path.
+///
+/// Three cases:
+/// 1. The input already starts with `/workspace/` — accept as-is after probing
+///    that the host-side equivalent exists under `mount_path`.
+/// 2. The input is a host path whose canonicalised form lies inside
+///    `mount_path` — rewrite the mount prefix to `/workspace`.
+/// 3. The input is a host path outside the mount — hard-reject with
+///    `PATH_OUTSIDE_WORKSPACE`.
+fn translate_source_path(input: &Path, mount_path: &Path) -> Result<String, WhError> {
+    // Case 1: container-shaped path (`/workspace/...`).
+    if let Some(rest) = input.to_str().and_then(|s| s.strip_prefix("/workspace/")) {
+        // Also accept exactly "/workspace" (unlikely but deterministic).
+        let host_equivalent = mount_path.join(rest);
+        if !host_equivalent.exists() {
+            return Err(WhError::Other(format!(
+                "File not found at container path /workspace/{rest} (expected host file at {}).",
+                host_equivalent.display()
+            )));
+        }
+        return Ok(format!("/workspace/{rest}"));
+    }
+    if input == Path::new("/workspace") {
+        // Directory-only — nothing meaningful to ingest.
+        return Err(WhError::Other(
+            "source path /workspace is a directory; provide a file path.".to_string(),
+        ));
+    }
+
+    // Case 2/3: host path. Canonicalise both sides so `.`, `..`, and symlinks
+    // resolve consistently.
+    let canonical_input = std::fs::canonicalize(input)
+        .map_err(|e| WhError::Other(format!("source file not found: {} ({e})", input.display())))?;
+    let canonical_mount = std::fs::canonicalize(mount_path).map_err(|e| {
+        WhError::Other(format!(
+            "workspace mount not readable at {}: {e}",
+            mount_path.display()
+        ))
+    })?;
+
+    match canonical_input.strip_prefix(&canonical_mount) {
+        Ok(rel) => {
+            // Rewrite prefix → /workspace. Use forward-slash joining for the
+            // container-side path (POSIX inside the container).
+            let rel_str = rel
+                .to_str()
+                .ok_or_else(|| WhError::Other("non-UTF8 path component in source".to_string()))?;
+            if rel_str.is_empty() {
+                return Err(WhError::Other(
+                    "source path resolves to the workspace root; provide a file path.".to_string(),
+                ));
+            }
+            // Normalise Windows-style separators just in case.
+            let posix = rel_str.replace('\\', "/");
+            Ok(format!("/workspace/{posix}"))
+        }
+        Err(_) => Err(WhError::Other(format!(
+            "PATH_OUTSIDE_WORKSPACE: {} is not inside the agent's workspace volume at {}. \
+             Copy the file into the volume first (e.g. cp {} {}).",
+            canonical_input.display(),
+            canonical_mount.display(),
+            canonical_input.display(),
+            canonical_mount.display(),
+        ))),
+    }
+}
+
+/// Infer the `source_type` parameter from an optional `--type` override, or
+/// from the file extension when absent.
+///
+/// The closed enum (`ACCEPTED_SOURCE_TYPES`) mirrors the 13-7 Python constant
+/// `ACCEPTED_SOURCE_TYPES`. Unknown extensions with no override are rejected
+/// with `UNKNOWN_SOURCE_TYPE`.
+fn infer_source_type(path: &Path, override_: Option<&str>) -> Result<String, WhError> {
+    if let Some(ov) = override_ {
+        if !ACCEPTED_SOURCE_TYPES.contains(&ov) {
+            return Err(WhError::Other(format!(
+                "UNKNOWN_SOURCE_TYPE: --type {ov:?} is not one of {ACCEPTED_SOURCE_TYPES:?}"
+            )));
+        }
+        return Ok(ov.to_string());
+    }
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let inferred = match ext.as_deref() {
+        Some("md") | Some("markdown") => Some("markdown"),
+        Some("txt") => Some("text"),
+        Some("pdf") => Some("pdf"),
+        _ => None,
+    };
+    inferred.map(str::to_string).ok_or_else(|| {
+        WhError::Other(format!(
+            "UNKNOWN_SOURCE_TYPE: cannot infer source_type for {}; pass --type <{}>",
+            path.display(),
+            ACCEPTED_SOURCE_TYPES.join("|")
+        ))
+    })
+}
+
+/// Resolve the target stream for the SkillInvocation publish.
+///
+/// With `override_` passed: validate it is declared on the agent and return it.
+/// Without: return the first entry in `agent.streams`, or
+/// `NO_INPUT_STREAM` if the agent has no streams declared.
+fn resolve_target_stream(
+    agent_streams: &[String],
+    override_: Option<&str>,
+) -> Result<String, WhError> {
+    if let Some(name) = override_ {
+        if agent_streams.iter().any(|s| s == name) {
+            return Ok(name.to_string());
+        }
+        return Err(WhError::Other(format!(
+            "STREAM_NOT_DECLARED: stream {name:?} is not declared on the agent. \
+             Declared streams: {agent_streams:?}"
+        )));
+    }
+    agent_streams.first().cloned().ok_or_else(|| {
+        WhError::Other(
+            "NO_INPUT_STREAM: the target agent has no streams declared. \
+             Add at least one stream to the agent's topology spec."
+                .to_string(),
+        )
+    })
+}
+
+/// Build the SkillInvocation `parameters` map from the resolved values.
+fn build_invocation_parameters(
+    source_type: &str,
+    source_ref: &str,
+    hint: Option<&str>,
+) -> HashMap<String, String> {
+    let mut m = HashMap::new();
+    m.insert("source_type".to_string(), source_type.to_string());
+    m.insert("source_ref".to_string(), source_ref.to_string());
+    if let Some(h) = hint {
+        m.insert("user_summary_hint".to_string(), h.to_string());
+    }
+    m
+}
+
+/// Publish a SkillInvocation as a StreamEnvelope on the broker's SUB endpoint.
+///
+/// Mirrors `crates/wh-cli/src/commands/stream.rs::execute_publish` for
+/// TextMessage but with the SkillInvocation type URL and payload. The 100 ms
+/// PUB-SUB handshake delay is the same — required because ZMQ PUB drops messages
+/// sent before the SUB side completes subscription handshake.
+async fn publish_skill_invocation(
+    stream_name: &str,
+    invocation: &SkillInvocation,
+) -> Result<(), WhError> {
+    let sub_endpoint = std::env::var("WH_SUB_ENDPOINT").unwrap_or_else(|_| {
+        let port = std::env::var("WH_SUB_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(5556);
+        format!("tcp://127.0.0.1:{port}")
+    });
+
+    let payload = invocation.encode_to_vec();
+    let envelope = StreamEnvelope {
+        stream_name: stream_name.to_string(),
+        object_id: uuid::Uuid::new_v4().to_string(),
+        type_url: SKILL_INVOCATION_TYPE_URL.to_string(),
+        payload,
+        publisher_id: "cli".to_string(),
+        published_at_ms: chrono::Utc::now().timestamp_millis(),
+        sequence_number: 0, // broker assigns authoritative value
+    };
+    let envelope_bytes = envelope.encode_to_vec();
+
+    let mut wire: Vec<u8> = Vec::with_capacity(stream_name.len() + 1 + envelope_bytes.len());
+    wire.extend_from_slice(stream_name.as_bytes());
+    wire.push(0);
+    wire.extend_from_slice(&envelope_bytes);
+
+    let mut pub_socket = PubSocket::new();
+    pub_socket
+        .connect(&sub_endpoint)
+        .await
+        .map_err(|_| WhError::ConnectionError)?;
+
+    // Handshake delay — same 100 ms as stream.rs::execute_publish.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let msg = ZmqMessage::from(wire);
+    pub_socket
+        .send(msg)
+        .await
+        .map_err(|e| WhError::Other(format!("failed to publish: {e}")))?;
+
+    Ok(())
+}
+
+/// Wait for a matching `SkillResult` on the same stream, up to 120 s.
+///
+/// Matching rule: decoded envelope `type_url == "wheelhouse.v1.SkillResult"`
+/// AND the decoded result's `invocation_id == expected`. Unrelated messages
+/// on the stream are ignored silently — an operator running `wh library
+/// ingest` does not care about concurrent traffic.
+async fn wait_for_skill_result(
+    stream_name: &str,
+    invocation_id: &str,
+) -> Result<IngestResultData, WhError> {
+    let pub_endpoint = std::env::var("WH_PUB_ENDPOINT").unwrap_or_else(|_| {
+        let port = std::env::var("WH_PUB_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(5555);
+        format!("tcp://127.0.0.1:{port}")
+    });
+
+    let topic = format!("{stream_name}\0");
+
+    let mut sub_socket = SubSocket::new();
+    sub_socket
+        .connect(&pub_endpoint)
+        .await
+        .map_err(|_| WhError::ConnectionError)?;
+    sub_socket
+        .subscribe(&topic)
+        .await
+        .map_err(|e| WhError::Other(format!("failed to subscribe: {e}")))?;
+
+    let deadline = tokio::time::Instant::now() + WAIT_DEADLINE;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(WhError::Other(format!(
+                "INGEST_TIMEOUT: no SkillResult received for invocation {invocation_id} \
+                 within {secs}s.",
+                secs = WAIT_DEADLINE.as_secs()
+            )));
+        }
+
+        let recv_fut = sub_socket.recv();
+        let msg = match tokio::time::timeout(remaining, recv_fut).await {
+            Ok(Ok(msg)) => msg,
+            Ok(Err(e)) => {
+                return Err(WhError::Other(format!("receive error while waiting: {e}")));
+            }
+            Err(_) => {
+                return Err(WhError::Other(format!(
+                    "INGEST_TIMEOUT: no SkillResult received for invocation {invocation_id} \
+                     within {secs}s.",
+                    secs = WAIT_DEADLINE.as_secs()
+                )));
+            }
+        };
+
+        let raw: Vec<u8> = msg.try_into().unwrap_or_default();
+        let Some(null_pos) = raw.iter().position(|&b| b == 0) else {
+            continue;
+        };
+        let envelope_bytes = &raw[null_pos + 1..];
+        let Ok(envelope) = StreamEnvelope::decode(envelope_bytes) else {
+            continue;
+        };
+        if envelope.type_url != SKILL_RESULT_TYPE_URL {
+            continue;
+        }
+        let Ok(result) = SkillResult::decode(envelope.payload.as_slice()) else {
+            continue;
+        };
+        if result.invocation_id != invocation_id {
+            continue;
+        }
+        return Ok(IngestResultData::from(&result));
+    }
+}
+
+/// Format an `IngestData` as the human-readable publish confirmation.
+fn render_ingest_human(data: &IngestData) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Ingest published to stream '{}' for agent '{}'\n",
+        data.stream, data.agent
+    ));
+    out.push_str(&format!("  invocation_id: {}\n", data.invocation_id));
+    out.push_str(&format!("  source_type:   {}\n", data.source_type));
+    out.push_str(&format!("  source_ref:    {}\n", data.source_ref));
+
+    if let Some(r) = data.result.as_ref() {
+        out.push('\n');
+        out.push_str("SkillResult received\n");
+        out.push_str(&format!(
+            "  success:       {}\n",
+            if r.success { "true" } else { "false" }
+        ));
+        if !r.error_code.is_empty() {
+            out.push_str(&format!("  error_code:    {}\n", r.error_code));
+        }
+        if !r.error_message.is_empty() {
+            out.push_str(&format!("  error_message: {}\n", r.error_message));
+        }
+        if !r.output.is_empty() {
+            out.push_str(&format!("  output:        {}\n", r.output));
+        }
+        if let Some(t) = r.library_tokens {
+            out.push_str(&format!("  library_tokens:         {t}\n"));
+        }
+        if let Some(p) = r.library_page_count {
+            out.push_str(&format!("  library_page_count:     {p}\n"));
+        }
+        if let Some(ts) = r.library_last_ingest_at.as_deref() {
+            out.push_str(&format!("  library_last_ingest_at: {ts}\n"));
+        }
+    }
+
+    out
+}
+
 impl LibraryCommand {
     /// The format hint used by `main.rs` to render error envelopes in the right shape.
     pub fn format(&self) -> OutputFormat {
         match self {
             LibraryCommand::Status(args) => args.format,
+            LibraryCommand::Ingest(args) => args.format,
         }
     }
 }
@@ -129,6 +680,7 @@ pub struct StatusData {
 pub async fn run(cmd: LibraryCommand) -> Result<(), WhError> {
     match cmd {
         LibraryCommand::Status(args) => status(&args).await,
+        LibraryCommand::Ingest(args) => ingest(&args).await,
     }
 }
 
@@ -592,6 +1144,7 @@ mod tests {
                 assert_eq!(args.agent, "donna");
                 assert_eq!(args.format, crate::output::OutputFormat::Human);
             }
+            other => panic!("expected Status variant, got {other:?}"),
         }
     }
 
@@ -604,6 +1157,7 @@ mod tests {
                 assert_eq!(args.agent, "donna");
                 assert_eq!(args.format, crate::output::OutputFormat::Json);
             }
+            other => panic!("expected Status variant, got {other:?}"),
         }
     }
 
@@ -731,6 +1285,281 @@ Filesystem 1024-blocks Used Available Capacity Mounted
         std::fs::write(root.join("sub").join("c.md"), "x").unwrap();
         std::fs::write(root.join("sub").join("ignore.yaml"), "x").unwrap();
         assert_eq!(count_pages_under(root), 3);
+    }
+
+    // ─── Story 13-23: `wh library ingest` tests ──────────────────────
+
+    use super::{
+        build_invocation_parameters, infer_source_type, render_ingest_human, resolve_target_stream,
+        translate_source_path, IngestData, IngestResultData,
+    };
+    use std::path::Path;
+
+    #[test]
+    fn test_ingest_args_parse_defaults() {
+        let cli = TestCli::try_parse_from(["wh-test", "ingest", "./notes.md", "--agent", "donna"])
+            .expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::Ingest(args) => {
+                assert_eq!(args.file.to_str(), Some("./notes.md"));
+                assert_eq!(args.agent, "donna");
+                assert!(args.r#type.is_none());
+                assert!(args.hint.is_none());
+                assert!(args.stream.is_none());
+                assert!(!args.wait);
+                assert_eq!(args.format, crate::output::OutputFormat::Human);
+            }
+            _ => panic!("expected Ingest variant"),
+        }
+    }
+
+    #[test]
+    fn test_ingest_args_parse_all_flags() {
+        let cli = TestCli::try_parse_from([
+            "wh-test",
+            "ingest",
+            "/workspace/brief.pdf",
+            "--agent",
+            "donna",
+            "--type",
+            "pdf",
+            "--hint",
+            "Q3 planning",
+            "--stream",
+            "inbox",
+            "--wait",
+            "--format",
+            "json",
+        ])
+        .expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::Ingest(args) => {
+                assert_eq!(args.r#type.as_deref(), Some("pdf"));
+                assert_eq!(args.hint.as_deref(), Some("Q3 planning"));
+                assert_eq!(args.stream.as_deref(), Some("inbox"));
+                assert!(args.wait);
+                assert_eq!(args.format, crate::output::OutputFormat::Json);
+            }
+            _ => panic!("expected Ingest variant"),
+        }
+    }
+
+    #[test]
+    fn test_infer_source_type_by_extension() {
+        assert_eq!(
+            infer_source_type(Path::new("foo.md"), None).unwrap(),
+            "markdown"
+        );
+        assert_eq!(
+            infer_source_type(Path::new("foo.markdown"), None).unwrap(),
+            "markdown"
+        );
+        assert_eq!(
+            infer_source_type(Path::new("NOTES.TXT"), None).unwrap(),
+            "text"
+        );
+        assert_eq!(
+            infer_source_type(Path::new("brief.pdf"), None).unwrap(),
+            "pdf"
+        );
+    }
+
+    #[test]
+    fn test_infer_source_type_override_wins() {
+        // Override takes precedence even against an extension the extension
+        // map would have mapped to something else.
+        assert_eq!(
+            infer_source_type(Path::new("brief.pdf"), Some("text")).unwrap(),
+            "text"
+        );
+        assert_eq!(
+            infer_source_type(Path::new("no_extension"), Some("url")).unwrap(),
+            "url"
+        );
+    }
+
+    #[test]
+    fn test_infer_source_type_unknown_rejected() {
+        let err = infer_source_type(Path::new("report.docx"), None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("UNKNOWN_SOURCE_TYPE"));
+        assert!(msg.contains("text"));
+        assert!(msg.contains("markdown"));
+        assert!(msg.contains("pdf"));
+        assert!(msg.contains("url"));
+    }
+
+    #[test]
+    fn test_infer_source_type_override_enum_rejected() {
+        let err = infer_source_type(Path::new("foo.md"), Some("weird")).unwrap_err();
+        assert!(err.to_string().contains("UNKNOWN_SOURCE_TYPE"));
+    }
+
+    #[test]
+    fn test_translate_source_container_path_accepted() {
+        // Simulate a mount directory with the expected host file inside it.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mount = tmp.path();
+        std::fs::write(mount.join("brief.md"), "hello").unwrap();
+
+        let out = translate_source_path(Path::new("/workspace/brief.md"), mount).expect("ok");
+        assert_eq!(out, "/workspace/brief.md");
+    }
+
+    #[test]
+    fn test_translate_source_container_path_missing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let err = translate_source_path(Path::new("/workspace/ghost.md"), tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("File not found"));
+    }
+
+    #[test]
+    fn test_translate_source_host_path_inside_mount_rewritten() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mount = tmp.path();
+        std::fs::create_dir_all(mount.join("docs")).unwrap();
+        let host_file = mount.join("docs").join("brief.md");
+        std::fs::write(&host_file, "hello").unwrap();
+
+        let out = translate_source_path(&host_file, mount).expect("ok");
+        assert_eq!(out, "/workspace/docs/brief.md");
+    }
+
+    #[test]
+    fn test_translate_source_host_path_outside_mount_rejected() {
+        let tmp_mount = tempfile::tempdir().expect("tempdir");
+        let tmp_other = tempfile::tempdir().expect("tempdir");
+        let outside_file = tmp_other.path().join("outside.md");
+        std::fs::write(&outside_file, "hello").unwrap();
+
+        let err = translate_source_path(&outside_file, tmp_mount.path()).unwrap_err();
+        assert!(err.to_string().contains("PATH_OUTSIDE_WORKSPACE"));
+    }
+
+    #[test]
+    fn test_resolve_stream_default_first() {
+        let streams = vec!["inbox".to_string(), "cron".to_string()];
+        assert_eq!(resolve_target_stream(&streams, None).unwrap(), "inbox");
+    }
+
+    #[test]
+    fn test_resolve_stream_override_valid() {
+        let streams = vec!["inbox".to_string(), "cron".to_string()];
+        assert_eq!(
+            resolve_target_stream(&streams, Some("cron")).unwrap(),
+            "cron"
+        );
+    }
+
+    #[test]
+    fn test_resolve_stream_override_not_declared() {
+        let streams = vec!["inbox".to_string()];
+        let err = resolve_target_stream(&streams, Some("ghost")).unwrap_err();
+        assert!(err.to_string().contains("STREAM_NOT_DECLARED"));
+    }
+
+    #[test]
+    fn test_resolve_stream_empty_list() {
+        let streams: Vec<String> = vec![];
+        let err = resolve_target_stream(&streams, None).unwrap_err();
+        assert!(err.to_string().contains("NO_INPUT_STREAM"));
+    }
+
+    #[test]
+    fn test_build_invocation_parameters_without_hint() {
+        let m = build_invocation_parameters("markdown", "/workspace/foo.md", None);
+        assert_eq!(m.get("source_type").map(String::as_str), Some("markdown"));
+        assert_eq!(
+            m.get("source_ref").map(String::as_str),
+            Some("/workspace/foo.md")
+        );
+        assert!(!m.contains_key("user_summary_hint"));
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn test_build_invocation_parameters_with_hint() {
+        let m =
+            build_invocation_parameters("pdf", "/workspace/brief.pdf", Some("Q3 planning deck"));
+        assert_eq!(m.get("source_type").map(String::as_str), Some("pdf"));
+        assert_eq!(
+            m.get("user_summary_hint").map(String::as_str),
+            Some("Q3 planning deck")
+        );
+        assert_eq!(m.len(), 3);
+    }
+
+    fn sample_ingest_data(with_result: bool) -> IngestData {
+        IngestData {
+            invocation_id: "11111111-2222-3333-4444-555555555555".to_string(),
+            agent: "donna".to_string(),
+            stream: "inbox".to_string(),
+            source_type: "markdown".to_string(),
+            source_ref: "/workspace/brief.md".to_string(),
+            waited: with_result,
+            result: if with_result {
+                Some(IngestResultData {
+                    success: true,
+                    error_code: String::new(),
+                    error_message: String::new(),
+                    output: String::new(),
+                    library_tokens: Some(1234),
+                    library_page_count: Some(7),
+                    library_last_ingest_at: Some("2026-04-10T12:00:00+00:00".to_string()),
+                })
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn test_render_human_publish_only() {
+        let out = render_ingest_human(&sample_ingest_data(false));
+        assert!(out.contains("Ingest published to stream 'inbox' for agent 'donna'"));
+        assert!(out.contains("invocation_id: 11111111-2222-3333-4444-555555555555"));
+        assert!(out.contains("source_type:   markdown"));
+        assert!(out.contains("source_ref:    /workspace/brief.md"));
+        assert!(!out.contains("SkillResult received"));
+    }
+
+    #[test]
+    fn test_render_human_with_skill_result() {
+        let out = render_ingest_human(&sample_ingest_data(true));
+        assert!(out.contains("SkillResult received"));
+        assert!(out.contains("success:       true"));
+        assert!(out.contains("library_tokens:         1234"));
+        assert!(out.contains("library_page_count:     7"));
+        assert!(out.contains("library_last_ingest_at: 2026-04-10T12:00:00+00:00"));
+    }
+
+    #[test]
+    fn test_render_json_publish_only() {
+        let data = sample_ingest_data(false);
+        let json = serde_json::to_string(&data).expect("serialize");
+        for key in [
+            "\"invocation_id\"",
+            "\"agent\"",
+            "\"stream\"",
+            "\"source_type\"",
+            "\"source_ref\"",
+            "\"waited\"",
+        ] {
+            assert!(json.contains(key), "json must contain {key}: {json}");
+        }
+        // result field is skip_serializing_if = "Option::is_none", so the
+        // key is absent in the publish-only case.
+        assert!(!json.contains("\"result\""));
+    }
+
+    #[test]
+    fn test_render_json_with_skill_result() {
+        let data = sample_ingest_data(true);
+        let json = serde_json::to_string(&data).expect("serialize");
+        assert!(json.contains("\"result\""));
+        assert!(json.contains("\"library_tokens\":1234"));
+        assert!(json.contains("\"library_page_count\":7"));
+        assert!(json.contains("\"success\":true"));
     }
 
     #[test]
