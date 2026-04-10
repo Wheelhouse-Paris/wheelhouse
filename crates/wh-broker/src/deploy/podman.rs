@@ -374,20 +374,17 @@ pub fn sanitize_name(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
-/// Volume suffixes for named data volumes (ADR-027, ADR-036).
+/// Topology-shared volume suffixes for named data volumes (ADR-027).
 ///
-/// Each topology gets 7 named volumes: wal, users, skills, personas, context,
-/// platform, workspace. The `workspace` volume is the Library root mount point
-/// (ADR-036, Epic 13) and is mounted at `/workspace/` in every agent container.
-const VOLUME_SUFFIXES: &[&str] = &[
-    "wal",
-    "users",
-    "skills",
-    "personas",
-    "context",
-    "platform",
-    "workspace",
-];
+/// Each topology gets 6 shared named volumes: wal, users, skills, personas,
+/// context, platform. These are all legitimately cross-agent (topology-wide
+/// state, capability manifests, persona files, etc.).
+///
+/// The Library `workspace` volume is NOT in this list — as of Epic 13 story
+/// 13-3 (ADR-036, FW-1.3), it is expanded per-agent as
+/// `wh-<topo>-<agent>-workspace` to enforce Library isolation between agents.
+/// See `workspace_volume_name` and `volume_names` for the expansion.
+const VOLUME_SUFFIXES: &[&str] = &["wal", "users", "skills", "personas", "context", "platform"];
 
 /// Build the Podman network name for a topology (ADR-024).
 ///
@@ -445,28 +442,43 @@ pub fn remove_network(topology_name: &str) -> Result<(), DeployError> {
 
 /// Build the named volume names for a topology (ADR-027, ADR-036).
 ///
-/// Returns a `Vec` of 7 volume names in deterministic order:
-/// `wh-<sanitized_topology>-{wal, users, skills, personas, context, platform, workspace}`.
-pub fn volume_names(topology_name: &str) -> Vec<String> {
+/// Returns a `Vec` of `6 + N` volume names in deterministic order, where
+/// `N = agent_names.len()`:
+///
+/// 1. The 6 shared volumes from `VOLUME_SUFFIXES`:
+///    `wh-<sanitized_topology>-{wal, users, skills, personas, context, platform}`.
+/// 2. One per-agent workspace volume per agent (Epic 13 story 13-3, ADR-036):
+///    `wh-<sanitized_topology>-<sanitized_agent>-workspace`.
+///
+/// The workspace volume is split per-agent to enforce Library isolation —
+/// agent A's `.library/` and `.wh-schema.md` must not be visible to agent B.
+pub fn volume_names(topology_name: &str, agent_names: &[&str]) -> Vec<String> {
     let topo = sanitize_name(topology_name);
-    VOLUME_SUFFIXES
+    let mut names: Vec<String> = VOLUME_SUFFIXES
         .iter()
         .map(|suffix| format!("wh-{topo}-{suffix}"))
-        .collect()
+        .collect();
+    for agent in agent_names {
+        names.push(workspace_volume_name(topology_name, agent));
+    }
+    names
 }
 
 /// Create all named data volumes for the topology idempotently (ADR-027, ADR-036).
 ///
-/// Runs `podman volume create <name> --ignore` for each of the 7 volumes.
+/// Runs `podman volume create <name> --ignore` for each volume returned by
+/// `volume_names` — the 6 shared volumes plus one per-agent workspace volume
+/// per agent in `agent_names` (Epic 13 story 13-3).
+///
 /// The `--ignore` flag makes this safe to call repeatedly — if a volume
 /// already exists, the command succeeds silently.
 ///
 /// Fails fast on the first volume creation error (same pattern as
 /// `ensure_network()`).
 #[tracing::instrument(skip_all, fields(topology = %topology_name))]
-pub fn ensure_volumes(topology_name: &str) -> Result<(), DeployError> {
+pub fn ensure_volumes(topology_name: &str, agent_names: &[&str]) -> Result<(), DeployError> {
     let podman = find_podman()?;
-    let names = volume_names(topology_name);
+    let names = volume_names(topology_name, agent_names);
 
     tracing::info!("ensuring topology data volumes exist");
     for name in &names {
@@ -480,16 +492,23 @@ pub fn ensure_volumes(topology_name: &str) -> Result<(), DeployError> {
     Ok(())
 }
 
-/// Remove all named data volumes for the topology (ADR-027).
+/// Remove all named data volumes for the topology (ADR-027, ADR-036).
 ///
-/// Runs `podman volume rm <name>` for each volume. Called during
-/// `deploy destroy` after all containers and the network have been removed.
-/// Best-effort: each volume removal is attempted independently. Failures
-/// are logged as warnings but do not abort the remaining removals.
+/// Runs `podman volume rm <name>` for each volume returned by
+/// `volume_names` — the 6 shared volumes plus the per-agent workspace
+/// volumes for the declared agents (Epic 13 story 13-3).
+///
+/// Called during `deploy destroy` after all containers and the network have
+/// been removed. Best-effort: each volume removal is attempted independently.
+/// Failures are logged as warnings but do not abort the remaining removals.
+///
+/// Note: an orphaned `wh-<topo>-workspace` shared volume from story 13-2 is
+/// NOT removed automatically — the operator reclaims it manually because
+/// `remove_volumes` only touches volumes the current topology declares.
 #[tracing::instrument(skip_all, fields(topology = %topology_name))]
-pub fn remove_volumes(topology_name: &str) -> Result<(), DeployError> {
+pub fn remove_volumes(topology_name: &str, agent_names: &[&str]) -> Result<(), DeployError> {
     let podman = find_podman()?;
-    let names = volume_names(topology_name);
+    let names = volume_names(topology_name, agent_names);
 
     tracing::info!("removing topology data volumes");
     for name in &names {
@@ -510,16 +529,23 @@ fn platform_volume_name(topology_name: &str) -> String {
     format!("wh-{topo}-platform")
 }
 
-/// Build the workspace volume name for a topology (ADR-036, Epic 13).
+/// Build the per-agent workspace volume name (ADR-036, Epic 13, FW-1.3).
 ///
-/// The workspace volume is mounted at `/workspace/` in every agent container
-/// and is the root of the Wheelhouse Library layout (`.library/` +
+/// The workspace volume is mounted at `/workspace/` inside the agent
+/// container and is the root of the Wheelhouse Library layout (`.library/` +
 /// `.wh-schema.md`). Per ADR-036, `cwd` for the agent `claude -p` subprocess
 /// must be `/workspace/`, not `/workspace/.library/`, so schema and Library
 /// are both reachable from within `LibrarySandbox` boundaries.
-fn workspace_volume_name(topology_name: &str) -> String {
+///
+/// As of Epic 13 story 13-3, every agent gets its own workspace volume
+/// (`wh-<sanitized_topology>-<sanitized_agent>-workspace`) to enforce
+/// Library isolation — agent A's `.library/` must not be visible to agent B
+/// in the same topology. Both the topology and agent name flow through
+/// `sanitize_name` to match the ADR-027 naming convention.
+fn workspace_volume_name(topology_name: &str, agent_name: &str) -> String {
     let topo = sanitize_name(topology_name);
-    format!("wh-{topo}-workspace")
+    let agent = sanitize_name(agent_name);
+    format!("wh-{topo}-{agent}-workspace")
 }
 
 /// Populate the platform data volume with capabilities.json and cli-reference.md.
@@ -945,13 +971,15 @@ pub fn build_run_args(
     args.push("-v".to_string());
     args.push(format!("{platform_vol}:/etc/wh:ro"));
 
-    // Mount workspace volume at /workspace (read-write) for Library layout (ADR-036).
-    // Unconditional — every agent in the topology shares the workspace cwd
-    // contract so `claude_client.py` can launch with cwd=/workspace/ (ADR-036
-    // enablement line). Library content (.library/, .wh-schema.md) is populated
-    // by later Epic 13 stories (13-4 commit-per-write, 13-20 schema injection);
-    // at the end of story 13-2 the volume is empty and that is intentional.
-    let workspace_vol = workspace_volume_name(topology_name);
+    // Mount per-agent workspace volume at /workspace (read-write) for Library
+    // layout (ADR-036, Epic 13 story 13-3 FW-1.3). Unconditional — every agent
+    // has its own workspace volume so `claude_client.py` can launch with
+    // cwd=/workspace/ (ADR-036 enablement line from story 13-2). The volume
+    // name is scoped per-agent (`wh-<topo>-<agent>-workspace`) to enforce
+    // Library isolation — agent A cannot reach agent B's `.library/`.
+    // Library content (.library/, .wh-schema.md) is populated by later
+    // Epic 13 stories (13-4 commit-per-write, 13-20 schema injection).
+    let workspace_vol = workspace_volume_name(topology_name, agent_name);
     args.push("-v".to_string());
     args.push(format!("{workspace_vol}:/workspace"));
 
@@ -1472,8 +1500,11 @@ pub fn provision_containers(
         };
     }
 
-    // Create named data volumes (ADR-027) before any container starts.
-    if let Err(e) = ensure_volumes(topology_name) {
+    // Create named data volumes (ADR-027, ADR-036) before any container starts.
+    // Per-agent workspace volumes (Epic 13 story 13-3 FW-1.3) are created
+    // alongside the shared volumes — one per agent for Library isolation.
+    let agent_names: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
+    if let Err(e) = ensure_volumes(topology_name, &agent_names) {
         tracing::error!(error = %e, "failed to create topology data volumes");
         eprintln!("Error: {e}");
         return ApplyResult {
@@ -1780,7 +1811,8 @@ mod tests {
 
     #[test]
     fn volume_names_formats_correctly() {
-        let names = volume_names("dev");
+        // Story 13-3: with two agents, expect 6 shared + 2 per-agent workspace.
+        let names = volume_names("dev", &["donna", "researcher"]);
         assert_eq!(
             names,
             vec![
@@ -1790,15 +1822,17 @@ mod tests {
                 "wh-dev-personas",
                 "wh-dev-context",
                 "wh-dev-platform",
-                // ADR-036: workspace volume added in Epic 13 story 13-2.
-                "wh-dev-workspace",
+                // ADR-036 + FW-1.3: per-agent workspace volumes (Epic 13 story 13-3).
+                "wh-dev-donna-workspace",
+                "wh-dev-researcher-workspace",
             ]
         );
     }
 
     #[test]
     fn volume_names_sanitizes_special_chars() {
-        let names = volume_names("my app");
+        // Story 13-3: both topology and agent names flow through sanitize_name.
+        let names = volume_names("my app", &["agent one"]);
         assert_eq!(
             names,
             vec![
@@ -1808,43 +1842,87 @@ mod tests {
                 "wh-my-app-personas",
                 "wh-my-app-context",
                 "wh-my-app-platform",
-                "wh-my-app-workspace",
+                "wh-my-app-agent-one-workspace",
             ]
         );
     }
 
     #[test]
     fn volume_names_count() {
-        let names = volume_names("dev");
-        assert_eq!(names.len(), 7);
-        assert!(names.iter().any(|n| n == "wh-dev-workspace"));
+        // Story 13-3: 6 shared volumes + N per-agent workspace volumes.
+        let names = volume_names("dev", &["donna", "researcher", "analyst"]);
+        assert_eq!(names.len(), 6 + 3);
+        assert!(names.iter().any(|n| n == "wh-dev-donna-workspace"));
+        assert!(names.iter().any(|n| n == "wh-dev-researcher-workspace"));
+        assert!(names.iter().any(|n| n == "wh-dev-analyst-workspace"));
+        // The 13-2-era shared workspace name must NOT appear — 13-3 split it per agent.
+        assert!(
+            !names.iter().any(|n| n == "wh-dev-workspace"),
+            "shared workspace volume must no longer appear in volume_names output"
+        );
     }
 
     #[test]
-    fn volume_suffixes_constant_has_seven_entries() {
-        assert_eq!(VOLUME_SUFFIXES.len(), 7);
+    fn volume_names_no_agents_returns_shared_only() {
+        // A topology with no agents still produces the 6 shared volumes.
+        let names = volume_names("dev", &[]);
+        assert_eq!(names.len(), 6);
+        assert!(!names.iter().any(|n| n.ends_with("-workspace")));
+    }
+
+    #[test]
+    fn volume_names_includes_per_agent_workspace() {
+        // Story 13-3 FW-1.3: "each agent is mounted to a distinct named volume".
+        let names = volume_names("t1", &["a_123", "a_456"]);
+        let workspace_vols: Vec<&String> =
+            names.iter().filter(|n| n.ends_with("-workspace")).collect();
+        assert_eq!(workspace_vols.len(), 2);
+        assert!(workspace_vols.iter().any(|n| *n == "wh-t1-a-123-workspace"));
+        assert!(workspace_vols.iter().any(|n| *n == "wh-t1-a-456-workspace"));
+    }
+
+    #[test]
+    fn volume_suffixes_constant_has_six_shared_entries() {
+        // Story 13-3: VOLUME_SUFFIXES holds only the 6 topology-shared volumes.
+        // The workspace volume is now per-agent and lives outside this constant.
+        assert_eq!(VOLUME_SUFFIXES.len(), 6);
         assert_eq!(VOLUME_SUFFIXES[0], "wal");
         assert_eq!(VOLUME_SUFFIXES[1], "users");
         assert_eq!(VOLUME_SUFFIXES[2], "skills");
         assert_eq!(VOLUME_SUFFIXES[3], "personas");
         assert_eq!(VOLUME_SUFFIXES[4], "context");
         assert_eq!(VOLUME_SUFFIXES[5], "platform");
-        // ADR-036: workspace volume is the Library root mount (Epic 13).
-        assert_eq!(VOLUME_SUFFIXES[6], "workspace");
+        assert!(
+            !VOLUME_SUFFIXES.contains(&"workspace"),
+            "workspace must be per-agent, not a shared suffix"
+        );
     }
 
     #[test]
-    fn workspace_volume_name_sanitized() {
-        // ADR-036 + ADR-027: volume names must be sanitized per `sanitize_name`.
-        // The awkward chars ('.', '@') must be replaced by '-' (collapsed).
-        assert_eq!(workspace_volume_name("dev"), "wh-dev-workspace");
-        let sanitized = workspace_volume_name("my.topo@prod");
+    fn workspace_volume_name_per_agent_sanitized() {
+        // Story 13-3: per-agent workspace volume name is sanitized on both
+        // topology and agent names per ADR-027 + ADR-036.
+        assert_eq!(
+            workspace_volume_name("dev", "donna"),
+            "wh-dev-donna-workspace"
+        );
+        let sanitized = workspace_volume_name("my.topo@prod", "agent.A@1");
         assert!(
             !sanitized.contains('.') && !sanitized.contains('@'),
             "workspace volume name must be sanitized, got: {sanitized}"
         );
+        // sanitize_name preserves ASCII case (it only replaces non-alphanumerics
+        // and collapses dashes), so uppercase is legal in sanitized output.
         assert!(sanitized.starts_with("wh-"));
         assert!(sanitized.ends_with("-workspace"));
+        assert!(
+            sanitized.contains("my-topo-prod"),
+            "sanitized topology must be present: {sanitized}"
+        );
+        assert!(
+            sanitized.contains("agent-A-1"),
+            "sanitized agent must be present (case preserved): {sanitized}"
+        );
     }
 
     #[test]
@@ -1879,11 +1957,88 @@ mod tests {
             !args.iter().any(|a| a == "--network"),
             "should not have --network without network param"
         );
-        // ADR-036: workspace volume is mounted unconditionally at /workspace.
+        // ADR-036 + FW-1.3 (story 13-3): the per-agent workspace volume is
+        // mounted unconditionally at /workspace. For agent "researcher" in
+        // topology "dev", the volume name is "wh-dev-researcher-workspace".
         assert!(
             args.windows(2)
-                .any(|w| w[0] == "-v" && w[1] == "wh-dev-workspace:/workspace"),
-            "must contain unconditional workspace volume mount (ADR-036)"
+                .any(|w| w[0] == "-v" && w[1] == "wh-dev-researcher-workspace:/workspace"),
+            "must contain unconditional per-agent workspace volume mount (ADR-036, FW-1.3)"
+        );
+        // No cross-agent leakage — the shared 13-2-era volume name must not appear.
+        assert!(
+            !args.iter().any(|a| a == "wh-dev-workspace:/workspace"),
+            "must not contain the shared 13-2 workspace volume (replaced by per-agent volumes)"
+        );
+    }
+
+    #[test]
+    fn build_run_args_isolates_workspace_per_agent() {
+        // Story 13-3 FW-1.3: "neither container has access to the other's
+        // volume". This unit-level check asserts the broker NEVER references
+        // another agent's workspace volume in a given agent's run args.
+        let donna_args = build_run_args(
+            "dev",
+            "donna",
+            "donna:latest",
+            &["main".to_string()],
+            None,
+            false,
+            false,
+            false,
+            &[],
+            None,
+        );
+        let researcher_args = build_run_args(
+            "dev",
+            "researcher",
+            "researcher:latest",
+            &["main".to_string()],
+            None,
+            false,
+            false,
+            false,
+            &[],
+            None,
+        );
+
+        // donna sees only her own workspace volume
+        assert!(
+            donna_args
+                .windows(2)
+                .any(|w| w[0] == "-v" && w[1] == "wh-dev-donna-workspace:/workspace"),
+            "donna's args must mount her own workspace volume"
+        );
+        assert!(
+            !donna_args
+                .iter()
+                .any(|a| a.contains("wh-dev-researcher-workspace")),
+            "donna's args must NOT reference researcher's workspace volume"
+        );
+
+        // researcher sees only his own workspace volume
+        assert!(
+            researcher_args
+                .windows(2)
+                .any(|w| w[0] == "-v" && w[1] == "wh-dev-researcher-workspace:/workspace"),
+            "researcher's args must mount his own workspace volume"
+        );
+        assert!(
+            !researcher_args
+                .iter()
+                .any(|a| a.contains("wh-dev-donna-workspace")),
+            "researcher's args must NOT reference donna's workspace volume"
+        );
+
+        // Neither should reference the pre-13-3 shared workspace volume name.
+        assert!(
+            !donna_args
+                .iter()
+                .any(|a| a == "wh-dev-workspace:/workspace")
+                && !researcher_args
+                    .iter()
+                    .any(|a| a == "wh-dev-workspace:/workspace"),
+            "neither agent should reference the pre-13-3 shared workspace volume"
         );
     }
 
