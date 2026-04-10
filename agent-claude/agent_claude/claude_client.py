@@ -103,7 +103,10 @@ class ClaudeClient:
                 text=True,
                 timeout=timeout,
                 env=env,
-                cwd="/tmp",
+                # ADR-036: workspace cwd (Epic 13 Library). Must be /workspace/,
+                # NOT /workspace/.library/ — cwd=.library/ would put the schema
+                # file (../.wh-schema.md) outside LibrarySandbox boundaries.
+                cwd="/workspace/",
             )
 
         try:
