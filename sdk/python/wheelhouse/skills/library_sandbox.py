@@ -11,7 +11,9 @@ sibling-prefix attacks (e.g. ``/tmp/libA`` vs ``/tmp/libA-evil``).
 See:
     - epics-library.md#Story FW-1.1
     - architecture.md#ADR-036 (Library Workspace Volume and Mount Strategy)
-    - prd.md FR38, NFR7, NFR9
+    - architecture.md#ADR-039 (Library Git Commit Strategy)
+    - architecture.md#ADR-040 (Library Concurrent Write Serialization)
+    - prd.md FR14, FR22, FR38, NFR5, NFR7, NFR9, NFR17, NFR18, NFR19, NFR22
 
 Public API:
     LibrarySandbox(library_root)
@@ -40,11 +42,16 @@ import time
 from typing import Any, Callable, Iterator, Union
 
 from wheelhouse.errors import (
+    LibraryBusyError,
     LibraryCommitError,
     LibraryDiskFullError,
     LibraryTransactionError,
     PathEscapeError,
 )
+
+# Story 13-6: module-scoped named logger. Library code is a guest in the
+# host application's logging configuration — we never call basicConfig.
+logger = logging.getLogger("wheelhouse.library_sandbox")
 
 PathLike = Union[str, "os.PathLike[str]"]
 
@@ -54,16 +61,17 @@ PathLike = Union[str, "os.PathLike[str]"]
 # enforcement needs a different value.
 _DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024  # 10 MB
 
-# Subprocess timeout for any single git invocation. The 5-minute lock
-# logic lives in 13-6; under the single-writer assumption no individual
-# git call should approach 30s.
+# Subprocess timeout for any single git invocation. The 5-minute stale
+# lock window (story 13-6, ADR-040) is enforced separately by the retry
+# wrapper inspecting `index.lock` mtime — an individual git call still
+# fails fast at 30s if it hangs for any other reason.
 _GIT_SUBPROCESS_TIMEOUT_S = 30.0
 
 # Stale-lock timeout for `.library/.git/index.lock` per ADR-040 (Story 13-5).
 # A healthy 50K-word ingest takes 60–180s; 5 minutes gives 2–5× headroom
-# before declaring the lock stale. Single source of truth — Story 13-6 will
-# import this same constant for its in-flight retry loop instead of
-# re-declaring its own timeout.
+# before declaring the lock stale. Single source of truth — Story 13-6
+# reuses this value (mirrored as `_LOCK_STALE_AFTER_S` below for its
+# retry loop) rather than re-declaring a separate timeout.
 _DEFAULT_STALE_LOCK_TIMEOUT_S = 300.0
 
 # Module logger used by the boot-time crash-recovery sweep (Story 13-5) to
@@ -71,6 +79,57 @@ _DEFAULT_STALE_LOCK_TIMEOUT_S = 300.0
 # `index.lock` is removed. Configured via the standard `logging` module by
 # the agent runtime — no handlers attached here.
 _LOGGER = logging.getLogger("wheelhouse.library_sandbox")
+
+# Story 13-6 — Concurrent write serialization (FR22, NFR18, ADR-040).
+#
+# `_INDEX_LOCK_REL` is the path of git's native index lock relative to
+# the Library root. When two writers race, the loser of the race sees a
+# `LibraryCommitError` whose stderr matches `_LOCK_COLLISION_RE` — that
+# is the signal we use to enter the retry loop. Read-only git calls
+# (`rev-parse --verify HEAD`) do NOT touch the index lock and are
+# routed through the bare `_git()` path on purpose, see `_has_head`.
+_INDEX_LOCK_REL = ".git/index.lock"
+_LOCK_STALE_AFTER_S = _DEFAULT_STALE_LOCK_TIMEOUT_S  # 5-minute stale window
+_LOCK_RETRY_WAIT_S = 2.0  # ADR-040: 2-second backoff between attempts
+_LOCK_MAX_ATTEMPTS = 3  # ADR-040: 3 fresh-wait attempts before busy
+
+# Git's stderr signature for an index-lock collision. Anchored on
+# `index.lock` (not just any lock file) so unrelated lock errors —
+# `packed-refs.lock`, `HEAD.lock`, mkdir collisions — never false-trip
+# the retry path. Story 13-6 Dev Notes documents this dependency on
+# git's stderr wording.
+_LOCK_COLLISION_RE = re.compile(r"Unable to create [^\s]*index\.lock")
+
+# Internal marker prepended to LibraryCommitError messages by `_git`
+# when the underlying git stderr matched _LOCK_COLLISION_RE on the RAW
+# (pre-sanitization) text. The marker survives through the NFR9 path
+# sanitizer so `_is_lock_collision` can still detect the collision
+# after the error message has crossed the sanitization boundary. The
+# marker is a fixed ASCII token chosen to be obviously internal and to
+# never appear in real git stderr.
+_LOCK_COLLISION_MARKER = "[LIBRARY_LOCK_COLLISION] "
+
+
+def _is_lock_collision(stderr: str) -> bool:
+    """Pure classification: does this stderr come from an index-lock collision?
+
+    Inspects the stderr text only — never the exception type — because
+    :class:`LibraryCommitError` already wraps both lock and non-lock git
+    failures. Used by :meth:`LibrarySandbox._git_with_lock_retry`.
+
+    Two acceptance signals:
+      1. The internal ``_LOCK_COLLISION_MARKER`` prefix added by
+         :meth:`LibrarySandbox._git` when the *raw* stderr matched the
+         lock-collision regex (production path).
+      2. The raw lock-collision regex itself, for unit tests that
+         construct a synthetic ``LibraryCommitError`` directly without
+         going through ``_git``.
+    """
+    if not stderr:
+        return False
+    if _LOCK_COLLISION_MARKER in stderr:
+        return True
+    return _LOCK_COLLISION_RE.search(stderr) is not None
 
 # Used by _sanitize_git_stderr to scrub absolute paths from git's stderr
 # before they cross the LibraryCommitError boundary (NFR9 parity with
@@ -188,8 +247,11 @@ class LibrarySandbox:
             disk_space_check if disk_space_check is not None else _default_disk_space_check
         )
         self._txn: _Transaction | None = None
-        # Crash-recovery configuration (Story 13-5). Both fields have safe
-        # defaults so existing 13-1 / 13-4 call sites are unaffected.
+        # Crash-recovery configuration (Story 13-5) and retry-loop sleep
+        # seam (Story 13-6). Both fields have safe defaults so existing
+        # 13-1 / 13-4 call sites are unaffected. The `sleep` param is
+        # reused by 13-6's `_git_with_lock_retry` so unit tests can drive
+        # the retry loop in microseconds instead of real wall-clock time.
         self._stale_lock_timeout_s: float = stale_lock_timeout_s
         self._sleep: Callable[[float], None] = sleep
 
@@ -342,11 +404,121 @@ class LibrarySandbox:
             timeout=_GIT_SUBPROCESS_TIMEOUT_S,
         )
         if check and result.returncode != 0:
-            stderr = "" if suppress_stderr else _sanitize_git_stderr(result.stderr or "")
+            raw_stderr = result.stderr or ""
+            stderr = "" if suppress_stderr else _sanitize_git_stderr(raw_stderr)
+            # Story 13-6: classify lock collisions on the RAW stderr
+            # before path sanitization erases the `index.lock` token,
+            # then prepend a stable marker so `_is_lock_collision` can
+            # detect the collision after the message has crossed the
+            # NFR9 sanitization boundary.
+            if _LOCK_COLLISION_RE.search(raw_stderr):
+                marker = _LOCK_COLLISION_MARKER
+            else:
+                marker = ""
             raise LibraryCommitError(
-                f"git {args[0] if args else ''} failed: {stderr.strip() or '<no stderr>'}"
+                f"{marker}git {args[0] if args else ''} failed: {stderr.strip() or '<no stderr>'}"
             )
         return result
+
+    # ─── Story 13-6: index.lock retry layer (FR22, NFR18, ADR-040) ─────
+
+    def _lock_path(self) -> str:
+        """Return the absolute path of git's native index lock file.
+
+        Single seam so a test can swap it. Production callers should
+        treat the result as opaque — only `_lock_age_seconds` and
+        `_remove_stale_lock_if_present` interpret it.
+        """
+        return os.path.join(self._root, _INDEX_LOCK_REL)
+
+    def _lock_age_seconds(self) -> float | None:
+        """Return the age in seconds of `.git/index.lock`, or None if absent.
+
+        Returns ``None`` if the lock does not exist (a competing writer
+        already released it). Catches :class:`FileNotFoundError` to make
+        the stat-then-act sequence race-tolerant (AC-7).
+        """
+        try:
+            st = os.stat(self._lock_path())
+        except FileNotFoundError:
+            return None
+        return time.time() - st.st_mtime
+
+    def _remove_stale_lock_if_present(self) -> bool:
+        """Remove `.git/index.lock` iff it is older than the stale window.
+
+        Returns ``True`` when a stale lock was successfully cleaned up
+        (or vanished concurrently — both count as "the lock is no longer
+        in our way"); ``False`` otherwise. The warning log line never
+        embeds the absolute lock path, per NFR9.
+        """
+        age = self._lock_age_seconds()
+        if age is None:
+            # Lock vanished between collision and stat — fine, retry.
+            return True
+        if age <= _LOCK_STALE_AFTER_S:
+            return False
+        try:
+            os.unlink(self._lock_path())
+        except FileNotFoundError:
+            # Race: another agent removed it first. Still success.
+            pass
+        logger.warning("stale Library lock removed (age=%.1fs)", age)
+        return True
+
+    def _git_with_lock_retry(
+        self, args: list[str]
+    ) -> subprocess.CompletedProcess[str]:
+        """Wrap a mutating git call with the ADR-040 retry protocol.
+
+        Routing matrix:
+
+        - **Mutating** git calls (``add``, ``commit``, ``reset``,
+          ``clean``, ``rm --cached``) MUST go through this wrapper.
+        - **Read-only** git calls (``rev-parse --verify HEAD``) MUST
+          stay on the bare :meth:`_git` path — they never touch
+          ``index.lock`` and routing them here would needlessly add a
+          try-frame (AC-6).
+
+        Behaviour per ADR-040 §"Normal behaviour":
+
+        1. Try the call. On success, return.
+        2. On a non-lock failure, propagate unchanged (AC-9).
+        3. On a lock collision, attempt one stale-lock removal — if it
+           succeeds, retry immediately (does not consume an attempt).
+        4. Otherwise wait ``_LOCK_RETRY_WAIT_S`` and retry, up to
+           ``_LOCK_MAX_ATTEMPTS`` fresh-wait attempts.
+        5. After all attempts, raise :class:`LibraryBusyError`.
+
+        The stale-lock retry is capped at one per call so a chronically
+        stuck lock cannot loop forever. Stale removal grants a single
+        bonus retry that does not count toward the fresh-wait budget,
+        because once we have removed a stale lock the very next git
+        call should succeed if no other writer is racing us.
+
+        On :class:`LibraryBusyError` the original git stderr is dropped
+        — the busy error is the actionable signal and stderr never
+        leaves this function (NFR9, AC-8).
+        """
+        stale_removed = False
+        attempt = 0
+        while True:
+            try:
+                return self._git(args)
+            except LibraryCommitError as exc:
+                if not _is_lock_collision(str(exc)):
+                    raise
+                if self._remove_stale_lock_if_present():
+                    if stale_removed:
+                        # Already used our one stale-removal grace.
+                        raise LibraryBusyError() from None
+                    stale_removed = True
+                    continue
+                attempt += 1
+                if attempt >= _LOCK_MAX_ATTEMPTS:
+                    raise LibraryBusyError() from None
+                self._sleep(_LOCK_RETRY_WAIT_S)
+                continue
 
     def _ensure_git_repo(self) -> None:
         """Idempotently initialize ``.git/`` under the Library root.
@@ -360,6 +532,10 @@ class LibrarySandbox:
             return
         if os.path.isdir(os.path.join(self._root, ".git")):
             return
+        # Story 13-6: `git init` cannot collide on `.git/index.lock`
+        # because the index file does not exist yet, and `git config
+        # --local` only writes `.git/config`. These calls intentionally
+        # bypass the lock-retry wrapper.
         self._git(["init", "-q"])
         # Deterministic line endings + no GPG dependency. These are
         # local-only so they cannot pollute the operator's global git
@@ -368,7 +544,13 @@ class LibrarySandbox:
         self._git(["config", "--local", "commit.gpgsign", "false"])
 
     def _has_head(self) -> bool:
-        """Return True iff the repo has at least one commit on HEAD."""
+        """Return True iff the repo has at least one commit on HEAD.
+
+        Read-only — never goes through ``_git_with_lock_retry``.
+        ``git rev-parse --verify HEAD`` only reads ``.git/HEAD`` and
+        ``.git/refs/`` and does not create ``index.lock``, so it cannot
+        race against a concurrent writer (story 13-6, AC-6, ADR-040).
+        """
         result = self._git(
             ["rev-parse", "--verify", "HEAD"],
             check=False,
@@ -461,7 +643,9 @@ class LibrarySandbox:
 
         try:
             if staged_paths:
-                self._git(["add", "--", *staged_paths])
+                # Story 13-6: routed through the lock-retry wrapper
+                # because `git add` is the call that creates index.lock.
+                self._git_with_lock_retry(["add", "--", *staged_paths])
             # Pre-commit checks. Either of these aborting must leave
             # the working tree clean — handled by the except block.
             self._disk_space_check(self._root)
@@ -476,7 +660,9 @@ class LibrarySandbox:
                 pages_updated=pages_updated,
                 cross_references_added=cross_references_added,
             )
-            self._git(["commit", "-m", message, "--allow-empty"])
+            # Story 13-6: `git commit` re-acquires index.lock briefly to
+            # write the new tree, so it goes through the retry wrapper too.
+            self._git_with_lock_retry(["commit", "-m", message, "--allow-empty"])
         except BaseException:
             # Reset the working tree to a clean state and re-raise the
             # original exception unchanged. We use a fresh _Transaction
@@ -503,6 +689,23 @@ class LibrarySandbox:
         self._txn = None
         self._rollback_internal(list(txn.staged_paths))
 
+    def _try_git_for_rollback(self, args: list[str]) -> None:
+        """Best-effort mutating git call used only by rollback paths.
+
+        Story 13-6: rollback runs after a primary failure has already
+        decided the call site's outcome. We still want to wait on
+        ``index.lock`` so the cleanup actually completes when another
+        writer is briefly racing us, but we MUST swallow any final
+        :class:`LibraryGitError` so the primary exception (which the
+        caller is in the middle of re-raising) reaches them unchanged.
+        """
+        try:
+            self._git_with_lock_retry(args)
+        except LibraryCommitError:
+            pass
+        except LibraryBusyError:
+            pass
+
     def _rollback_internal(self, staged_paths: list[str]) -> None:
         """Reset the working tree, branching on whether HEAD exists.
 
@@ -517,11 +720,14 @@ class LibrarySandbox:
             return
         if self._has_head():
             # Reset previously-committed files (handles modifications
-            # and deletions of tracked files in this txn).
-            self._git(["reset", "--hard", "HEAD"], check=False)
+            # and deletions of tracked files in this txn). Story 13-6:
+            # routed through the lock-aware best-effort wrapper so a
+            # racing writer cannot strand our half-staged state, while
+            # the primary exception still surfaces unchanged.
+            self._try_git_for_rollback(["reset", "--hard", "HEAD"])
             # Reset alone cannot remove brand-new untracked files. Use
             # git clean scoped to the staged paths to remove them.
-            self._git(["clean", "-fd", "--", *staged_paths], check=False)
+            self._try_git_for_rollback(["clean", "-fd", "--", *staged_paths])
         else:
             # No HEAD yet → nothing to reset to. The transaction may
             # have already added paths to the index (if `git add` ran
@@ -529,7 +735,9 @@ class LibrarySandbox:
             # entries before deleting the working-tree files. Without
             # this, an aborted-then-retried first commit would carry
             # over orphaned index entries from the failed run.
-            self._git(["rm", "-rf", "--cached", "--ignore-unmatch", "--", *staged_paths], check=False)
+            self._try_git_for_rollback(
+                ["rm", "-rf", "--cached", "--ignore-unmatch", "--", *staged_paths]
+            )
             for rel in staged_paths:
                 abs_path = os.path.join(self._root, rel)
                 try:

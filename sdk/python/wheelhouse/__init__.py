@@ -24,6 +24,7 @@ __version__ = "0.1.0"
 
 # Re-export user-facing error types for convenient `except wheelhouse.PublishTimeout` (AC #4)
 from wheelhouse.errors import ConnectionError as ConnectionError  # noqa: A004, F401
+from wheelhouse.errors import LibraryBusyError as LibraryBusyError  # noqa: F401
 from wheelhouse.errors import LibraryCommitError as LibraryCommitError  # noqa: F401
 from wheelhouse.errors import LibraryDiskFullError as LibraryDiskFullError  # noqa: F401
 from wheelhouse.errors import LibraryGitError as LibraryGitError  # noqa: F401

@@ -574,13 +574,17 @@ def test_commit_error_message_sanitized(
 
     def fake_run(args, **kwargs):  # type: ignore[no-untyped-def]
         if isinstance(args, list) and len(args) >= 2 and args[0] == "git" and args[1] == "commit":
+            # Use a non-lock failure here so this test exercises path
+            # sanitization in isolation. Story 13-6 routes lock-collision
+            # stderr through the retry wrapper into LibraryBusyError —
+            # tested separately in test_library_sandbox_lock.py.
             return subprocess.CompletedProcess(
                 args=args,
                 returncode=128,
                 stdout="",
                 stderr=(
-                    "fatal: Unable to create "
-                    f"'{library_root}/.git/index.lock': File exists"
+                    "fatal: bad object "
+                    f"{library_root}/.git/objects/ab/cdef HEAD"
                 ),
             )
         return real_run(args, **kwargs)

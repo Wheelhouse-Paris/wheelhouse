@@ -125,6 +125,31 @@ class LibraryDiskFullError(LibraryGitError):
         self.required_bytes = required_bytes
 
 
+class LibraryBusyError(LibraryGitError):
+    """Concurrent Library write contention exhausted retries (FR22, ADR-040).
+
+    Raised by :class:`LibrarySandbox` when a mutating git invocation
+    repeatedly fails to acquire ``.library/.git/index.lock`` because
+    another writer is holding it. Per ADR-040 the sandbox waits 2s and
+    retries up to 3 attempts before giving up; if a stale lock (>5min)
+    is detected it is removed once and the call retried, otherwise this
+    error surfaces.
+
+    The message is a fixed actionable prefix and embeds **no** filesystem
+    paths so the error is safe to forward into cloud logs (NFR9).
+    """
+
+    _MESSAGE_PREFIX = "Library is busy — another write operation is in progress"
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        code: str = "LIBRARY_BUSY",
+    ) -> None:
+        super().__init__(message or self._MESSAGE_PREFIX, code=code)
+
+
 class LibraryTransactionError(LibraryGitError):
     """A LibrarySandbox transactional API was used incorrectly.
 
