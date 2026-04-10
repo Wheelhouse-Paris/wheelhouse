@@ -195,6 +195,24 @@ async def run_startup() -> dict[str, Any]:
     )
     persona.stream_contexts = stream_contexts
 
+    # Step 2b-ii: Wire L5 Library schema (Story 13.21, FR27, ADR-037).
+    # L5 is injected iff the effective WH_LIBRARY_STATUS is not the literal
+    # "disabled" sentinel. The cloud-side values "active" and "read-only"
+    # both mean "Library usable → inject L5". An unset env var (local deploy
+    # without cloud billing) also implies L5 injection as long as the
+    # schema file is present. When the final status is "disabled" (either
+    # cloud-set or set by check_library_schema() above because the file is
+    # absent), persona.library_schema_path stays None and build_system_prompt
+    # skips L5 with zero per-turn filesystem cost.
+    effective_status = os.environ.get("WH_LIBRARY_STATUS", "").strip()
+    if effective_status != "disabled":
+        persona.library_schema_path = LIBRARY_SCHEMA_PATH
+        logger.debug(
+            "L5 Library schema wired (status=%s, path=%s)",
+            effective_status or "<unset>",
+            LIBRARY_SCHEMA_PATH,
+        )
+
     # Step 2c: Log total context size (E12-12)
     total_context = persona.build_system_prompt()
     total_size = len(total_context)
