@@ -318,12 +318,26 @@ pub async fn ingest(args: &IngestArgs) -> Result<(), WhError> {
     // (4) Infer source_type.
     let source_type = infer_source_type(&args.file, args.r#type.as_deref())?;
 
+    // (4b) Resolve the content inline so the agent does not need to re-read
+    // the file from inside its `LibrarySandbox` (which is rooted at
+    // `/workspace/.library/`, NOT `/workspace/`). The Python ingest skill
+    // accepts a `source_content` parameter that bypasses `sandbox.read()`
+    // entirely; we feed text/markdown as a UTF-8 string and PDF as raw
+    // bytes (the resolver accepts a leading `%PDF-` byte sequence as a
+    // sentinel for the raw-bytes path).
+    let source_content = read_source_content(&args.file, &mount_path, &source_ref, &source_type)?;
+
     // (5) Resolve stream.
     let stream_name = resolve_target_stream(&agent.streams, args.stream.as_deref())?;
 
     // (6) Build & publish the invocation.
     let invocation_id = uuid::Uuid::new_v4().to_string();
-    let parameters = build_invocation_parameters(&source_type, &source_ref, args.hint.as_deref());
+    let parameters = build_invocation_parameters(
+        &source_type,
+        &source_ref,
+        args.hint.as_deref(),
+        source_content.as_deref(),
+    );
     let invocation = SkillInvocation {
         skill_name: LIBRARY_INGEST_SKILL_NAME.to_string(),
         agent_id: args.agent.clone(),
@@ -394,15 +408,43 @@ pub async fn ingest(args: &IngestArgs) -> Result<(), WhError> {
 /// 3. The input is a host path outside the mount — hard-reject with
 ///    `PATH_OUTSIDE_WORKSPACE`.
 fn translate_source_path(input: &Path, mount_path: &Path) -> Result<String, WhError> {
+    // On podman-machine setups (macOS / Windows) the volume mountpoint lives
+    // inside the podman VM and is NOT visible on the host. In that case we
+    // cannot use direct filesystem probing — fall back to `podman volume`
+    // inspection from inside a throwaway container.
+    let host_visible_mount = mount_path.is_dir();
+
     // Case 1: container-shaped path (`/workspace/...`).
     if let Some(rest) = input.to_str().and_then(|s| s.strip_prefix("/workspace/")) {
-        // Also accept exactly "/workspace" (unlikely but deterministic).
-        let host_equivalent = mount_path.join(rest);
-        if !host_equivalent.exists() {
-            return Err(WhError::Other(format!(
-                "File not found at container path /workspace/{rest} (expected host file at {}).",
-                host_equivalent.display()
-            )));
+        if host_visible_mount {
+            // Native Linux fast path — direct host stat.
+            let host_equivalent = mount_path.join(rest);
+            if !host_equivalent.exists() {
+                return Err(WhError::Other(format!(
+                    "File not found at container path /workspace/{rest} (expected host file at {}).",
+                    host_equivalent.display()
+                )));
+            }
+        } else {
+            // podman-machine path: probe inside a throwaway container.
+            // We need the volume name; derive it from the mountpoint string.
+            // The mountpoint convention is `.../volumes/<volname>/_data`, so
+            // extract the second-last path component.
+            let volume_name = mount_path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| {
+                    WhError::Other(format!(
+                        "cannot derive volume name from mountpoint {}",
+                        mount_path.display()
+                    ))
+                })?;
+            probe_volume_path_exists(volume_name, rest).map_err(|e| {
+                WhError::Other(format!(
+                    "File not found at container path /workspace/{rest} ({e})."
+                ))
+            })?;
         }
         return Ok(format!("/workspace/{rest}"));
     }
@@ -413,8 +455,22 @@ fn translate_source_path(input: &Path, mount_path: &Path) -> Result<String, WhEr
         ));
     }
 
-    // Case 2/3: host path. Canonicalise both sides so `.`, `..`, and symlinks
-    // resolve consistently.
+    // Case 2/3: host path. This path requires the workspace mount to be
+    // visible on the host (canonicalize fails inside the podman VM). On
+    // podman-machine setups, hard-reject with a directive to either copy
+    // the file into the volume first or use a `/workspace/...` path.
+    if !host_visible_mount {
+        return Err(WhError::Other(format!(
+            "host-side path translation is not supported in this environment \
+             (workspace mount {} is not directly visible on the host — typical of \
+             podman-machine on macOS/Windows). Copy the file into the volume \
+             first via `podman cp <file> wh-<topo>-<agent>:/workspace/<file>` \
+             then re-run with the container-side path `/workspace/<file>`.",
+            mount_path.display()
+        )));
+    }
+
+    // Canonicalise both sides so `.`, `..`, and symlinks resolve consistently.
     let canonical_input = std::fs::canonicalize(input)
         .map_err(|e| WhError::Other(format!("source file not found: {} ({e})", input.display())))?;
     let canonical_mount = std::fs::canonicalize(mount_path).map_err(|e| {
@@ -448,6 +504,44 @@ fn translate_source_path(input: &Path, mount_path: &Path) -> Result<String, WhEr
             canonical_input.display(),
             canonical_mount.display(),
         ))),
+    }
+}
+
+/// Verify that `relative_path` exists inside the named podman volume by
+/// running a throwaway `busybox test -e` container. Used by
+/// `translate_source_path` on podman-machine setups (macOS/Windows) where
+/// the volume mountpoint is not visible on the host filesystem.
+///
+/// Returns `Ok(())` when the file exists; `Err(String)` with a brief reason
+/// otherwise. The error string is folded into the user-facing message by
+/// the caller.
+fn probe_volume_path_exists(volume_name: &str, relative_path: &str) -> Result<(), String> {
+    let podman = wh_broker::deploy::podman::find_podman()
+        .map_err(|e| format!("podman not available: {e}"))?;
+    let mount_spec = format!("{volume_name}:/probe:ro");
+    // Use `test -e` so the exit code reflects existence; busybox `sh` does the
+    // dispatch and we never need to parse stdout.
+    let script = format!(
+        "test -e /probe/{rel}",
+        rel = relative_path.replace('\'', "")
+    );
+    let output = std::process::Command::new(podman)
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &mount_spec,
+            "busybox:latest",
+            "sh",
+            "-c",
+            &script,
+        ])
+        .output()
+        .map_err(|e| format!("podman run failed: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("file not present in workspace volume".to_string())
     }
 }
 
@@ -517,6 +611,7 @@ fn build_invocation_parameters(
     source_type: &str,
     source_ref: &str,
     hint: Option<&str>,
+    source_content: Option<&str>,
 ) -> HashMap<String, String> {
     let mut m = HashMap::new();
     m.insert("source_type".to_string(), source_type.to_string());
@@ -524,7 +619,114 @@ fn build_invocation_parameters(
     if let Some(h) = hint {
         m.insert("user_summary_hint".to_string(), h.to_string());
     }
+    if let Some(c) = source_content {
+        m.insert("source_content".to_string(), c.to_string());
+    }
     m
+}
+
+/// Read the source file content so it can be sent inline via the
+/// `source_content` parameter, bypassing the agent's `LibrarySandbox.read()`
+/// (which is rooted at `/workspace/.library/`, not `/workspace/`).
+///
+/// Strategy:
+/// - **Native Linux** (host can see the volume mount): read directly from
+///   the host path the user passed in, OR from the equivalent host path
+///   under the volume mount when the user passed a `/workspace/...` path.
+/// - **podman-machine** (macOS / Windows): the volume is inside the VM, so
+///   shell out to a throwaway `busybox cat` container that mounts the volume
+///   read-only and emits the file content on stdout.
+///
+/// PDF files are returned as a Latin-1 encoded `String` so they survive
+/// transit through the proto3 `map<string,string>` parameters; the Python
+/// resolver detects the `%PDF-` sentinel and round-trips back to bytes.
+fn read_source_content(
+    user_input: &Path,
+    mount_path: &Path,
+    container_path: &str,
+    source_type: &str,
+) -> Result<Option<String>, WhError> {
+    // text / markdown / pdf are all in scope; `url` is fetched server-side.
+    if source_type == "url" {
+        return Ok(None);
+    }
+    // Try the host path the user typed first (Case 2/3 of translate_source_path).
+    if let Ok(canonical) = std::fs::canonicalize(user_input) {
+        return read_file_to_string(&canonical, source_type).map(Some);
+    }
+    // Otherwise translate the container path back to a host path under the mount.
+    let rel = container_path
+        .strip_prefix("/workspace/")
+        .unwrap_or(container_path);
+    let host_path = mount_path.join(rel);
+    if host_path.exists() {
+        return read_file_to_string(&host_path, source_type).map(Some);
+    }
+    // Last resort: read via a throwaway busybox container against the volume.
+    let volume_name = mount_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            WhError::Other(format!(
+                "cannot derive volume name from mountpoint {}",
+                mount_path.display()
+            ))
+        })?;
+    let bytes = podman_cat_volume_file(volume_name, rel)?;
+    bytes_to_param_string(bytes, source_type).map(Some)
+}
+
+fn read_file_to_string(host_path: &Path, source_type: &str) -> Result<String, WhError> {
+    let bytes = std::fs::read(host_path)
+        .map_err(|e| WhError::Other(format!("failed to read source: {e}")))?;
+    bytes_to_param_string(bytes, source_type)
+}
+
+fn bytes_to_param_string(bytes: Vec<u8>, source_type: &str) -> Result<String, WhError> {
+    if source_type == "pdf" {
+        // Latin-1 round-trip: every byte → one codepoint in 0..=255.
+        // Python `_resolve_pdf_bytes` accepts a `str` whose first 5 bytes
+        // (Latin-1 decoded) are `%PDF-` and re-encodes via `latin-1`.
+        Ok(bytes.into_iter().map(|b| b as char).collect())
+    } else {
+        String::from_utf8(bytes).map_err(|e| {
+            WhError::Other(format!(
+                "source file is not valid UTF-8 (use --type pdf for binary): {e}"
+            ))
+        })
+    }
+}
+
+/// Cat a file out of a podman volume via a throwaway busybox container.
+/// Returns the raw bytes on success.
+fn podman_cat_volume_file(volume_name: &str, relative_path: &str) -> Result<Vec<u8>, WhError> {
+    let podman = wh_broker::deploy::podman::find_podman()
+        .map_err(|e| WhError::Other(format!("podman not available: {e}")))?;
+    let mount_spec = format!("{volume_name}:/probe:ro");
+    let safe_rel = relative_path.replace('\'', "");
+    let script = format!("cat /probe/{safe_rel}");
+    let output = std::process::Command::new(podman)
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &mount_spec,
+            "busybox:latest",
+            "sh",
+            "-c",
+            &script,
+        ])
+        .output()
+        .map_err(|e| WhError::Other(format!("podman run failed: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(WhError::Other(format!(
+            "failed to read source from volume: {}",
+            stderr.trim()
+        )));
+    }
+    Ok(output.stdout)
 }
 
 /// Publish a SkillInvocation as a StreamEnvelope on the broker's SUB endpoint.
@@ -1646,12 +1848,36 @@ fn resolve_mount_path(volume: &str) -> Result<PathBuf, WhError> {
     Ok(PathBuf::from(raw))
 }
 
-/// Gather the six health signals from the host filesystem.
+/// Gather the six health signals for a Library on a podman named volume.
 ///
 /// Pure data collection — never panics. Every sub-read is fault-tolerant and
 /// degrades to `None` / `false` / `0` on error so an incomplete/un-initialized
 /// Library renders as "not yet initialized" rather than crashing (AC-6).
+///
+/// Dispatches based on whether `mount_path` is accessible from the host:
+/// - **Native Linux** (rootful or rootless podman with bind-mount access): the
+///   volume mountpoint returned by `podman volume inspect` is a real directory
+///   on the host, so we use fast direct filesystem calls.
+/// - **podman-machine** (macOS / Windows): the mountpoint lives inside the
+///   podman VM and is *not* visible on the host. In that case we fall back to
+///   `podman run --rm -v <vol>:/probe:ro busybox …` and probe from inside a
+///   throwaway container. Slower (spawns a container per call) but correct.
 fn collect_status_data(
+    agent: String,
+    topology: String,
+    volume: String,
+    mount_path: PathBuf,
+) -> StatusData {
+    if mount_path.is_dir() {
+        collect_status_data_host(agent, topology, volume, mount_path)
+    } else {
+        collect_status_data_podman(agent, topology, volume, mount_path)
+    }
+}
+
+/// Fast path — read directly from the host filesystem when the volume's
+/// mountpoint is a real host directory (native Linux podman).
+fn collect_status_data_host(
     agent: String,
     topology: String,
     volume: String,
@@ -1661,8 +1887,7 @@ fn collect_status_data(
     let schema_present = schema_path.exists();
 
     let library_root = mount_path.join(".library");
-    let pages_dir = library_root.join("pages");
-    let page_count = count_pages_under(&pages_dir);
+    let page_count = count_library_pages(&library_root);
 
     let (git_head, last_ingest_at) = read_git_head_info(&library_root);
 
@@ -1685,25 +1910,248 @@ fn collect_status_data(
     }
 }
 
-/// Recursively count `.md` files under `dir`. Missing directory → 0.
-fn count_pages_under(dir: &Path) -> u64 {
-    fn walk(dir: &Path, count: &mut u64) {
+/// Slow path — probe the volume from inside a throwaway busybox container when
+/// the host cannot see the mountpoint directly (podman-machine on macOS).
+///
+/// The shell script emits KEY=VALUE lines that `parse_probe_output` parses.
+/// Git HEAD is read by following `.library/.git/HEAD` → refs/heads/<branch>
+/// manually, avoiding the need for a git binary inside the probe container.
+/// Last-ingest date is derived from the `mtime` of the HEAD file as a best-
+/// effort fallback (no git log without a git binary).
+fn collect_status_data_podman(
+    agent: String,
+    topology: String,
+    volume: String,
+    mount_path: PathBuf,
+) -> StatusData {
+    let empty = StatusData {
+        agent: agent.clone(),
+        topology: topology.clone(),
+        volume: volume.clone(),
+        mount_path: mount_path.to_string_lossy().into_owned(),
+        schema_present: false,
+        page_count: 0,
+        git_head: None,
+        last_ingest_at: None,
+        lock_held: false,
+        lock_age_seconds: None,
+        free_disk_bytes: None,
+    };
+
+    let podman = match wh_broker::deploy::podman::find_podman() {
+        Ok(p) => p,
+        Err(_) => return empty,
+    };
+
+    let script = r#"
+set -e
+cd /probe
+if [ -f .wh-schema.md ]; then echo SCHEMA=1; else echo SCHEMA=0; fi
+if [ -d .library ]; then
+  # Count *.md files anywhere under .library/, excluding any path component
+  # starting with `.` (dotted dirs like .git/) and excluding the auto-
+  # maintained root `.library/index.md`.
+  echo PAGES=$(find .library -type f -name '*.md' \
+    -not -path '*/.*' \
+    -not -path '.library/index.md' \
+    2>/dev/null | wc -l | tr -d ' ')
+  if [ -f .library/.git/HEAD ]; then
+    HEAD_CONTENT=$(cat .library/.git/HEAD 2>/dev/null)
+    case "$HEAD_CONTENT" in
+      ref:*)
+        REF_PATH=".library/.git/${HEAD_CONTENT#ref: }"
+        if [ -f "$REF_PATH" ]; then
+          SHA=$(cat "$REF_PATH" 2>/dev/null | cut -c1-7)
+          echo GIT_HEAD=$SHA
+          if [ -n "$SHA" ]; then
+            MTIME=$(stat -c %Y "$REF_PATH" 2>/dev/null || stat -f %m "$REF_PATH" 2>/dev/null)
+            if [ -n "$MTIME" ]; then echo LAST_INGEST_EPOCH=$MTIME; fi
+          fi
+        fi
+        ;;
+      *)
+        SHA=$(echo "$HEAD_CONTENT" | cut -c1-7)
+        echo GIT_HEAD=$SHA
+        ;;
+    esac
+  fi
+  if [ -f .library/.git/index.lock ]; then
+    echo LOCK_HELD=1
+    MTIME=$(stat -c %Y .library/.git/index.lock 2>/dev/null || stat -f %m .library/.git/index.lock 2>/dev/null)
+    if [ -n "$MTIME" ]; then echo LOCK_MTIME=$MTIME; fi
+  else
+    echo LOCK_HELD=0
+  fi
+else
+  echo PAGES=0
+  echo LOCK_HELD=0
+fi
+df -kP /probe 2>/dev/null | awk 'NR==2 {print "FREE_KB=" $4}'
+"#;
+
+    let mount_spec = format!("{volume}:/probe:ro");
+    let output = std::process::Command::new(podman)
+        .args([
+            "run",
+            "--rm",
+            "-v",
+            &mount_spec,
+            "busybox:latest",
+            "sh",
+            "-c",
+            script,
+        ])
+        .output();
+    let Ok(out) = output else { return empty };
+    if !out.status.success() {
+        return empty;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    parse_probe_output(&stdout, agent, topology, volume, mount_path)
+}
+
+/// Parse KEY=VALUE lines emitted by the podman-exec probe script.
+fn parse_probe_output(
+    stdout: &str,
+    agent: String,
+    topology: String,
+    volume: String,
+    mount_path: PathBuf,
+) -> StatusData {
+    let mut schema_present = false;
+    let mut page_count: u64 = 0;
+    let mut git_head: Option<String> = None;
+    let mut last_ingest_at: Option<String> = None;
+    let mut lock_held = false;
+    let mut lock_mtime: Option<u64> = None;
+    let mut free_kb: Option<u64> = None;
+
+    for line in stdout.lines() {
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        match k {
+            "SCHEMA" => schema_present = v == "1",
+            "PAGES" => page_count = v.parse().unwrap_or(0),
+            "GIT_HEAD" => {
+                if !v.is_empty() {
+                    git_head = Some(v.to_string());
+                }
+            }
+            "LAST_INGEST_EPOCH" => {
+                if let Ok(epoch) = v.parse::<i64>() {
+                    last_ingest_at = format_epoch_iso8601(epoch);
+                }
+            }
+            "LOCK_HELD" => lock_held = v == "1",
+            "LOCK_MTIME" => lock_mtime = v.parse().ok(),
+            "FREE_KB" => free_kb = v.parse().ok(),
+            _ => {}
+        }
+    }
+
+    let lock_age_seconds = if lock_held {
+        lock_mtime.and_then(|mt| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .map(|now| now.as_secs().saturating_sub(mt))
+        })
+    } else {
+        None
+    };
+    let free_disk_bytes = free_kb.map(|kb| kb.saturating_mul(1024));
+
+    StatusData {
+        agent,
+        topology,
+        volume,
+        mount_path: mount_path.to_string_lossy().into_owned(),
+        schema_present,
+        page_count,
+        git_head,
+        last_ingest_at,
+        lock_held,
+        lock_age_seconds,
+        free_disk_bytes,
+    }
+}
+
+/// Format a Unix epoch seconds value as an ISO-8601 UTC string (best-effort
+/// fallback for `last_ingest_at` when we cannot run `git log` in the probe).
+fn format_epoch_iso8601(epoch: i64) -> Option<String> {
+    if epoch <= 0 {
+        return None;
+    }
+    let secs = epoch as u64;
+    // Minimal ISO-8601 from Unix epoch without pulling in chrono.
+    // Algorithm: days since 1970-01-01 + HH:MM:SS.
+    let days = secs / 86_400;
+    let rem = secs % 86_400;
+    let h = rem / 3600;
+    let m = (rem % 3600) / 60;
+    let s = rem % 60;
+    let (y, mo, d) = days_to_ymd(days as i64);
+    Some(format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z"))
+}
+
+/// Convert days-since-1970 into (year, month, day). Pure arithmetic.
+fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
+    // Civil-from-days (Howard Hinnant's well-known algorithm).
+    days += 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let doe = (days - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Count Library pages under `library_root` (`.library/`).
+///
+/// 13-8 writes pages directly under the Library root with the slug-derived
+/// path returned by the summarizer (e.g. `wheelhouse-overview.md` or
+/// `clients/acme/profile.md`). They are NOT placed in a `pages/` subdirectory
+/// — earlier 13-24 drafts assumed there would be one and looked under
+/// `.library/pages/`, which always returned zero on real Libraries.
+///
+/// Counts every `*.md` file recursively under `library_root`, excluding:
+/// - `.git/` and any other dotted directory
+/// - `index.md` at the root (auto-maintained by 13-8, not a user page)
+fn count_library_pages(library_root: &Path) -> u64 {
+    fn walk(dir: &Path, root: &Path, count: &mut u64) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
         for entry in entries.flatten() {
             let path = entry.path();
+            // Skip dotted entries (`.git/`, `.provenance.json`, etc.).
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') {
+                    continue;
+                }
+            }
             if let Ok(ft) = entry.file_type() {
                 if ft.is_dir() {
-                    walk(&path, count);
+                    walk(&path, root, count);
                 } else if ft.is_file() && path.extension().and_then(|s| s.to_str()) == Some("md") {
+                    // Exclude the auto-maintained root index.
+                    if path.parent() == Some(root)
+                        && path.file_name().and_then(|n| n.to_str()) == Some("index.md")
+                    {
+                        continue;
+                    }
                     *count += 1;
                 }
             }
         }
     }
     let mut count: u64 = 0;
-    walk(dir, &mut count);
+    walk(library_root, library_root, &mut count);
     count
 }
 
@@ -1996,7 +2444,7 @@ mod tests {
     // ─── Story 13-24: `wh library status` tests ────────────────────────
 
     use super::{
-        count_pages_under, format_bytes_human, parse_df_output, render_human, LibraryCommand,
+        count_library_pages, format_bytes_human, parse_df_output, render_human, LibraryCommand,
         StatusData,
     };
     use clap::Parser;
@@ -2142,14 +2590,14 @@ Filesystem 1024-blocks Used Available Capacity Mounted
     }
 
     #[test]
-    fn test_count_pages_missing_dir() {
+    fn test_count_library_pages_missing_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let missing = tmp.path().join("does-not-exist");
-        assert_eq!(count_pages_under(&missing), 0);
+        assert_eq!(count_library_pages(&missing), 0);
     }
 
     #[test]
-    fn test_count_pages_counts_only_md_files() {
+    fn test_count_library_pages_counts_only_md_files() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let root = tmp.path();
         std::fs::create_dir_all(root.join("sub")).unwrap();
@@ -2159,7 +2607,25 @@ Filesystem 1024-blocks Used Available Capacity Mounted
         std::fs::write(root.join("ignore.png"), "x").unwrap();
         std::fs::write(root.join("sub").join("c.md"), "x").unwrap();
         std::fs::write(root.join("sub").join("ignore.yaml"), "x").unwrap();
-        assert_eq!(count_pages_under(root), 3);
+        assert_eq!(count_library_pages(root), 3);
+    }
+
+    #[test]
+    fn test_count_library_pages_excludes_root_index_and_dotted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("clients").join("acme")).unwrap();
+        std::fs::create_dir_all(root.join(".git").join("refs")).unwrap();
+        // Auto-maintained root index — must NOT count.
+        std::fs::write(root.join("index.md"), "# index").unwrap();
+        // Real pages, including a nested one.
+        std::fs::write(root.join("foo.md"), "x").unwrap();
+        std::fs::write(root.join("clients").join("acme").join("profile.md"), "x").unwrap();
+        // Files inside dotted dirs — must NOT count.
+        std::fs::write(root.join(".git").join("refs").join("HEAD.md"), "x").unwrap();
+        // Provenance sidecar — non-md, must not count.
+        std::fs::write(root.join(".provenance.json"), "{}").unwrap();
+        assert_eq!(count_library_pages(root), 2);
     }
 
     // ─── Story 13-22: `wh library init` tests ─────────────────────────
@@ -2551,25 +3017,46 @@ Filesystem 1024-blocks Used Available Capacity Mounted
 
     #[test]
     fn test_build_invocation_parameters_without_hint() {
-        let m = build_invocation_parameters("markdown", "/workspace/foo.md", None);
+        let m = build_invocation_parameters("markdown", "/workspace/foo.md", None, None);
         assert_eq!(m.get("source_type").map(String::as_str), Some("markdown"));
         assert_eq!(
             m.get("source_ref").map(String::as_str),
             Some("/workspace/foo.md")
         );
         assert!(!m.contains_key("user_summary_hint"));
+        assert!(!m.contains_key("source_content"));
         assert_eq!(m.len(), 2);
     }
 
     #[test]
     fn test_build_invocation_parameters_with_hint() {
-        let m =
-            build_invocation_parameters("pdf", "/workspace/brief.pdf", Some("Q3 planning deck"));
+        let m = build_invocation_parameters(
+            "pdf",
+            "/workspace/brief.pdf",
+            Some("Q3 planning deck"),
+            None,
+        );
         assert_eq!(m.get("source_type").map(String::as_str), Some("pdf"));
         assert_eq!(
             m.get("user_summary_hint").map(String::as_str),
             Some("Q3 planning deck")
         );
+        assert_eq!(m.len(), 3);
+    }
+
+    #[test]
+    fn test_build_invocation_parameters_with_inline_content() {
+        let m = build_invocation_parameters(
+            "markdown",
+            "/workspace/foo.md",
+            None,
+            Some("# foo\n\nbody text"),
+        );
+        assert_eq!(
+            m.get("source_content").map(String::as_str),
+            Some("# foo\n\nbody text")
+        );
+        assert!(!m.contains_key("user_summary_hint"));
         assert_eq!(m.len(), 3);
     }
 
