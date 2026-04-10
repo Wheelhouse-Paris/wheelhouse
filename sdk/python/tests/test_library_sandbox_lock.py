@@ -166,6 +166,34 @@ def test_is_lock_collision_false_on_unrelated_error() -> None:
     assert _is_lock_collision(None) is False  # type: ignore[arg-type]
 
 
+def test_is_lock_collision_true_on_head_ref_cas_race() -> None:
+    # `git commit` writes the commit object, then CAS-updates HEAD from
+    # its parent sha → the new commit. If another thread advanced HEAD
+    # between the read and the CAS, git aborts with exactly this message
+    # and we MUST treat it as a retryable serialization failure so
+    # linear history survives the race. This is the flake that surfaced
+    # `test_two_threads_serialize_end_to_end` under CI's faster disk
+    # scheduling; the local-APFS run masked it.
+    assert (
+        _is_lock_collision(
+            "fatal: cannot lock ref 'HEAD': is at "
+            "df205333bfdf8224787610215cc08929d55890e9 but expected "
+            "20247d0d510c45788a14983c9a96bb0086c5fc40"
+        )
+        is True
+    )
+    # The plain form (no "is at ... but expected ..." suffix) also counts.
+    assert (
+        _is_lock_collision("fatal: cannot lock ref 'HEAD': unable to resolve reference")
+        is True
+    )
+    # And the refs/heads/X variant (non-HEAD ref lock contention).
+    assert (
+        _is_lock_collision("fatal: cannot lock ref 'refs/heads/main': ...")
+        is True
+    )
+
+
 # ─── LibraryBusyError shape (Task 1) ──────────────────────────────────
 
 

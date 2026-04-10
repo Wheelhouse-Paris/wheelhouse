@@ -85,20 +85,44 @@ _LOGGER = logging.getLogger("wheelhouse.library_sandbox")
 # `_INDEX_LOCK_REL` is the path of git's native index lock relative to
 # the Library root. When two writers race, the loser of the race sees a
 # `LibraryCommitError` whose stderr matches `_LOCK_COLLISION_RE` — that
-# is the signal we use to enter the retry loop. Read-only git calls
-# (`rev-parse --verify HEAD`) do NOT touch the index lock and are
-# routed through the bare `_git()` path on purpose, see `_has_head`.
+# is the signal we use to enter the retry loop. Two classes of race are
+# retried: index.lock create failures AND the `cannot lock ref 'HEAD'`
+# CAS failure that surfaces when `git commit` finishes its commit-object
+# write but loses the HEAD-advance race to another thread. See the
+# `_LOCK_COLLISION_RE` doc block below. Read-only git calls
+# (`rev-parse --verify HEAD`) do NOT touch either lock and are routed
+# through the bare `_git()` path on purpose, see `_has_head`.
 _INDEX_LOCK_REL = ".git/index.lock"
 _LOCK_STALE_AFTER_S = _DEFAULT_STALE_LOCK_TIMEOUT_S  # 5-minute stale window
 _LOCK_RETRY_WAIT_S = 2.0  # ADR-040: 2-second backoff between attempts
 _LOCK_MAX_ATTEMPTS = 3  # ADR-040: 3 fresh-wait attempts before busy
 
-# Git's stderr signature for an index-lock collision. Anchored on
-# `index.lock` (not just any lock file) so unrelated lock errors —
-# `packed-refs.lock`, `HEAD.lock`, mkdir collisions — never false-trip
-# the retry path. Story 13-6 Dev Notes documents this dependency on
-# git's stderr wording.
-_LOCK_COLLISION_RE = re.compile(r"Unable to create [^\s]*index\.lock")
+# Git's stderr signatures for the two concurrent-write race classes
+# that story 13-6 retries:
+#
+#   1. `Unable to create <path>/index.lock`
+#      The classic `git add` / `git commit` index-lock collision: another
+#      process (or thread) is mid-write to the index, we arrived between
+#      their `.git/index.lock` create and rename.
+#
+#   2. `cannot lock ref 'HEAD'`
+#      The ref-update CAS race: `git commit` writes the commit object
+#      successfully, then tries to atomically advance HEAD from the sha it
+#      read at commit-prep time to the new commit. If another thread
+#      advanced HEAD in the meantime, the CAS fails with this exact
+#      message and git aborts WITHOUT moving HEAD. Retrying the full
+#      `git commit` is safe and correct: the next attempt re-reads HEAD,
+#      rebuilds the tree from the (now consistent) index on top of the
+#      new parent, and advances HEAD linearly — producing exactly the
+#      linear history AC-10 of 13-6 asks for.
+#
+# `packed-refs.lock`, `HEAD.lock` (different message: "Unable to create
+# '.../HEAD.lock'"), and mkdir collisions are NOT in this set — they
+# would indicate a stuck ref-packer, not a writer race, and retrying
+# would just spin.
+_LOCK_COLLISION_RE = re.compile(
+    r"Unable to create [^\s]*index\.lock|cannot lock ref "
+)
 
 # Internal marker prepended to LibraryCommitError messages by `_git`
 # when the underlying git stderr matched _LOCK_COLLISION_RE on the RAW
