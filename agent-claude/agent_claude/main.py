@@ -29,6 +29,43 @@ logger = logging.getLogger("agent_claude")
 DEFAULT_PERSONA_PATH = "/persona"
 DEFAULT_CONTEXT_PATH = "/context"
 
+# Library schema file path (Epic 13 story 13-20, ADR-036, ADR-037).
+# The schema file is materialized at /workspace/.wh-schema.md (workspace root,
+# NOT inside .library/) by wh-broker's populate_workspace_volumes step before
+# the agent container starts. The agent reaches it as `./wh-schema.md` from
+# cwd=/workspace/ (set in claude_client.py per ADR-036, story 13-2).
+LIBRARY_SCHEMA_PATH = "/workspace/.wh-schema.md"
+
+
+def check_library_schema() -> str:
+    """Check whether the Library schema file is present and readable.
+
+    Returns ``"enabled"`` if ``/workspace/.wh-schema.md`` exists and is
+    readable, else ``"disabled"`` (and emits a WARNING log line).
+
+    NFR24 graceful absence (Epic 13 story 13-20, ADR-037): if the schema
+    file is missing or unreadable at boot, the agent does NOT crash. It
+    continues to start normally, but Library skills will refuse to operate
+    because the schema (the agent's instructions on how to use the Library)
+    is the prerequisite. This handles volume corruption, manual deletion,
+    and the brief window between agent start and the first successful
+    schema-write by ``populate_workspace_volumes``.
+
+    The function only inspects the filesystem; it does not write to
+    ``os.environ`` or any other side channel. ``run_startup`` is responsible
+    for env-var propagation, with cloud-side precedence rules.
+    """
+    if os.path.isfile(LIBRARY_SCHEMA_PATH) and os.access(LIBRARY_SCHEMA_PATH, os.R_OK):
+        logger.debug("Library schema file present at %s", LIBRARY_SCHEMA_PATH)
+        return "enabled"
+    logger.warning(
+        "Library disabled — schema file missing or unreadable at %s "
+        "(NFR24 graceful absence; agent will boot normally but Library "
+        "skills will refuse to operate)",
+        LIBRARY_SCHEMA_PATH,
+    )
+    return "disabled"
+
 
 def validate_env() -> dict[str, Any]:
     """Validate all required environment variables.
@@ -108,6 +145,18 @@ async def run_startup() -> dict[str, Any]:
     """
     # Step 1: Validate environment
     config = validate_env()
+
+    # Step 1a: Probe Library schema file (NFR24 graceful absence; story 13-20).
+    # If the file is missing the agent boots with Library disabled — it does
+    # NOT crash and does NOT block the rest of startup. Cloud-side precedence:
+    # if WH_LIBRARY_STATUS is already set (by the cloud provisioner with values
+    # like "active" / "read-only" per the user's billing plan), the agent does
+    # NOT overwrite it. The agent only writes "disabled" when the file is
+    # absent AND no cloud value is present.
+    library_status = check_library_schema()
+    config["library_status"] = library_status
+    if library_status == "disabled" and "WH_LIBRARY_STATUS" not in os.environ:
+        os.environ["WH_LIBRARY_STATUS"] = "disabled"
 
     # Step 1b: Assemble platform context layers L0-L2 (ADR-033)
     platform_context = assemble_platform_context()
