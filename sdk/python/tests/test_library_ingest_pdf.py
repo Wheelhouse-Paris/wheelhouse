@@ -553,19 +553,25 @@ def test_ac9_pdf_and_text_paths_produce_identical_page_shape() -> None:
         invocation_id="inv-p",
     )
 
-    # The drafted page content must be byte-identical.
+    # The drafted page content must be byte-identical EXCEPT for the
+    # legitimately-different provenance fields (ingest_date differs by
+    # wall clock second; source_type differs because the text path
+    # correctly records "text" while the PDF path correctly records
+    # "pdf" — Story 13-13 FR40).
     text_page = rec_text.files["docs/alpha.md"]
     pdf_page = rec_pdf.files["docs/alpha.md"]
-    # Strip the ingest_date line (differs by wall clock second) before
-    # comparing — every OTHER byte must match.
-    def _strip_ingest_date(content: str) -> str:
+
+    def _strip_provenance_variable(content: str) -> str:
         return "\n".join(
             line
             for line in content.splitlines()
             if not line.startswith("ingest_date:")
+            and not line.startswith("source_type:")
         )
 
-    assert _strip_ingest_date(text_page) == _strip_ingest_date(pdf_page)
+    assert _strip_provenance_variable(text_page) == _strip_provenance_variable(
+        pdf_page
+    )
     # Same commit_metadata keys except the pdf flag.
     text_keys = set(rec_text.last_commit_metadata.keys())
     pdf_keys = set(rec_pdf.last_commit_metadata.keys())

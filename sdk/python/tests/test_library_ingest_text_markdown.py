@@ -243,6 +243,8 @@ def test_ac2_page_has_yaml_front_matter_with_required_keys() -> None:
     fm_end = content.index("---\n", 4) + 4
     front_matter = content[:fm_end]
     assert 'source: "brief.md"' in front_matter
+    # Story 13-13 FR40 — source_type is now a required front-matter field.
+    assert 'source_type: "markdown"' in front_matter
     assert "ingest_date:" in front_matter
     assert "cross_refs:" in front_matter
     # ingest_date format YYYY-MM-DDTHH:MM:SSZ
@@ -594,6 +596,7 @@ def test_render_page_preserves_body_newlines() -> None:
     out = ingest_mod._render_page(
         body="line1\nline2",
         source_name="s.md",
+        source_type="markdown",
         ingest_ts="2026-04-10T12:00:00Z",
         cross_refs=["a.md"],
     )

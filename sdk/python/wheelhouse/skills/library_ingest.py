@@ -212,6 +212,18 @@ LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION = (
     "LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION"
 )
 
+#: Story 13-13 (FR40) — a rendered page is missing one or more of the
+#: required provenance front-matter fields (``source`` or
+#: ``ingest_date``). The ingest writer is the sole producer of these
+#: fields so in practice this code only fires on a regression or a
+#: fault-injection test; the gate exists to enforce the invariant
+#: symmetrically with the other consistency checks. The error message
+#: names the offending slug (summarizer output — NOT a filesystem path,
+#: NFR9-clean) and the missing field names.
+LIBRARY_INGEST_INCONSISTENT_MISSING_PROVENANCE = (
+    "LIBRARY_INGEST_INCONSISTENT_MISSING_PROVENANCE"
+)
+
 #: The supplied PDF bytes could not be parsed by the PDF library —
 #: missing ``%PDF-`` magic, a ``.png`` renamed to ``.pdf`` (adversarial),
 #: password-protected / encrypted PDFs, or structurally corrupt files.
@@ -379,6 +391,26 @@ _INCONSISTENT_SLUG_COLLISION_FMT = (
     "Pass allow_slug_reuse=true to intentionally overwrite."
 )
 
+# Story 13-13 — NFR9-clean: ``slug`` is the summarizer's output string,
+# not a filesystem-resolved path. ``missing`` is a pre-joined list of the
+# missing provenance field names (``source``, ``ingest_date``).
+_INCONSISTENT_MISSING_PROVENANCE_FMT = (
+    "library_ingest: post-ingest consistency check failed — "
+    "rendered page {slug!r} is missing required provenance "
+    "field(s): {missing}"
+)
+
+# Story 13-13 — sidecar path at the Library sandbox root. Leading dot
+# keeps it out of default index.md listings; ``_find_existing_by_source``
+# already filters on the ``.md`` extension so it ignores the sidecar
+# naturally. Tests may import this constant via the module path.
+_PROVENANCE_PATH = ".provenance.json"
+
+# Story 13-13 — forward-extensible sidecar schema version. Old readers
+# that only understand version=1 will coexist with future v2 additions
+# because ``_load_provenance`` tolerates anything it does not recognize.
+_PROVENANCE_SCHEMA_VERSION = 1
+
 
 _ACCEPT_LARGE_TRUTHY = frozenset({"true", "1", "yes", "y", "on"})
 
@@ -496,6 +528,7 @@ def _check_ingest_consistency(
     drafts: list["PageDraft"],
     *,
     allow_slug_reuse: bool,
+    rendered_pages: dict[str, str] | None = None,
 ) -> None:
     """Story 13-11 FR13 — post-summarizer / pre-write consistency gate.
 
@@ -602,6 +635,37 @@ def _check_ingest_consistency(
             ),
             code=LIBRARY_INGEST_INCONSISTENT_CROSS_REFS,
         )
+
+    # Step 5 — FR40 provenance presence (Story 13-13). Every rendered
+    # page MUST carry non-empty ``source`` AND ``ingest_date`` front-
+    # matter fields. The ingest writer is the sole producer of these
+    # fields, so in practice this check is a regression / fault-
+    # injection guard — but the invariant is enforced symmetrically with
+    # the other consistency checks so any future re-renderer cannot
+    # silently ship pages with missing provenance.
+    #
+    # ``rendered_pages`` is None for legacy callers (unit tests that
+    # exercise the gate without synthesizing rendered content); the
+    # production call site in :func:`_summarize_and_write` always
+    # passes the dict of ``{normalized_path: rendered_content}`` it is
+    # about to stage via ``sandbox.write``.
+    if rendered_pages:
+        for slug, content in sorted(rendered_pages.items()):
+            front_matter, _body = _parse_front_matter_local(content)
+            missing: list[str] = []
+            source_val = front_matter.get("source")
+            if not isinstance(source_val, str) or not source_val:
+                missing.append("source")
+            ingest_val = front_matter.get("ingest_date")
+            if not isinstance(ingest_val, str) or not ingest_val:
+                missing.append("ingest_date")
+            if missing:
+                raise LibrarySkillError(
+                    _INCONSISTENT_MISSING_PROVENANCE_FMT.format(
+                        slug=slug, missing=", ".join(missing)
+                    ),
+                    code=LIBRARY_INGEST_INCONSISTENT_MISSING_PROVENANCE,
+                )
 
 
 # ─── Summarizer seam (13-8) ───────────────────────────────────────────
@@ -884,6 +948,7 @@ def _ingest_pipeline(
         sandbox,
         source_text=source_text,
         source_name=source_name,
+        source_type=source_type,
         user_hint_raw=parameters.get("user_summary_hint"),
         extra_metadata=extra_metadata,
         accept_large=_is_accept_large(parameters),
@@ -896,6 +961,7 @@ def _summarize_and_write(
     *,
     source_text: str,
     source_name: str,
+    source_type: str,
     user_hint_raw: Any,
     extra_metadata: Mapping[str, Any],
     accept_large: bool = False,
@@ -1050,29 +1116,45 @@ def _summarize_and_write(
 
         # ── FR13 post-ingest consistency gate (Story 13-11) ──────────
         # Verifies unsafe slugs, duplicate batch slugs, slug-collision
-        # with existing pages, and dangling cross-references. Raising
-        # here triggers the transaction context manager's rollback
-        # path, so no partial / inconsistent commit reaches git.
-        # Ordering: AFTER the LIBRARY_FULL hard block so a 500-page
-        # Library fails with the more-specific LIBRARY_FULL code even
-        # when the drafts also happen to have dangling refs (AC-9).
+        # with existing pages, dangling cross-references, AND (Story
+        # 13-13 FR40) that every rendered page carries the required
+        # ``source`` / ``ingest_date`` provenance front-matter fields.
+        # Raising here triggers the transaction context manager's
+        # rollback path, so no partial / inconsistent commit reaches
+        # git. Ordering: AFTER the LIBRARY_FULL hard block so a
+        # 500-page Library fails with the more-specific LIBRARY_FULL
+        # code even when the drafts also happen to have dangling refs.
+        #
+        # 13-13: pre-render every draft into the
+        # ``{normalized_path: rendered_content}`` dict BEFORE the
+        # consistency gate so the provenance check can inspect the
+        # exact bytes we are about to stage via ``sandbox.write``.
+        rendered_pages: dict[str, str] = {}
+        for draft in result.drafts:
+            page_path = _normalize_page_path(draft.path)
+            rendered_pages[page_path] = _render_page(
+                body=draft.body,
+                source_name=source_name,
+                source_type=source_type,
+                ingest_ts=ingest_ts,
+                cross_refs=list(draft.cross_refs),
+            )
+
         _check_ingest_consistency(
             sandbox,
             list(result.drafts),
             allow_slug_reuse=allow_slug_reuse,
+            rendered_pages=rendered_pages,
         )
 
         new_page_entries: list[tuple[str, str]] = []  # (path, title)
+        written_slugs: list[str] = []
         for draft in result.drafts:
             page_path = _normalize_page_path(draft.path)
             is_update = sandbox.exists(page_path)
-            content = _render_page(
-                body=draft.body,
-                source_name=source_name,
-                ingest_ts=ingest_ts,
-                cross_refs=list(draft.cross_refs),
-            )
+            content = rendered_pages[page_path]
             sandbox.write(page_path, content)
+            written_slugs.append(page_path)
             cross_refs_added += len(draft.cross_refs)
             if is_update:
                 pages_updated.append(page_path)
@@ -1101,6 +1183,29 @@ def _summarize_and_write(
             handle.commit_metadata["source_dedup"] = True
         for key, value in extra_metadata.items():
             handle.commit_metadata[key] = value
+
+        # ── FR40 provenance sidecar write (Story 13-13) ──────────────
+        # Load the existing ``.provenance.json`` (if any), fold in one
+        # entry per written slug (both created and updated — every
+        # write must refresh its history entry), and stage the updated
+        # sidecar inside the SAME transaction as the page writes so
+        # the commit atomically captures page + sidecar state. The
+        # write is the LAST step inside the transaction — any
+        # preceding failure rolls back via the context manager before
+        # we touch the sidecar on disk.
+        #
+        # Ingester / commit-SHA fields are intentionally not stored
+        # here; see the story's Context section for the rationale.
+        provenance_existing = _load_provenance(sandbox)
+        provenance_entries: list[tuple[str, str, str]] = [
+            (slug, source_name, source_type) for slug in written_slugs
+        ]
+        provenance_updated = _update_provenance(
+            provenance_existing, provenance_entries, ingest_ts
+        )
+        sandbox.write(
+            _PROVENANCE_PATH, _serialize_provenance(provenance_updated)
+        )
 
     # Step 6 — SkillResult. invocation_id / skill_name are filled in
     # by ``run_library_ingest`` from its own parameters; this function
@@ -1615,18 +1720,26 @@ def _render_page(
     *,
     body: str,
     source_name: str,
+    source_type: str,
     ingest_ts: str,
     cross_refs: list[str],
 ) -> str:
     """Render a page body with a minimal YAML front-matter block.
 
-    Format pinned by AC-2: three top-level keys in fixed order
-    (``source``, ``ingest_date``, ``cross_refs``), then a blank line,
-    then the body. ``source`` is emitted as a JSON string so that any
-    special characters (quotes, colons) round-trip cleanly without
-    pulling in a YAML dependency. ``cross_refs`` is a YAML flow list
-    with each item JSON-quoted. The rendered bytes are stable for the
-    same inputs.
+    Format pinned by FR40 / Story 13-13: four top-level keys in fixed
+    order (``source``, ``source_type``, ``ingest_date``, ``cross_refs``),
+    then a blank line, then the body. ``source`` and ``source_type`` are
+    emitted as JSON strings so that any special characters (quotes,
+    colons) round-trip cleanly without pulling in a YAML dependency.
+    ``cross_refs`` is a YAML flow list with each item JSON-quoted. The
+    rendered bytes are stable for the same inputs.
+
+    Prior to 13-13 this function emitted three fields (no
+    ``source_type``). 13-13 adds the field so downstream consumers
+    (citations, status, future migrations) can render format-aware
+    citations without re-inferring the type. Pre-13-13 pages remain
+    parseable — ``_parse_front_matter_local`` handles unknown and
+    missing keys gracefully.
     """
     if not body.endswith("\n"):
         body = body + "\n"
@@ -1634,6 +1747,7 @@ def _render_page(
     front_matter = (
         "---\n"
         f"source: {json.dumps(source_name)}\n"
+        f"source_type: {json.dumps(source_type)}\n"
         f"ingest_date: {ingest_ts}\n"
         f"cross_refs: [{refs_yaml}]\n"
         "---\n"
@@ -1727,6 +1841,209 @@ def _update_index(
     return existed
 
 
+# ─── Provenance sidecar (13-13) ───────────────────────────────────────
+
+
+def _load_provenance(sandbox: LibrarySandbox) -> dict[str, Any]:
+    """Load and return the ``.provenance.json`` sidecar.
+
+    Story 13-13 — FR40 source provenance tracking. Returns the parsed
+    JSON object on success, or an empty dict (``{}``) when the sidecar
+    is absent, unreadable, corrupt, or structurally invalid.
+
+    Corruption handling is intentionally permissive: the ingest skill
+    must never crash on a damaged sidecar, because the next successful
+    ingest rewrites all affected slugs and restores a well-formed
+    sidecar. Callers that want strict validation can round-trip the
+    return value through :func:`_update_provenance` (which accepts any
+    dict shape and normalizes it). A corruption-path warning is logged
+    to the module logger once per call so operators can notice the
+    damage, but the pipeline proceeds.
+
+    The sidecar schema (version 1) is:
+
+    .. code-block:: json
+
+        {
+          "version": 1,
+          "entries": {
+            "<slug>": {
+              "source": "...",
+              "source_type": "text|markdown|pdf",
+              "first_ingest_date": "YYYY-MM-DDTHH:MM:SSZ",
+              "last_ingest_date": "YYYY-MM-DDTHH:MM:SSZ",
+              "history": ["YYYY-MM-DDTHH:MM:SSZ", ...]
+            }
+          }
+        }
+
+    Future schema versions will bump ``version`` and extend ``entries``
+    with additional fields; ``_load_provenance`` will continue to
+    return the raw dict so old readers gracefully ignore unknown keys.
+    """
+    try:
+        exists = sandbox.exists(_PROVENANCE_PATH)
+    except Exception:  # noqa: BLE001 — robust against mock gaps
+        return {}
+    if not exists:
+        return {}
+    try:
+        raw = sandbox.read(_PROVENANCE_PATH)
+    except (FileNotFoundError, UnicodeDecodeError, OSError):
+        logger.warning(
+            "library_ingest: could not read %s — returning empty sidecar",
+            _PROVENANCE_PATH,
+        )
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning(
+            "library_ingest: %s is not valid JSON — returning empty sidecar",
+            _PROVENANCE_PATH,
+        )
+        return {}
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "library_ingest: %s top-level is not a JSON object — "
+            "returning empty sidecar",
+            _PROVENANCE_PATH,
+        )
+        return {}
+    entries = parsed.get("entries")
+    if entries is not None and not isinstance(entries, dict):
+        logger.warning(
+            "library_ingest: %s 'entries' field is not an object — "
+            "returning empty sidecar",
+            _PROVENANCE_PATH,
+        )
+        return {}
+    return parsed
+
+
+def _update_provenance(
+    existing: Mapping[str, Any],
+    entries: list[tuple[str, str, str]],
+    ingest_ts: str,
+) -> dict[str, Any]:
+    """Return a new sidecar dict with ``entries`` folded into ``existing``.
+
+    Story 13-13 — pure function (does not mutate ``existing``). Each
+    ``(slug, source, source_type)`` tuple in ``entries`` produces or
+    refreshes an entry in the returned sidecar:
+
+    - **New slug** — a fresh entry with
+      ``first_ingest_date == last_ingest_date == ingest_ts`` and
+      ``history == [ingest_ts]``.
+    - **Existing slug** — preserve ``first_ingest_date`` from the prior
+      entry, overwrite ``source`` + ``source_type`` (the re-ingest's
+      values), set ``last_ingest_date = ingest_ts``, and append
+      ``ingest_ts`` to ``history``.
+
+    The returned dict's ``entries`` mapping is rebuilt in slug-sorted
+    order so the JSON serialization is deterministic (AC-12 byte
+    stability). Entries present in ``existing`` but not touched by this
+    update are carried forward unchanged.
+    """
+    # Defensive deep-ish copy — we do not want to mutate the caller's
+    # dict, and we must not carry forward a reference to nested lists
+    # (``history``) that the caller might hold.
+    prior_entries_raw = existing.get("entries") if isinstance(
+        existing, Mapping
+    ) else None
+    prior_entries: dict[str, dict[str, Any]] = {}
+    if isinstance(prior_entries_raw, Mapping):
+        for slug, value in prior_entries_raw.items():
+            if not isinstance(slug, str) or not isinstance(value, Mapping):
+                continue
+            history_raw = value.get("history", [])
+            if isinstance(history_raw, list):
+                history_copy = [
+                    str(h) for h in history_raw if isinstance(h, str)
+                ]
+            else:
+                history_copy = []
+            prior_entries[slug] = {
+                "source": value.get("source", ""),
+                "source_type": value.get("source_type", ""),
+                "first_ingest_date": value.get("first_ingest_date", ""),
+                "last_ingest_date": value.get("last_ingest_date", ""),
+                "history": history_copy,
+            }
+
+    # Apply the updates. Sorted iteration keeps the output stable when
+    # two entries touch the same slug (practically impossible because
+    # _check_ingest_consistency already rejects duplicate slugs, but
+    # cheap and defensive).
+    for slug, source, source_type in sorted(entries):
+        if slug in prior_entries:
+            entry = prior_entries[slug]
+            entry["source"] = source
+            entry["source_type"] = source_type
+            entry["last_ingest_date"] = ingest_ts
+            entry["history"] = [*entry.get("history", []), ingest_ts]
+        else:
+            prior_entries[slug] = {
+                "source": source,
+                "source_type": source_type,
+                "first_ingest_date": ingest_ts,
+                "last_ingest_date": ingest_ts,
+                "history": [ingest_ts],
+            }
+
+    sorted_entries: dict[str, dict[str, Any]] = {
+        slug: prior_entries[slug] for slug in sorted(prior_entries)
+    }
+    return {
+        "version": _PROVENANCE_SCHEMA_VERSION,
+        "entries": sorted_entries,
+    }
+
+
+def _serialize_provenance(sidecar: Mapping[str, Any]) -> str:
+    """Return a stable JSON serialization of ``sidecar``.
+
+    Story 13-13 — uses ``sort_keys=True`` so git diffs are legible and
+    ``indent=2`` so the sidecar is human-readable in a text editor.
+    ``ensure_ascii=False`` preserves non-ASCII source names as UTF-8,
+    matching how :func:`_render_page` emits JSON strings in the YAML
+    front-matter. A trailing newline is appended so POSIX tools do not
+    complain about the file lacking a final newline.
+    """
+    return (
+        json.dumps(
+            sidecar, sort_keys=True, indent=2, ensure_ascii=False
+        )
+        + "\n"
+    )
+
+
+def get_provenance(
+    sandbox: LibrarySandbox, slug: str
+) -> dict[str, Any] | None:
+    """Return the provenance entry for ``slug``, or ``None`` if absent.
+
+    Story 13-13 — public helper for downstream Library consumers
+    (13-15 citations, 13-24 status, 13-25 list, future audit tooling).
+    Loads the sidecar via :func:`_load_provenance` on each call — there
+    is no caching because the caller knows its own read cadence and
+    the sidecar is a few KB even for a 500-page Library.
+
+    Returns a dict with keys ``source``, ``source_type``,
+    ``first_ingest_date``, ``last_ingest_date``, ``history``, or
+    ``None`` if either the sidecar is missing / empty or the slug has
+    no entry.
+    """
+    sidecar = _load_provenance(sandbox)
+    entries = sidecar.get("entries") if isinstance(sidecar, dict) else None
+    if not isinstance(entries, dict):
+        return None
+    entry = entries.get(slug)
+    if not isinstance(entry, dict):
+        return None
+    return dict(entry)
+
+
 # ─── Registry ─────────────────────────────────────────────────────────
 
 #: Handler signature for any Library skill registered in ``SKILL_REGISTRY``.
@@ -1758,6 +2075,7 @@ __all__ = [
     "LIBRARY_INGEST_BINARY_REJECTED",
     "LIBRARY_INGEST_INCONSISTENT_CROSS_REFS",
     "LIBRARY_INGEST_INCONSISTENT_DUPLICATE_SLUG",
+    "LIBRARY_INGEST_INCONSISTENT_MISSING_PROVENANCE",
     "LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION",
     "LIBRARY_INGEST_INCONSISTENT_UNSAFE_SLUG",
     "LIBRARY_INGEST_INVALID_ARGS",
@@ -1781,6 +2099,7 @@ __all__ = [
     "SKILL_REGISTRY",
     "Summarizer",
     "SummarizerResult",
+    "get_provenance",
     "get_summarizer",
     "run_library_ingest",
     "set_summarizer",

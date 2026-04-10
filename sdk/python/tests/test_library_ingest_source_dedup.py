@@ -99,10 +99,16 @@ def _seed_page(
     body: str,
     *,
     source: str,
+    source_type: str = "text",
     cross_refs: list[str] | None = None,
     ingest_ts: str = "2026-04-10T12:00:00Z",
 ) -> str:
-    """Render a seeded page with the same front-matter shape as 13-8."""
+    """Render a seeded page with the same front-matter shape as 13-13.
+
+    Story 13-13 adds ``source_type`` as a required front-matter field.
+    The default ``"text"`` preserves pre-13-13 test behaviour for
+    fixtures that do not care about the source-type dimension.
+    """
     refs = cross_refs or []
     import json
 
@@ -110,6 +116,7 @@ def _seed_page(
     return (
         "---\n"
         f"source: {json.dumps(source)}\n"
+        f"source_type: {json.dumps(source_type)}\n"
         f"ingest_date: {ingest_ts}\n"
         f"cross_refs: [{refs_yaml}]\n"
         "---\n"
