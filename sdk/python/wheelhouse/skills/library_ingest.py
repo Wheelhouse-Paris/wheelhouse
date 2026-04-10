@@ -1233,8 +1233,20 @@ LibrarySkillHandler = Callable[..., SkillResult]
 #: Single source of truth for the dispatch layer in ``agent_claude.loop``.
 #: Adding a new Library skill (13-14 retrieval, 13-16 lint) is a one-line
 #: addition to this dict. The dispatch side only imports this mapping.
+#:
+#: Story 13-18 adds ``library_lint``. The import is done at the bottom of
+#: this module (not at the top) to avoid any import-order surprise — the
+#: lint module does not depend on this module, so the one-way import is
+#: safe, but the deferred form keeps the registry declaration co-located
+#: with the entry it registers.
+from wheelhouse.skills.library_lint import (  # noqa: E402
+    SKILL_NAME as LIBRARY_LINT_SKILL_NAME,
+    run_library_lint,
+)
+
 SKILL_REGISTRY: dict[str, LibrarySkillHandler] = {
     SKILL_NAME: run_library_ingest,
+    LIBRARY_LINT_SKILL_NAME: run_library_lint,
 }
 
 

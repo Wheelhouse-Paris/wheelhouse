@@ -65,9 +65,16 @@ def test_skill_registry_lists_library_ingest() -> None:
     assert set(REQUIRED_PARAMS) == {"source_type", "source_ref"}
 
 
-def test_skill_registry_is_a_mapping_with_single_entry() -> None:
-    """13-7 registers exactly one Library skill. 13-14/13-16 will add more."""
-    assert list(SKILL_REGISTRY.keys()) == [SKILL_NAME]
+def test_skill_registry_lists_library_ingest_among_registered() -> None:
+    """13-7 pinned ``library_ingest`` as the first registered Library skill.
+
+    Story 13-18 added ``library_lint`` to the same dict. This test now
+    checks that both entries are present without pinning the exact set
+    (future stories may register retrieval / dedup / etc.).
+    """
+    assert SKILL_NAME in SKILL_REGISTRY
+    assert SKILL_REGISTRY[SKILL_NAME] is run_library_ingest
+    assert "library_lint" in SKILL_REGISTRY
 
 
 # ─── AC-8: Disabled refusal ───────────────────────────────────────────
