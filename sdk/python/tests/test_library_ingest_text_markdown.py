@@ -438,10 +438,15 @@ def test_ac7_path_escape_returns_source_not_found() -> None:
     assert recorder.tx_entered == 0
 
 
-# ─── AC-8: Unsupported source_type (pdf/url) ──────────────────────────
+# ─── AC-8: Unsupported source_type (url only after 13-9) ──────────────
+#
+# Story 13-8 originally parametrized this with ``["pdf", "url"]``. Story
+# 13-9 added the real PDF branch, so "pdf" is now supported and only
+# "url" remains unimplemented. The parametrize list is narrowed rather
+# than deleted to preserve the AC-8 coverage shape.
 
 
-@pytest.mark.parametrize("bad_type", ["pdf", "url"])
+@pytest.mark.parametrize("bad_type", ["url"])
 def test_ac8_unsupported_source_type_refused(bad_type: str) -> None:
     set_summarizer(_make_fake_summarizer([]))
     recorder = _TxRecorder()

@@ -280,20 +280,21 @@ def test_library_skill_error_is_a_wheelhouse_error() -> None:
     assert isinstance(exc, WheelhouseError)
 
 
-def test_ingest_pipeline_unsupported_type_after_13_8(
+def test_ingest_pipeline_unsupported_type_after_13_9(
     sandbox_mock: MagicMock,
 ) -> None:
     """13-7 raised NOT_IMPLEMENTED unconditionally. 13-8 shipped the
-    text/markdown body and now raises UNSUPPORTED_TYPE for pdf/url
-    until 13-9 replaces the pdf branch. This test pins the new
-    behaviour without losing the 13-7 coverage — NOT_IMPLEMENTED stays
-    in the catalogue as the historical sentinel.
+    text/markdown body and raised UNSUPPORTED_TYPE for pdf/url. 13-9
+    replaced the pdf branch with real extraction, so only ``url``
+    remains unimplemented — this test pins that refusal without losing
+    the 13-7/13-8 coverage. NOT_IMPLEMENTED stays in the catalogue as
+    the historical sentinel.
     """
     assert LIBRARY_INGEST_NOT_IMPLEMENTED  # constant still exported
     with pytest.raises(LibrarySkillError) as excinfo:
         ingest_mod._ingest_pipeline(
             sandbox_mock,
-            {"source_type": "pdf", "source_ref": "foo.pdf"},
+            {"source_type": "url", "source_ref": "https://example.com/x"},
         )
     assert excinfo.value.code == ingest_mod.LIBRARY_INGEST_UNSUPPORTED_TYPE
 

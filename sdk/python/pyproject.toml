@@ -11,6 +11,9 @@ authors = [
 dependencies = [
     "pyzmq>=25.0",
     "betterproto>=2.0.0b7",
+    # Story 13-9: PDF text extraction for the library_ingest skill.
+    # Pure-Python, MIT, actively maintained (successor to PyPDF2).
+    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]
