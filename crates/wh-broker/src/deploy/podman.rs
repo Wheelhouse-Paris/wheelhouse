@@ -542,7 +542,11 @@ fn platform_volume_name(topology_name: &str) -> String {
 /// Library isolation — agent A's `.library/` must not be visible to agent B
 /// in the same topology. Both the topology and agent name flow through
 /// `sanitize_name` to match the ADR-027 naming convention.
-fn workspace_volume_name(topology_name: &str, agent_name: &str) -> String {
+///
+/// Made `pub` by story 13-24 so `crates/wh-cli/src/commands/library.rs`
+/// (the `wh library status` subcommand) can resolve the exact same volume
+/// name the broker populates without duplicating the sanitization logic.
+pub fn workspace_volume_name(topology_name: &str, agent_name: &str) -> String {
     let topo = sanitize_name(topology_name);
     let agent = sanitize_name(agent_name);
     format!("wh-{topo}-{agent}-workspace")

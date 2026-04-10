@@ -7,6 +7,7 @@ use clap::Parser;
 
 use wh_cli::commands::capabilities;
 use wh_cli::commands::completion;
+use wh_cli::commands::library;
 use wh_cli::commands::logs;
 use wh_cli::commands::ps;
 use wh_cli::commands::reference;
@@ -162,6 +163,25 @@ async fn main() {
         Commands::Skill { command } => {
             let exit_code = wh_cli::commands::skill::run(command);
             std::process::exit(exit_code);
+        }
+        Commands::Library { command } => {
+            let fmt = command.format();
+            if let Err(e) = library::run(command).await {
+                match fmt {
+                    OutputFormat::Json => {
+                        let envelope = OutputEnvelope::<()>::error(e.error_code(), e.to_string());
+                        if let Ok(json) = serde_json::to_string_pretty(&envelope) {
+                            eprintln!("{json}");
+                        } else {
+                            eprintln!("Error: {e}");
+                        }
+                    }
+                    OutputFormat::Human => {
+                        eprintln!("Error: {e}");
+                    }
+                }
+                std::process::exit(e.exit_code());
+            }
         }
         Commands::Telegram { command } => {
             if let Err(e) = telegram::execute(&command).await {

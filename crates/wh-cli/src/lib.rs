@@ -16,6 +16,7 @@ use commands::capabilities::CapabilitiesArgs;
 use commands::compact::CompactArgs;
 use commands::completion::CompletionArgs;
 use commands::doctor::DoctorArgs;
+use commands::library::LibraryCommand;
 use commands::logs::LogsArgs;
 use commands::memory::MemoryCommand;
 use commands::ps::PsArgs;
@@ -102,5 +103,10 @@ pub enum Commands {
     Skill {
         #[command(subcommand)]
         command: SkillCommand,
+    },
+    /// Manage and inspect agent Libraries.
+    Library {
+        #[command(subcommand)]
+        command: LibraryCommand,
     },
 }
