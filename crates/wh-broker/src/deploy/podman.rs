@@ -548,6 +548,161 @@ fn workspace_volume_name(topology_name: &str, agent_name: &str) -> String {
     format!("wh-{topo}-{agent}-workspace")
 }
 
+/// Default Library schema template — read-only, embedded at compile time.
+///
+/// This is the byte-for-byte same template that wh-cli's
+/// `wh_cli::commands::library::DEFAULT_SCHEMA_TEMPLATE` (story 13-19) reads.
+/// Both modules `include_str!` the same workspace-relative file path
+/// (`crates/wh-cli/templates/library/wh-schema.md.tmpl`) so there is exactly
+/// one source of truth for the template bytes — no Cargo dependency between
+/// the two crates is required, and a future move of the template file would
+/// fail loudly at compile time on either consumer.
+///
+/// The template contains unresolved `{{agent_name}}` and `{{domain_description}}`
+/// placeholders. `render_default_schema` resolves them before the bytes are
+/// written to a workspace volume by `populate_workspace_volumes`.
+///
+/// Risk R1 (LAUNCH BLOCKER): the template wording is load-bearing for the
+/// agent's autonomous-write behavior. Edits must re-clear the R1 usability gate.
+/// See `_bmad-output/implementation-artifacts/wh/13-19-default-library-schema-template-r1.md`.
+const DEFAULT_SCHEMA_TEMPLATE: &str =
+    include_str!("../../../wh-cli/templates/library/wh-schema.md.tmpl");
+
+/// Resolve the two documented `{{...}}` placeholders in the default schema template.
+///
+/// V1 substitution rules (Epic 13 story 13-20, ADR-037):
+/// - `{{agent_name}}` → the agent's name from the topology spec.
+/// - `{{domain_description}}` → the literal v1 default `general knowledge`.
+///
+/// Per-agent custom domain strings are deferred to a future story; v1 hardcodes
+/// the general default for every agent so the R1 launch gate has a single
+/// schema variant under empirical test.
+fn render_default_schema(agent_name: &str, domain: &str) -> String {
+    DEFAULT_SCHEMA_TEMPLATE
+        .replace("{{agent_name}}", agent_name)
+        .replace("{{domain_description}}", domain)
+}
+
+/// V1 default domain string for the schema template.
+///
+/// See ADR-037 "general knowledge template" rationale and the planning draft
+/// `_bmad-output/planning-artifacts/wh/library-default-schema-template.md`.
+const DEFAULT_LIBRARY_DOMAIN: &str = "general knowledge";
+
+/// Build the shell script that the workspace-populate helper container runs.
+///
+/// Factored out from `populate_workspace_volumes` so it can be unit-tested
+/// without invoking podman. The script is executed inside a throwaway
+/// `alpine:latest` container with the per-agent workspace volume mounted
+/// at `/workspace`.
+///
+/// Sequence (each step joined by `&&`):
+/// 1. `chmod 644 /workspace/.wh-schema.md 2>/dev/null || true` — idempotency
+///    pre-clear so a redeploy can overwrite an existing read-only file.
+/// 2. `printf '%s' '<escaped schema>' > /workspace/.wh-schema.md` — write
+///    the resolved schema to the workspace ROOT (NOT inside `.library/`).
+/// 3. `chmod 444 /workspace/.wh-schema.md` — ADR-037 defense-in-depth: even
+///    if `LibrarySandbox` is bypassed via the Bash tool, the OS rejects writes.
+/// 4. `echo done` — sentinel for the helper exit-code path.
+fn build_workspace_populate_script(schema_content: &str) -> String {
+    // Escape single quotes for the outer shell single-quoted string.
+    // Pattern: ' becomes '\'' (close quote, literal quote, reopen quote).
+    let escaped = schema_content.replace('\'', "'\\''");
+    let mut script = String::new();
+    // Step 1: pre-clear the read-only bit so re-deploy can overwrite.
+    script.push_str("chmod 644 /workspace/.wh-schema.md 2>/dev/null || true && ");
+    // Step 2: write the resolved schema to the workspace root.
+    script.push_str(&format!(
+        "printf '%s' '{escaped}' > /workspace/.wh-schema.md && "
+    ));
+    // Step 3: ADR-037 / NFR10 defense-in-depth read-only.
+    script.push_str("chmod 444 /workspace/.wh-schema.md && ");
+    // Step 4: sentinel.
+    script.push_str("echo done");
+    script
+}
+
+/// Populate every agent's per-agent workspace volume with `.wh-schema.md`
+/// at the workspace root (Epic 13 story 13-20, ADR-037, FR25, NFR10).
+///
+/// For each agent in the topology:
+/// 1. Resolve the agent's per-agent workspace volume name (`workspace_volume_name`).
+/// 2. Render the default schema template (`render_default_schema`).
+/// 3. Build the populate shell script (`build_workspace_populate_script`).
+/// 4. Run a throwaway `alpine:latest` helper container with the volume mounted
+///    at `/workspace` and the script as its command.
+///
+/// The file is written at `/workspace/.wh-schema.md` (the workspace ROOT —
+/// NOT inside `/workspace/.library/`) with mode `0444`. The agent later
+/// reaches it as `./wh-schema.md` from `cwd=/workspace/` (ADR-036 cwd contract
+/// from story 13-2).
+///
+/// Best-effort: a per-agent failure is logged at WARN level and the loop
+/// continues. The agent for which the populate failed will boot with the
+/// schema absent and will gracefully disable Library per NFR24 (handled
+/// agent-side in `agent-claude/agent_claude/main.py::check_library_schema`).
+///
+/// Idempotent across redeploys: the script pre-clears the read-only bit
+/// before writing, then re-applies `chmod 444`. A redeploy with an updated
+/// template is therefore a no-migration operation.
+#[tracing::instrument(skip_all, fields(topology = %topology_name))]
+pub fn populate_workspace_volumes(
+    topology_name: &str,
+    agents: &[crate::deploy::Agent],
+) -> Result<(), DeployError> {
+    if agents.is_empty() {
+        tracing::debug!("no agents — skipping workspace volume population");
+        return Ok(());
+    }
+
+    let podman = find_podman()?;
+
+    for agent in agents {
+        let vol = workspace_volume_name(topology_name, &agent.name);
+        let helper = format!(
+            "wh-workspace-init-{}-{}",
+            sanitize_name(topology_name),
+            sanitize_name(&agent.name)
+        );
+
+        let resolved_schema = render_default_schema(&agent.name, DEFAULT_LIBRARY_DOMAIN);
+        let script = build_workspace_populate_script(&resolved_schema);
+
+        let mount_arg = format!("{vol}:/workspace");
+        let args = [
+            "run",
+            "--rm",
+            "--name",
+            &helper,
+            "-v",
+            &mount_arg,
+            "alpine:latest",
+            "sh",
+            "-c",
+            &script,
+        ];
+
+        tracing::info!(
+            agent = %agent.name,
+            volume = %vol,
+            "populating workspace volume with .wh-schema.md (ADR-037)"
+        );
+        if let Err(e) = run_podman_checked(podman, &args, PODMAN_RUN_TIMEOUT) {
+            tracing::warn!(
+                agent = %agent.name,
+                volume = %vol,
+                error = %e,
+                "failed to populate workspace volume — agent will boot with Library disabled (NFR24)"
+            );
+            // Continue to next agent — best-effort, mirrors populate_personas_volume.
+            continue;
+        }
+        tracing::info!(agent = %agent.name, "workspace volume populated");
+    }
+
+    Ok(())
+}
+
 /// Populate the platform data volume with capabilities.json and cli-reference.md.
 ///
 /// Uses a temporary Alpine container to copy files into the named volume.
@@ -1536,6 +1691,16 @@ pub fn provision_containers(
         tracing::warn!(error = %e, "failed to populate context volume — agents will lack stream context");
     }
 
+    // Populate per-agent workspace volumes with .wh-schema.md (Epic 13 story 13-20,
+    // ADR-037, FR25, NFR10). Each agent gets the resolved default schema written
+    // at /workspace/.wh-schema.md (workspace ROOT, NOT inside .library/) with mode
+    // 0444. Best-effort: per-agent failure is logged and the loop continues; the
+    // affected agent will boot with Library disabled (NFR24, handled agent-side
+    // in agent-claude/agent_claude/main.py::check_library_schema).
+    if let Err(e) = populate_workspace_volumes(topology_name, agents) {
+        tracing::warn!(error = %e, "failed to populate workspace volumes — agents will boot with Library disabled (NFR24)");
+    }
+
     // Populate skills volume from git repo (sparse checkout).
     // Best-effort: failure is logged but does not block deployment.
     if let Some(repo_url) = skills_repo {
@@ -2505,5 +2670,164 @@ mod tests {
             })
             .count();
         assert_eq!(streams_created, 1, "only 'stream main' should count");
+    }
+
+    // ─── Story 13-20: Schema file injection at boot ──────────────────────────
+
+    /// AC-1: the embedded template constant loads from the same file 13-19 ships.
+    /// Compile-time validation by `include_str!`; this runtime check guards
+    /// against accidental empty-file or unrelated-file regressions.
+    #[test]
+    fn default_schema_template_loads_from_disk() {
+        assert!(
+            !DEFAULT_SCHEMA_TEMPLATE.is_empty(),
+            "DEFAULT_SCHEMA_TEMPLATE must not be empty — include_str! path may have drifted"
+        );
+        assert!(
+            DEFAULT_SCHEMA_TEMPLATE.contains("# Your Library"),
+            "template must contain the canonical top heading from 13-19"
+        );
+        // Sanity: the template must contain the placeholders that
+        // render_default_schema is responsible for substituting.
+        assert!(
+            DEFAULT_SCHEMA_TEMPLATE.contains("{{agent_name}}"),
+            "template must contain the {{{{agent_name}}}} placeholder"
+        );
+        assert!(
+            DEFAULT_SCHEMA_TEMPLATE.contains("{{domain_description}}"),
+            "template must contain the {{{{domain_description}}}} placeholder"
+        );
+    }
+
+    /// AC-2: render_default_schema substitutes both placeholders and leaves no
+    /// `{{...}}` tokens behind.
+    #[test]
+    fn render_default_schema_substitutes_placeholders() {
+        let rendered = render_default_schema("donna", "general knowledge");
+        assert!(
+            rendered.contains("donna"),
+            "rendered schema must contain the substituted agent name"
+        );
+        assert!(
+            rendered.contains("general knowledge"),
+            "rendered schema must contain the substituted domain string"
+        );
+        assert!(
+            !rendered.contains("{{agent_name}}"),
+            "rendered schema must not contain unresolved {{{{agent_name}}}}"
+        );
+        assert!(
+            !rendered.contains("{{domain_description}}"),
+            "rendered schema must not contain unresolved {{{{domain_description}}}}"
+        );
+        // Belt-and-braces: assert there are zero remaining `{{...}}` tokens of
+        // any kind. This catches a future drift where someone adds a third
+        // placeholder to the template without updating render_default_schema.
+        let placeholder_re = regex::Regex::new(r"\{\{[^}]+\}\}").unwrap();
+        assert!(
+            !placeholder_re.is_match(&rendered),
+            "rendered schema must contain zero `{{{{...}}}}` tokens — found drift"
+        );
+    }
+
+    /// AC-2: render_default_schema is path-independent and uses the v1 default
+    /// domain string when called from `populate_workspace_volumes`.
+    #[test]
+    fn render_default_schema_uses_v1_default_domain_constant() {
+        assert_eq!(
+            DEFAULT_LIBRARY_DOMAIN, "general knowledge",
+            "v1 default domain must be the literal `general knowledge` per ADR-037"
+        );
+        let rendered = render_default_schema("alice", DEFAULT_LIBRARY_DOMAIN);
+        assert!(rendered.contains("general knowledge"));
+        assert!(rendered.contains("alice"));
+    }
+
+    /// AC-3 + AC-9: the populate script writes the schema at the workspace
+    /// ROOT, NOT inside `.library/`.
+    #[test]
+    fn populate_workspace_volumes_script_writes_schema_at_workspace_root() {
+        let script = build_workspace_populate_script("body");
+        assert!(
+            script.contains("/workspace/.wh-schema.md"),
+            "script must reference /workspace/.wh-schema.md"
+        );
+        assert!(
+            !script.contains("/workspace/.library/.wh-schema.md"),
+            "script must NOT place schema inside .library/"
+        );
+        assert!(
+            !script.contains("/workspace/.wh/schema.md"),
+            "script must use the canonical .wh-schema.md filename"
+        );
+    }
+
+    /// AC-4: the populate script ends with `chmod 444 /workspace/.wh-schema.md`
+    /// for ADR-037 / NFR10 defense-in-depth.
+    #[test]
+    fn populate_workspace_volumes_script_chmods_444() {
+        let script = build_workspace_populate_script("body");
+        assert!(
+            script.contains("chmod 444 /workspace/.wh-schema.md"),
+            "script must apply `chmod 444` for ADR-037 defense-in-depth"
+        );
+    }
+
+    /// AC-5: the populate script pre-clears the read-only bit so a redeploy
+    /// can overwrite an existing 444 file without manual cleanup.
+    #[test]
+    fn populate_workspace_volumes_script_pre_clears_444() {
+        let script = build_workspace_populate_script("body");
+        assert!(
+            script.contains("chmod 644 /workspace/.wh-schema.md 2>/dev/null || true"),
+            "script must pre-clear read-only mode for redeploy idempotency"
+        );
+        // The pre-clear must come BEFORE the write/chmod 444.
+        let pre_idx = script
+            .find("chmod 644")
+            .expect("script must contain chmod 644 pre-clear");
+        let chmod_444_idx = script
+            .find("chmod 444")
+            .expect("script must contain chmod 444 final");
+        assert!(
+            pre_idx < chmod_444_idx,
+            "chmod 644 pre-clear must precede chmod 444 final"
+        );
+    }
+
+    /// AC-3: the populate script uses `printf '%s' '...'` shell escaping that
+    /// safely handles single quotes in the schema body. The 13-19 template
+    /// contains apostrophes (e.g. "it's critical" in the disclaimer); a
+    /// regression in escaping would silently produce a corrupted schema.
+    #[test]
+    fn populate_workspace_volumes_script_escapes_single_quotes() {
+        let body = "let's check it's working";
+        let script = build_workspace_populate_script(body);
+        // The escaped form should contain the four-character `'\''` sequence
+        // for each apostrophe, which becomes a literal single quote when
+        // re-parsed by the shell. We assert the escape is present and that
+        // the unescaped raw string is NOT present (which would break the
+        // outer quoting).
+        assert!(
+            script.contains("'\\''"),
+            "script must use the `'\\''` shell-quote-escape sequence; got: {script}"
+        );
+        // The full literal `let's check it's working` should NOT appear
+        // verbatim — if it did, the outer quoting would be broken.
+        assert!(
+            !script.contains("let's check it's working"),
+            "raw apostrophes must be escaped — found unescaped body in script"
+        );
+    }
+
+    /// AC-3: the script must end with the `echo done` sentinel so
+    /// `run_podman_checked` sees a successful exit and a non-empty stdout.
+    #[test]
+    fn populate_workspace_volumes_script_ends_with_echo_done() {
+        let script = build_workspace_populate_script("body");
+        assert!(
+            script.trim_end().ends_with("echo done"),
+            "script must end with `echo done` sentinel"
+        );
     }
 }
