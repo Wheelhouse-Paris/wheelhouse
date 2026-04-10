@@ -75,3 +75,27 @@ class RegistryFullError(RegistrationError):
     """Type registry has reached its capacity limit (RT-05)."""
 
     pass
+
+
+class PathEscapeError(WheelhouseError):
+    """Filesystem path escapes the Library sandbox root (FR38, NFR7, NFR9).
+
+    Raised by ``wheelhouse.skills.library_sandbox.LibrarySandbox`` when a
+    caller attempts to read/write/list/delete a path that, after
+    canonicalization (``os.path.realpath``), does not reside under the
+    Library root.
+
+    NFR9 requires that the attempted raw path never leak into cloud logs.
+    To enforce this structurally, the public message is a fixed generic
+    string and never embeds the attempted path. For local correlation of
+    repeated escape attempts, a short sha256 prefix of the canonicalized
+    attempted path is exposed via the ``_debug_hash`` attribute — this is
+    a **diagnostic-only** attribute, not a public API contract.
+    """
+
+    _GENERIC_MESSAGE = "Path blocked outside Library root"
+
+    def __init__(self, *, debug_hash: str = "", code: str = "PATH_ESCAPE") -> None:
+        super().__init__(self._GENERIC_MESSAGE, code=code)
+        # Underscore prefix signals: diagnostic-only, not a stable public API.
+        self._debug_hash = debug_hash
