@@ -268,10 +268,18 @@ async def test_handle_library_skill_invocation_degrades_when_config_none(
 
 def test_library_skill_registry_is_importable_from_loop() -> None:
     """AC-1 sanity: the loop module imports the registry by name, so a
-    rename in library_ingest.py breaks both sites at once."""
+    rename in library_ingest.py breaks both sites at once.
+
+    Story 13-18 added ``library_lint`` as a second registered entry —
+    this test pins that the loop-side alias sees the new handler without
+    any loop.py code change (AC-10 of 13-18).
+    """
     from agent_claude.loop import LIBRARY_SKILL_REGISTRY
+    from wheelhouse.skills.library_lint import run_library_lint
 
     assert "library_ingest" in LIBRARY_SKILL_REGISTRY
+    assert "library_lint" in LIBRARY_SKILL_REGISTRY
+    assert LIBRARY_SKILL_REGISTRY["library_lint"] is run_library_lint
 
 
 def test_build_library_sandbox_missing_library_status_treated_as_disabled(

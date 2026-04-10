@@ -71,8 +71,65 @@ import subprocess
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from wheelhouse.skills.library_sandbox import LibrarySandbox
+from wheelhouse.types import SkillResult
 
 logger = logging.getLogger("wheelhouse.library_lint")
+
+
+# ─── Skill identity (Story 13-18) ─────────────────────────────────────
+#
+# These constants mirror the pattern frozen by 13-7 in
+# ``library_ingest.py`` so the dispatch layer in ``agent_claude.loop``
+# can route ``skill_name="library_lint"`` through the same
+# ``LIBRARY_SKILL_REGISTRY`` lookup it already uses for ingest.
+
+#: Skill name string as it appears in ``SkillInvocation.skill_name``.
+#: Underscore single token per the existing convention — NOT dot-notation.
+SKILL_NAME = "library_lint"
+
+#: Parameters the invocation MUST provide. Lint takes no required input
+#: beyond the sandbox itself — the Library is its own source of truth.
+REQUIRED_PARAMS: tuple[str, ...] = ()
+
+#: Parameters the invocation MAY provide. ``mode`` selects between full
+#: and incremental lint passes (see :data:`ACCEPTED_MODES`).
+OPTIONAL_PARAMS: tuple[str, ...] = ("mode",)
+
+#: Closed enum of accepted ``mode`` values. Default is ``"incremental"``
+#: because NFR27 (only re-lint changed pages) makes that the safe
+#: default on growing Libraries and NFR3 (120s budget on 500 pages)
+#: makes an unbounded full lint a latency risk for conversational UX.
+ACCEPTED_MODES: tuple[str, ...] = ("full", "incremental")
+
+#: Default ``mode`` when the parameter is absent (NFR3 / NFR27 safe default).
+DEFAULT_MODE = "incremental"
+
+
+# ─── Error codes (Story 13-18) ────────────────────────────────────────
+
+#: ``mode`` parameter is present but not a member of
+#: :data:`ACCEPTED_MODES`. Safe to echo the rejected value because the
+#: enum is closed (NFR9-clean — no path leakage).
+LIBRARY_LINT_INVALID_ARGS = "LIBRARY_LINT_INVALID_ARGS"
+
+#: The Library is disabled — the schema file is missing at boot (NFR24)
+#: or the sandbox could not be constructed. Shared framing with
+#: ``library_ingest.LIBRARY_DISABLED``; kept as a local constant so
+#: ``run_library_lint`` does not need to import from ``library_ingest``
+#: (which would create a circular import once the registry pulls the
+#: lint entrypoint in).
+LIBRARY_DISABLED = "LIBRARY_DISABLED"
+
+
+# ─── Fixed error-message strings (NFR9-clean) ─────────────────────────
+
+_DISABLED_MESSAGE = (
+    "Library is disabled — schema file missing at boot (NFR24)."
+)
+
+_INVALID_MODE_FMT = (
+    "library_lint: unsupported mode={value!r}; accepted: {accepted}"
+)
 
 
 # ─── Finding categories (frozen string enum) ──────────────────────────
@@ -703,26 +760,218 @@ def lint_library_incremental(
     return findings
 
 
+# ─── LLM-detector seam (Story 13-18) ──────────────────────────────────
+#
+# Mirrors the ``set_summarizer`` / ``get_summarizer`` seam in
+# ``library_ingest``. ``agent-claude`` calls :func:`set_lint_llm` at boot
+# with a wrapper that adapts the async ``ClaudeClient.complete(...)``
+# call to the sync :data:`LlmDetectorFn` signature. Unit tests install a
+# fake and restore ``None`` in a fixture teardown.
+#
+# Default ``None`` means the LLM-backed detectors (contradiction,
+# outdated-claim) are silently skipped — :func:`lint_library` already
+# handles that path since 13-16. The structural detectors (orphan,
+# stale-ref) still run and produce findings.
+
+_LINT_LLM: LlmDetectorFn | None = None
+
+
+def set_lint_llm(fn: LlmDetectorFn | None) -> None:
+    """Install (or clear) the Library lint LLM detector callable.
+
+    Called once at boot by ``agent-claude``. Tests install a fake and
+    pass ``None`` in teardown to restore the default.
+    """
+    global _LINT_LLM
+    _LINT_LLM = fn
+
+
+def get_lint_llm() -> LlmDetectorFn | None:
+    """Return the currently-installed lint LLM detector, or ``None``."""
+    return _LINT_LLM
+
+
+# ─── Invocation entrypoint (Story 13-18) ──────────────────────────────
+
+
+def _summarize_findings(findings: Sequence[LintFinding]) -> str:
+    """Render a one-line human summary of a findings list.
+
+    Format matches the shape the 13-26 CLI will print so the
+    conversational path and the CLI path stay consistent.
+    """
+    if not findings:
+        return "Library lint: no findings."
+
+    counts: dict[str, int] = {}
+    for f in findings:
+        counts[f.category] = counts.get(f.category, 0) + 1
+
+    # Deterministic order: fixed category enum order for stable output.
+    ordered_cats = (
+        CATEGORY_CONTRADICTION,
+        CATEGORY_ORPHAN,
+        CATEGORY_STALE_REF,
+        CATEGORY_OUTDATED_CLAIM,
+    )
+    parts = [
+        f"{counts[cat]} {cat}" for cat in ordered_cats if counts.get(cat)
+    ]
+    breakdown = ", ".join(parts) if parts else "other"
+    total = len(findings)
+    return f"Library lint: {total} findings ({breakdown})."
+
+
+def run_library_lint(
+    sandbox: LibrarySandbox | None,
+    parameters: Mapping[str, str],
+    *,
+    library_status: str,
+    invocation_id: str,
+    skill_name: str = SKILL_NAME,
+) -> SkillResult:
+    """Handle a ``library_lint`` SkillInvocation.
+
+    Execution pipeline:
+
+    1. Disabled gate — ``library_status == "disabled"`` or ``sandbox is
+       None`` → ``SkillResult(error_code=LIBRARY_DISABLED)``.
+    2. Mode validation — if ``mode`` is present, it MUST be a member of
+       :data:`ACCEPTED_MODES`. Missing ``mode`` defaults to
+       :data:`DEFAULT_MODE` (``"incremental"``). An invalid value
+       produces ``SkillResult(error_code=LIBRARY_LINT_INVALID_ARGS)``
+       with the rejected value echoed (NFR9-safe because the enum is
+       closed).
+    3. Dispatch to :func:`lint_library` (``mode="full"``) or
+       :func:`lint_library_incremental` (``mode="incremental"``),
+       passing the module-level ``llm_fn`` seam so structural detectors
+       always run and LLM-backed ones run iff a real callable was
+       installed at boot.
+    4. Build a ``SkillResult`` with a one-line human summary in
+       ``output`` and the 13-27 piggyback fields populated. Empty
+       findings → ``"Library lint: no findings."``; non-empty →
+       ``"Library lint: N findings (X orphan, Y stale_ref, ...)."``.
+
+    This function NEVER raises — unexpected detector exceptions are
+    caught and converted to a generic ``LIBRARY_LINT_INVALID_ARGS``
+    failure so the dispatch layer can publish the result directly.
+
+    Args:
+        sandbox: the boot-constructed ``LibrarySandbox``, or ``None``
+            when the agent booted with the Library disabled.
+        parameters: raw ``SkillInvocation.parameters`` mapping. Only
+            ``mode`` is recognized; extra keys are ignored.
+        library_status: one of ``"enabled" | "read-only" | "disabled"``
+            — the plan-state string propagated from ``WH_LIBRARY_STATUS``
+            by ``run_startup`` (story 13-20). ``"read-only"`` does NOT
+            block lint (lint is a pure read workload except for the
+            incremental marker, which is a framework-internal write and
+            not billed as a user write).
+        invocation_id: echoed into the returned ``SkillResult``.
+        skill_name: echoed into the returned ``SkillResult``; defaults
+            to ``SKILL_NAME`` so callers may rely on the module constant.
+
+    Returns:
+        A ``SkillResult`` ready to publish. Never raises.
+    """
+    # Step 1 — disabled gate.
+    if library_status == "disabled" or sandbox is None:
+        return SkillResult(
+            invocation_id=invocation_id,
+            skill_name=skill_name,
+            success=False,
+            error_code=LIBRARY_DISABLED,
+            error_message=_DISABLED_MESSAGE,
+        )
+
+    # Step 2 — mode validation. Absent key → default; present key must
+    # be in the closed enum.
+    mode_raw = parameters.get("mode") if parameters else None
+    if mode_raw is None:
+        mode = DEFAULT_MODE
+    else:
+        mode = str(mode_raw)
+        if mode not in ACCEPTED_MODES:
+            return SkillResult(
+                invocation_id=invocation_id,
+                skill_name=skill_name,
+                success=False,
+                error_code=LIBRARY_LINT_INVALID_ARGS,
+                error_message=_INVALID_MODE_FMT.format(
+                    value=mode, accepted=ACCEPTED_MODES
+                ),
+            )
+
+    # Step 3 — dispatch. Pull the llm_fn from the module seam lazily so
+    # that a test calling set_lint_llm BEFORE invoking the handler picks
+    # up the installed fake.
+    llm_fn = get_lint_llm()
+    try:
+        if mode == "full":
+            findings = lint_library(sandbox, llm_fn=llm_fn, page_filter=None)
+        else:  # mode == "incremental"
+            findings = lint_library_incremental(sandbox, llm_fn=llm_fn)
+    except BaseException as exc:  # noqa: BLE001 — deliberate skill boundary
+        logger.warning(
+            "library_lint: detector raised %s — returning generic failure",
+            type(exc).__name__,
+        )
+        return SkillResult(
+            invocation_id=invocation_id,
+            skill_name=skill_name,
+            success=False,
+            error_code=LIBRARY_LINT_INVALID_ARGS,
+            error_message=(
+                "library_lint: detector pipeline raised an unexpected "
+                "error; no findings were produced."
+            ),
+        )
+
+    # Step 4 — build the SkillResult. ``library_tokens`` is 0 for this
+    # story: the 13-16 detector contract does not surface token counts,
+    # so metering is deferred to whoever installs the llm_fn wrapper.
+    # ``library_page_count`` carries the invocation-scoped finding count
+    # (mirrors how 13-8 uses it for "pages drafted in this call").
+    return SkillResult(
+        invocation_id=invocation_id,
+        skill_name=skill_name,
+        success=True,
+        output=_summarize_findings(findings),
+        library_tokens=0,
+        library_page_count=len(findings),
+    )
+
+
 __all__ = [
+    "ACCEPTED_MODES",
     "CATEGORY_CONTRADICTION",
     "CATEGORY_ORPHAN",
     "CATEGORY_OUTDATED_CLAIM",
     "CATEGORY_STALE_REF",
+    "DEFAULT_MODE",
+    "LIBRARY_DISABLED",
+    "LIBRARY_LINT_INVALID_ARGS",
     "LINT_STATE_PATH",
     "LibraryPage",
     "LintFinding",
     "LintState",
+    "OPTIONAL_PARAMS",
+    "REQUIRED_PARAMS",
     "SEVERITY_ERROR",
     "SEVERITY_INFO",
     "SEVERITY_WARN",
+    "SKILL_NAME",
     "compute_changed_pages",
     "detect_contradictions",
     "detect_orphans",
     "detect_outdated_claims",
     "detect_stale_refs",
+    "get_lint_llm",
     "lint_library",
     "lint_library_incremental",
     "load_lint_state",
     "parse_pages",
+    "run_library_lint",
     "save_lint_state",
+    "set_lint_llm",
 ]
