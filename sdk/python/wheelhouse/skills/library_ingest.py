@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as _dt
+import inspect
 import json
 import logging
 import os
@@ -624,6 +625,30 @@ class PageDraft:
 
 
 @dataclasses.dataclass(frozen=True)
+class _ExistingSourcePage:
+    """A page already present in the Library that matches a dedup source.
+
+    Story 13-12 — source dedup. When ``_find_existing_by_source`` detects
+    that the incoming ``source_name`` already shows up in one or more
+    existing pages' front-matter ``source`` fields, each match is
+    wrapped in one of these records and (when the installed summarizer
+    accepts a fifth argument) passed into the summarizer as the
+    ``existing_source_pages`` parameter. The summarizer can then merge
+    the new content into the existing structure rather than hallucinating
+    a parallel page tree.
+
+    ``slug`` is the sandbox-relative path of the existing page. ``body``
+    is the page body with the front-matter block stripped. ``cross_refs``
+    is whatever list was parsed out of the page's front-matter (possibly
+    empty).
+    """
+
+    slug: str
+    body: str
+    cross_refs: tuple[str, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
 class SummarizerResult:
     """Structured return from a Library summarizer callable.
 
@@ -640,12 +665,22 @@ class SummarizerResult:
 
 #: Signature for the injected summarizer callable.
 #:
-#: The 4-tuple is
+#: The nominal type is a 4-arg callable
 #: ``(source_text, source_name, user_summary_hint, existing_pages)``
 #: — ``existing_pages`` is the sorted list of sandbox-relative page
 #: paths already present, used by the LLM to decide whether to merge
-#: into an existing page or create a new one. 13-12 (dedup) will add
-#: more context to this call but MUST NOT change the signature.
+#: into an existing page or create a new one.
+#:
+#: Story 13-12 added an OPTIONAL fifth parameter
+#: ``existing_source_pages`` — a ``list[_ExistingSourcePage]`` of the
+#: pages whose front-matter ``source`` field matches the incoming
+#: source (i.e. this is a re-ingest). The ingest pipeline inspects the
+#: installed summarizer's real signature via :mod:`inspect` and passes
+#: the fifth argument ONLY when the summarizer's signature accepts it,
+#: so pre-13-12 four-argument summarizers continue to work unchanged.
+#: Do NOT rely on this type alias to enforce the fifth-arg shape at
+#: type-check time — the alias is deliberately kept at 4 args to match
+#: the baseline contract.
 Summarizer = Callable[
     [str, str, "str | None", "list[str]"],
     SummarizerResult,
@@ -924,11 +959,48 @@ def _summarize_and_write(
     user_hint = str(user_hint_raw) if user_hint_raw else None
     existing_pages = _list_existing_pages(sandbox)
 
+    # ── FR16 source dedup on re-ingest (Story 13-12) ─────────────────
+    # Scan every existing page's front-matter for a ``source`` field
+    # matching ``source_name``. If any match, we:
+    #
+    #   1. Auto-flip ``allow_slug_reuse`` to True so the 13-11
+    #      consistency gate treats same-slug drafts as intentional
+    #      updates rather than hallucinated re-summaries.
+    #   2. Hand the matched pages (slug + body + cross_refs) to the
+    #      summarizer via the optional 5th parameter — provided the
+    #      summarizer's signature accepts it. 4-arg summarizers keep
+    #      working unchanged (AC-7).
+    #   3. Tag the transaction operation as ``"re-ingest"`` and set
+    #      ``commit_metadata["source_dedup"] = True`` so the 13-4
+    #      commit history makes the update distinguishable from a
+    #      fresh ingest (AC-9).
+    dedup_matches = _find_existing_by_source(sandbox, source_name)
+    source_dedup_active = bool(dedup_matches)
+    if source_dedup_active:
+        allow_slug_reuse = True
+        logger.info(
+            "library_ingest: source dedup matched %d existing page(s) "
+            "for re-ingest of %s",
+            len(dedup_matches),
+            source_name,
+        )
+
     # Step 4 — call the summarizer. We wrap ONLY the summarizer call
     # in the try so that a bug inside the writer still surfaces as a
     # real traceback instead of being masked behind SUMMARIZER_FAILED.
     try:
-        result = summarizer(source_text, source_name, user_hint, existing_pages)
+        if _summarizer_accepts_dedup_arg(summarizer):
+            result = summarizer(
+                source_text,
+                source_name,
+                user_hint,
+                existing_pages,
+                dedup_matches,  # type: ignore[call-arg]  # optional 5th arg
+            )
+        else:
+            result = summarizer(
+                source_text, source_name, user_hint, existing_pages
+            )
     except LibrarySkillError:
         raise  # already coded; let run_library_ingest translate
     except BaseException as exc:  # noqa: BLE001 — deliberate LLM boundary
@@ -947,7 +1019,8 @@ def _summarize_and_write(
     cross_refs_added = 0
     ingest_ts = _utc_now_iso()
 
-    with sandbox.transaction("ingest", commit_subject) as handle:
+    tx_operation = "re-ingest" if source_dedup_active else "ingest"
+    with sandbox.transaction(tx_operation, commit_subject) as handle:
         # ── FR12 hard-block page-count gate (Story 13-10) ────────────
         # We re-count existing content pages inside the transaction
         # (using the same on-disk state as the pre-transaction warn
@@ -1024,6 +1097,8 @@ def _summarize_and_write(
         handle.commit_metadata["pages_created"] = pages_created
         handle.commit_metadata["pages_updated"] = pages_updated
         handle.commit_metadata["cross_references_added"] = cross_refs_added
+        if source_dedup_active:
+            handle.commit_metadata["source_dedup"] = True
         for key, value in extra_metadata.items():
             handle.commit_metadata[key] = value
 
@@ -1350,6 +1425,176 @@ def _list_existing_pages(sandbox: LibrarySandbox) -> list[str]:
             pages.append(path)
     pages.sort()
     return pages
+
+
+_FRONT_MATTER_DELIMITER = "---"
+
+
+def _parse_front_matter_local(text: str) -> tuple[dict[str, Any], str]:
+    """Minimal subset-YAML front-matter parser (Story 13-12).
+
+    Deliberately duplicated from ``library_lint._parse_front_matter``
+    rather than imported — the ingest pipeline should not depend on the
+    lint skill's implementation details. The subset is:
+
+    * Opening line must be exactly ``---``.
+    * Closing line must be exactly ``---`` somewhere later in the file.
+    * Body scalars are parsed as ``key: value`` strings with optional
+      quoted scalars (``"acme.md"`` → ``acme.md``).
+    * Flow lists ``key: [a, b, c]`` are parsed into ``list[str]``.
+    * Unterminated / missing front-matter collapses to ``({}, text)``
+      — the helper never raises, which matters because the ingest
+      pipeline calls it on every ``.md`` file in the sandbox and any
+      crash would abort the whole ingest.
+
+    Returns ``(front_matter_dict, body_without_front_matter)``.
+    """
+    if not text.startswith(_FRONT_MATTER_DELIMITER):
+        return {}, text
+
+    lines = text.splitlines(keepends=True)
+    if not (lines and lines[0].rstrip("\r\n") == _FRONT_MATTER_DELIMITER):
+        return {}, text
+
+    close_idx = -1
+    for i in range(1, len(lines)):
+        if lines[i].rstrip("\r\n") == _FRONT_MATTER_DELIMITER:
+            close_idx = i
+            break
+    if close_idx == -1:
+        return {}, text
+
+    fm_lines = lines[1:close_idx]
+    body = "".join(lines[close_idx + 1:])
+    if body.startswith("\n"):
+        body = body[1:]
+
+    front_matter: dict[str, Any] = {}
+    for raw in fm_lines:
+        line = raw.rstrip("\r\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        front_matter[key] = _parse_scalar_or_list_local(value)
+    return front_matter, body
+
+
+def _parse_scalar_or_list_local(value: str) -> Any:
+    """Parse ``"[a, b]"`` → ``["a","b"]``; otherwise return the scalar.
+
+    Twin of ``library_lint._parse_scalar_or_list`` — see
+    :func:`_parse_front_matter_local` for the duplication rationale.
+    """
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        parts = [p.strip().strip("'").strip('"') for p in inner.split(",")]
+        return [p for p in parts if p]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1]
+    return value
+
+
+def _find_existing_by_source(
+    sandbox: LibrarySandbox,
+    source_name: str,
+) -> list[_ExistingSourcePage]:
+    """Return every page whose front-matter ``source`` equals ``source_name``.
+
+    Story 13-12 — the core dedup lookup. Iterates every ``.md`` file
+    under the sandbox (excluding ``index.md`` and anything under
+    ``.git/``), parses its front-matter with
+    :func:`_parse_front_matter_local`, and emits one
+    :class:`_ExistingSourcePage` record per match.
+
+    Robustness guarantees (AC-10):
+
+    * Pages that fail to read, fail to parse, or have no front-matter at
+      all are silently skipped — the dedup lookup must NEVER crash the
+      ingest pipeline.
+    * Pages with front-matter but no ``source`` key are skipped.
+    * ``source_name`` is compared byte-for-byte against the parsed
+      ``source`` field. The caller is responsible for basename-ing the
+      incoming ``source_ref`` — :func:`_resolve_source_text` already
+      does this, matching how story 13-8 stores the field in the first
+      place.
+    """
+    if not source_name:
+        return []
+    try:
+        raw_list = sandbox.list(".")
+    except Exception:  # noqa: BLE001 — robust against mock gaps
+        return []
+
+    matches: list[_ExistingSourcePage] = []
+    for rel in raw_list:
+        if not rel.endswith(".md"):
+            continue
+        if rel.startswith(".git/"):
+            continue
+        if rel == "index.md":
+            continue
+        try:
+            raw = sandbox.read(rel)
+        except Exception:  # noqa: BLE001 — missing / unreadable → skip
+            continue
+        try:
+            front_matter, body = _parse_front_matter_local(raw)
+        except Exception:  # noqa: BLE001 — malformed YAML → skip
+            continue
+        stored_source = front_matter.get("source")
+        if stored_source != source_name:
+            continue
+        cross_refs_raw = front_matter.get("cross_refs", [])
+        if isinstance(cross_refs_raw, str):
+            cross_refs_raw = [cross_refs_raw]
+        if not isinstance(cross_refs_raw, list):
+            cross_refs_raw = []
+        cross_refs = tuple(str(r) for r in cross_refs_raw if r)
+        matches.append(
+            _ExistingSourcePage(slug=rel, body=body, cross_refs=cross_refs)
+        )
+    # Sort for deterministic ordering across platforms.
+    matches.sort(key=lambda m: m.slug)
+    return matches
+
+
+def _summarizer_accepts_dedup_arg(summarizer: Summarizer) -> bool:
+    """Return ``True`` if ``summarizer`` accepts a 5th positional arg.
+
+    Story 13-12 — source dedup. The summarizer contract was extended
+    with an OPTIONAL ``existing_source_pages`` fifth parameter; pre-13-12
+    summarizers still use the 4-arg signature. We introspect via
+    :func:`inspect.signature` and count non-VAR parameters. A callable
+    for which ``inspect.signature`` raises (C-implemented builtins,
+    some ``functools.partial`` shapes) is conservatively treated as
+    4-arg — we fall back to the safe call shape.
+    """
+    try:
+        sig = inspect.signature(summarizer)
+    except (TypeError, ValueError):
+        return False
+    count = 0
+    for param in sig.parameters.values():
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            # ``*args`` / ``**kwargs`` — be generous and allow the 5-arg
+            # call path. A summarizer that accepts **kwargs clearly
+            # opted into whatever the framework passes.
+            return True
+        count += 1
+        if count >= 5:
+            return True
+    return False
 
 
 def _normalize_page_path(path: str) -> str:
