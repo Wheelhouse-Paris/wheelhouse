@@ -83,7 +83,18 @@ REQUIRED_PARAMS: tuple[str, ...] = ("source_type", "source_ref")
 #: ``accept_large`` is a string-typed override for the FR11 50K-word
 #: size gate (story 13-10). Accepted truthy values are ``"true"`` /
 #: ``"True"`` / ``"1"`` / ``"yes"`` case-insensitively.
-OPTIONAL_PARAMS: tuple[str, ...] = ("user_summary_hint", "accept_large")
+#:
+#: ``allow_slug_reuse`` is a string-typed override for the story 13-11
+#: post-ingest consistency gate's slug-collision check: when truthy,
+#: a draft whose normalized path already exists in the Library is
+#: treated as an intentional update rather than a hallucinated
+#: re-summary. Story 13-12 (dedup) will replace this escape hatch with
+#: proper source-driven update detection.
+OPTIONAL_PARAMS: tuple[str, ...] = (
+    "user_summary_hint",
+    "accept_large",
+    "allow_slug_reuse",
+)
 
 #: Closed enum of accepted ``source_type`` values. Safe to echo in error
 #: messages (no NFR9 leakage risk — these are fixed strings, not paths).
@@ -161,6 +172,44 @@ LIBRARY_INGEST_SOURCE_TOO_LARGE = "LIBRARY_INGEST_SOURCE_TOO_LARGE"
 #: message echoes only the current page count and the cap (both
 #: integers, NFR9-safe).
 LIBRARY_INGEST_LIBRARY_FULL = "LIBRARY_INGEST_LIBRARY_FULL"
+
+#: Story 13-11 (FR13) — post-ingest consistency gate: one or more of a
+#: draft's ``cross_refs`` entries does not resolve to any existing
+#: Library page and is not another draft in the same batch. Raised
+#: from inside the ``sandbox.transaction(...)`` block so the 13-4
+#: context manager rolls back cleanly — no partial / inconsistent
+#: commit reaches git. The error message lists the offending
+#: ``page → missing-slug`` pairs; those strings are the drafter's OWN
+#: output, not sandbox-resolved filesystem paths, so NFR9 is satisfied.
+LIBRARY_INGEST_INCONSISTENT_CROSS_REFS = "LIBRARY_INGEST_INCONSISTENT_CROSS_REFS"
+
+#: Story 13-11 (FR13) — two or more drafts in the same batch normalize
+#: to the same sandbox-relative path. A deterministic duplicate is
+#: almost always a summarizer bug; we reject the whole batch so the
+#: caller can re-run rather than silently losing one of the two.
+LIBRARY_INGEST_INCONSISTENT_DUPLICATE_SLUG = (
+    "LIBRARY_INGEST_INCONSISTENT_DUPLICATE_SLUG"
+)
+
+#: Story 13-11 (FR13) — a draft's slug is not filesystem-safe: empty
+#: after normalization, missing the ``.md`` suffix, contains ``..`` /
+#: ``.`` path components, contains an empty path component (``//``),
+#: or contains a NUL byte. Rejecting these upstream of ``sandbox.write``
+#: means ``PathEscapeError`` never fires and the ingest fails with a
+#: clear, FR13-branded error code.
+LIBRARY_INGEST_INCONSISTENT_UNSAFE_SLUG = (
+    "LIBRARY_INGEST_INCONSISTENT_UNSAFE_SLUG"
+)
+
+#: Story 13-11 (FR13) — a draft's normalized path collides with an
+#: existing Library page and the caller did NOT pass
+#: ``parameters["allow_slug_reuse"] = "true"``. Until story 13-12
+#: (source dedup) ships, every collision is treated as a hallucinated
+#: re-summary rather than an intentional update. The error message
+#: names the colliding slug and mentions the escape hatch.
+LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION = (
+    "LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION"
+)
 
 #: The supplied PDF bytes could not be parsed by the PDF library —
 #: missing ``%PDF-`` magic, a ``.png`` renamed to ``.pdf`` (adversarial),
@@ -299,6 +348,37 @@ _ACCEPT_LARGE_WARN_FMT = (
     "{word_count}-word source (rough token estimate: ~{tokens} tokens)"
 )
 
+# ─── FR13 consistency-gate user-facing copy (Story 13-11) ─────────────
+
+# All four messages echo ONLY slug strings that originated from the
+# summarizer's draft output (or in the collision case, a slug the caller
+# provided knowing it already exists). None of them ever interpolate a
+# sandbox-resolved filesystem path — NFR9 stays clean.
+
+_INCONSISTENT_CROSS_REFS_FMT = (
+    "library_ingest: post-ingest consistency check failed — "
+    "{count} dangling cross-reference(s): {pairs}"
+)
+
+_INCONSISTENT_CROSS_REFS_PAIR_LIMIT = 10
+
+_INCONSISTENT_DUPLICATE_SLUG_FMT = (
+    "library_ingest: post-ingest consistency check failed — "
+    "two or more drafts share the same slug: {slug!r}"
+)
+
+_INCONSISTENT_UNSAFE_SLUG_FMT = (
+    "library_ingest: post-ingest consistency check failed — "
+    "unsafe draft slug {slug!r} ({reason})"
+)
+
+_INCONSISTENT_SLUG_COLLISION_FMT = (
+    "library_ingest: post-ingest consistency check failed — "
+    "draft slug {slug!r} collides with an existing Library page. "
+    "Pass allow_slug_reuse=true to intentionally overwrite."
+)
+
+
 _ACCEPT_LARGE_TRUTHY = frozenset({"true", "1", "yes", "y", "on"})
 
 
@@ -320,6 +400,24 @@ def _estimate_tokens(word_count: int) -> int:
     see what they would have spent.
     """
     return int(word_count * _TOKENS_PER_WORD_HEURISTIC) + _SUMMARY_OUTPUT_TOKENS
+
+
+def _is_allow_slug_reuse(parameters: Mapping[str, Any]) -> bool:
+    """Return ``True`` when ``parameters["allow_slug_reuse"]`` is truthy.
+
+    Mirrors :func:`_is_accept_large` so the two string-typed overrides
+    share the same case-insensitive truthy set
+    (:data:`_ACCEPT_LARGE_TRUTHY`). Missing / empty / anything else is
+    False. Added for story 13-11 so a caller can intentionally overwrite
+    an existing Library page instead of having the consistency gate
+    flag the collision.
+    """
+    raw = parameters.get("allow_slug_reuse")
+    if raw is None:
+        return False
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in _ACCEPT_LARGE_TRUTHY
 
 
 def _is_accept_large(parameters: Mapping[str, Any]) -> bool:
@@ -360,6 +458,149 @@ def _count_library_pages(sandbox: LibrarySandbox) -> int:
             continue
         count += 1
     return count
+
+
+def _is_unsafe_slug(normalized: str) -> tuple[bool, str]:
+    """Return ``(is_unsafe, reason)`` for a normalized draft slug.
+
+    Called by :func:`_check_ingest_consistency` on every draft path
+    AFTER :func:`_normalize_page_path` has stripped leading slashes and
+    flipped backslashes. The rules intentionally reject anything that
+    would ever need a second thought — if a summarizer truly needs a
+    weird slug, the fix is a better summarizer, not a softer gate.
+    """
+    if normalized == "":
+        return True, "empty"
+    if "\x00" in normalized:
+        return True, "NUL byte"
+    if normalized.startswith("/"):
+        # _normalize_page_path should have stripped this — belt-and-braces.
+        return True, "absolute path"
+    if "//" in normalized:
+        return True, "empty path component"
+    if not normalized.endswith(".md"):
+        return True, "not .md suffixed"
+    # Per-component check: reject "." / ".." anywhere in the path.
+    for part in normalized.split("/"):
+        if part in (".", ".."):
+            return True, "path-escape component"
+        if part == "":
+            # Redundant with the "//" check but catches a trailing slash.
+            return True, "empty path component"
+    return False, ""
+
+
+def _check_ingest_consistency(
+    sandbox: LibrarySandbox,
+    drafts: list["PageDraft"],
+    *,
+    allow_slug_reuse: bool,
+) -> None:
+    """Story 13-11 FR13 — post-summarizer / pre-write consistency gate.
+
+    Runs four checks against the summarizer's draft batch:
+
+    1. **Unsafe slugs** — any draft whose normalized path fails
+       :func:`_is_unsafe_slug` raises
+       :data:`LIBRARY_INGEST_INCONSISTENT_UNSAFE_SLUG`.
+    2. **Duplicate slugs** — two drafts whose normalized paths collide
+       within the batch raise
+       :data:`LIBRARY_INGEST_INCONSISTENT_DUPLICATE_SLUG`.
+    3. **Slug collision with existing page** — a draft whose normalized
+       path already exists in the Library raises
+       :data:`LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION`, unless
+       ``allow_slug_reuse`` is True (the caller intentionally wants to
+       overwrite).
+    4. **Dangling cross-refs** — every ``draft.cross_refs`` entry must
+       resolve to either another draft in the batch OR an existing
+       Library page. Any unresolved refs raise
+       :data:`LIBRARY_INGEST_INCONSISTENT_CROSS_REFS` listing the
+       offending ``page → missing-slug`` pairs.
+
+    The checks run in the order above so that e.g. a ``..``-escaping
+    slug fails with UNSAFE_SLUG rather than ricocheting into DUPLICATE
+    or COLLISION. Cross-ref validation runs LAST because it needs the
+    full "after-state" set of valid slugs.
+
+    Raises:
+        :class:`LibrarySkillError` with the appropriate
+        ``LIBRARY_INGEST_INCONSISTENT_*`` code. Returns ``None`` on
+        success.
+    """
+    # Step 1 — unsafe-slug screen (fail fast, per-draft).
+    normalized_paths: list[str] = []
+    for draft in drafts:
+        normalized = _normalize_page_path(draft.path)
+        unsafe, reason = _is_unsafe_slug(normalized)
+        if unsafe:
+            raise LibrarySkillError(
+                _INCONSISTENT_UNSAFE_SLUG_FMT.format(
+                    slug=draft.path, reason=reason
+                ),
+                code=LIBRARY_INGEST_INCONSISTENT_UNSAFE_SLUG,
+            )
+        normalized_paths.append(normalized)
+
+    # Step 2 — duplicate-slug screen within the batch.
+    seen: set[str] = set()
+    for normalized in normalized_paths:
+        if normalized in seen:
+            raise LibrarySkillError(
+                _INCONSISTENT_DUPLICATE_SLUG_FMT.format(slug=normalized),
+                code=LIBRARY_INGEST_INCONSISTENT_DUPLICATE_SLUG,
+            )
+        seen.add(normalized)
+
+    # Step 3 — slug collision with existing pages (unless overridden).
+    if not allow_slug_reuse:
+        for normalized in normalized_paths:
+            if normalized == "index.md":
+                # index.md is bookkeeping — _update_index is the sole
+                # writer and always performs a merge, never a clobber.
+                continue
+            try:
+                exists = sandbox.exists(normalized)
+            except Exception:  # noqa: BLE001 — robust against mock gaps
+                exists = False
+            if exists:
+                raise LibrarySkillError(
+                    _INCONSISTENT_SLUG_COLLISION_FMT.format(slug=normalized),
+                    code=LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION,
+                )
+
+    # Step 4 — cross-reference dangle detection.
+    # Build the "after-state" set: existing Library pages (via the
+    # shared list helper) plus every draft path from this batch. A
+    # cross_ref resolves if its normalized form is in the set.
+    existing_pages = set(_list_existing_pages(sandbox))
+    after_state = existing_pages | set(normalized_paths)
+    # index.md is always a valid link target.
+    after_state.add("index.md")
+
+    dangling: list[tuple[str, str]] = []
+    for draft in drafts:
+        for ref in draft.cross_refs:
+            normalized_ref = _normalize_page_path(ref)
+            if normalized_ref in after_state:
+                continue
+            dangling.append((draft.path, ref))
+
+    if dangling:
+        # Clip at _INCONSISTENT_CROSS_REFS_PAIR_LIMIT so a 200-draft
+        # hallucination storm doesn't blow up the error message.
+        shown = dangling[:_INCONSISTENT_CROSS_REFS_PAIR_LIMIT]
+        rendered = ", ".join(
+            f"{page} -> {missing}" for page, missing in shown
+        )
+        clipped = len(dangling) - len(shown)
+        if clipped > 0:
+            rendered = f"{rendered} (and {clipped} more)"
+        raise LibrarySkillError(
+            _INCONSISTENT_CROSS_REFS_FMT.format(
+                count=len(dangling), pairs=rendered
+            ),
+            code=LIBRARY_INGEST_INCONSISTENT_CROSS_REFS,
+        )
 
 
 # ─── Summarizer seam (13-8) ───────────────────────────────────────────
@@ -611,6 +852,7 @@ def _ingest_pipeline(
         user_hint_raw=parameters.get("user_summary_hint"),
         extra_metadata=extra_metadata,
         accept_large=_is_accept_large(parameters),
+        allow_slug_reuse=_is_allow_slug_reuse(parameters),
     )
 
 
@@ -622,6 +864,7 @@ def _summarize_and_write(
     user_hint_raw: Any,
     extra_metadata: Mapping[str, Any],
     accept_large: bool = False,
+    allow_slug_reuse: bool = False,
 ) -> SkillResult:
     """Summarizer call + single-transaction write path (shared).
 
@@ -731,6 +974,20 @@ def _summarize_and_write(
                 ),
                 code=LIBRARY_INGEST_LIBRARY_FULL,
             )
+
+        # ── FR13 post-ingest consistency gate (Story 13-11) ──────────
+        # Verifies unsafe slugs, duplicate batch slugs, slug-collision
+        # with existing pages, and dangling cross-references. Raising
+        # here triggers the transaction context manager's rollback
+        # path, so no partial / inconsistent commit reaches git.
+        # Ordering: AFTER the LIBRARY_FULL hard block so a 500-page
+        # Library fails with the more-specific LIBRARY_FULL code even
+        # when the drafts also happen to have dangling refs (AC-9).
+        _check_ingest_consistency(
+            sandbox,
+            list(result.drafts),
+            allow_slug_reuse=allow_slug_reuse,
+        )
 
         new_page_entries: list[tuple[str, str]] = []  # (path, title)
         for draft in result.drafts:
@@ -1254,6 +1511,10 @@ __all__ = [
     "ACCEPTED_SOURCE_TYPES",
     "LIBRARY_DISABLED",
     "LIBRARY_INGEST_BINARY_REJECTED",
+    "LIBRARY_INGEST_INCONSISTENT_CROSS_REFS",
+    "LIBRARY_INGEST_INCONSISTENT_DUPLICATE_SLUG",
+    "LIBRARY_INGEST_INCONSISTENT_SLUG_COLLISION",
+    "LIBRARY_INGEST_INCONSISTENT_UNSAFE_SLUG",
     "LIBRARY_INGEST_INVALID_ARGS",
     "LIBRARY_INGEST_LIBRARY_FULL",
     "LIBRARY_INGEST_NO_SUMMARIZER",

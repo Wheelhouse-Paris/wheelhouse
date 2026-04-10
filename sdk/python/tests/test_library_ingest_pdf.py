@@ -516,7 +516,9 @@ def test_ac9_pdf_and_text_paths_produce_identical_page_shape() -> None:
             path="docs/alpha.md",
             title="Alpha",
             body="Alpha body.",
-            cross_refs=["docs/beta.md"],
+            # Story 13-11: cross-refs must resolve. ``index.md`` is
+            # always a valid link target, so we use it here.
+            cross_refs=["index.md"],
         ),
     ]
 

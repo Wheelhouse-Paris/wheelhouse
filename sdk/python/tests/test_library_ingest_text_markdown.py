@@ -217,7 +217,12 @@ def test_ac2_page_has_yaml_front_matter_with_required_keys() -> None:
         ),
     ]
     set_summarizer(_make_fake_summarizer(drafts))
-    recorder = _TxRecorder()
+    # Pre-seed the cross-ref target so the 13-11 consistency gate is
+    # happy — this test is about front-matter rendering, not dangle
+    # detection.
+    recorder = _TxRecorder(
+        initial_files={"clients/acme/profile.md": "# Acme\n"}
+    )
     sandbox = _make_sandbox_mock(recorder)
 
     run_library_ingest(
@@ -282,6 +287,10 @@ def test_ac3_updated_page_recorded_as_update() -> None:
             "source_type": "text",
             "source_ref": "brief.txt",
             "source_content": "# brief\n",
+            # Story 13-11: the consistency gate treats slug collisions
+            # as an error by default. This test is specifically about
+            # the update path, so opt in explicitly.
+            "allow_slug_reuse": "true",
         },
         library_status="enabled",
         invocation_id="inv-003",
@@ -623,7 +632,10 @@ def test_integration_real_sandbox_commits_ingest(tmp_path: Any) -> None:
             path="clients/acme/profile.md",
             title="Acme profile",
             body="Acme is a widget company.\n",
-            cross_refs=["clients/acme/contract.md"],
+            # Story 13-11: cross-refs must resolve. ``index.md`` is
+            # always a valid link target after ingest, so we use it
+            # here rather than a hallucinated contract page.
+            cross_refs=["index.md"],
         ),
     ]
     set_summarizer(_make_fake_summarizer(drafts, tokens_used=99))

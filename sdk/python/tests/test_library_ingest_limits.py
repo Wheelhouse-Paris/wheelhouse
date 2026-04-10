@@ -401,6 +401,13 @@ def test_ac8_update_at_cap_succeeds() -> None:
             "source_type": "text",
             "source_ref": "s.txt",
             "source_content": "hi",
+            # Story 13-11 added the post-ingest consistency gate which
+            # treats slug collisions with existing pages as an error by
+            # default. AC-8 here is testing the 13-10 page-count update
+            # path (existing page updates don't grow the Library), so
+            # we explicitly opt in to the override. Story 13-12 will
+            # replace this with source-driven dedup.
+            "allow_slug_reuse": "true",
         },
         library_status="enabled",
         invocation_id="inv-8",
