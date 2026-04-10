@@ -374,10 +374,20 @@ pub fn sanitize_name(name: &str) -> String {
     result.trim_matches('-').to_string()
 }
 
-/// Volume suffixes for named data volumes (ADR-027).
+/// Volume suffixes for named data volumes (ADR-027, ADR-036).
 ///
-/// Each topology gets 6 named volumes: wal, users, skills, personas, context, platform.
-const VOLUME_SUFFIXES: &[&str] = &["wal", "users", "skills", "personas", "context", "platform"];
+/// Each topology gets 7 named volumes: wal, users, skills, personas, context,
+/// platform, workspace. The `workspace` volume is the Library root mount point
+/// (ADR-036, Epic 13) and is mounted at `/workspace/` in every agent container.
+const VOLUME_SUFFIXES: &[&str] = &[
+    "wal",
+    "users",
+    "skills",
+    "personas",
+    "context",
+    "platform",
+    "workspace",
+];
 
 /// Build the Podman network name for a topology (ADR-024).
 ///
@@ -433,10 +443,10 @@ pub fn remove_network(topology_name: &str) -> Result<(), DeployError> {
     Ok(())
 }
 
-/// Build the named volume names for a topology (ADR-027).
+/// Build the named volume names for a topology (ADR-027, ADR-036).
 ///
-/// Returns a `Vec` of 6 volume names in deterministic order:
-/// `wh-<sanitized_topology>-{wal, users, skills, personas, context}`.
+/// Returns a `Vec` of 7 volume names in deterministic order:
+/// `wh-<sanitized_topology>-{wal, users, skills, personas, context, platform, workspace}`.
 pub fn volume_names(topology_name: &str) -> Vec<String> {
     let topo = sanitize_name(topology_name);
     VOLUME_SUFFIXES
@@ -445,9 +455,9 @@ pub fn volume_names(topology_name: &str) -> Vec<String> {
         .collect()
 }
 
-/// Create all named data volumes for the topology idempotently (ADR-027).
+/// Create all named data volumes for the topology idempotently (ADR-027, ADR-036).
 ///
-/// Runs `podman volume create <name> --ignore` for each of the 6 volumes.
+/// Runs `podman volume create <name> --ignore` for each of the 7 volumes.
 /// The `--ignore` flag makes this safe to call repeatedly — if a volume
 /// already exists, the command succeeds silently.
 ///
@@ -498,6 +508,18 @@ pub fn remove_volumes(topology_name: &str) -> Result<(), DeployError> {
 fn platform_volume_name(topology_name: &str) -> String {
     let topo = sanitize_name(topology_name);
     format!("wh-{topo}-platform")
+}
+
+/// Build the workspace volume name for a topology (ADR-036, Epic 13).
+///
+/// The workspace volume is mounted at `/workspace/` in every agent container
+/// and is the root of the Wheelhouse Library layout (`.library/` +
+/// `.wh-schema.md`). Per ADR-036, `cwd` for the agent `claude -p` subprocess
+/// must be `/workspace/`, not `/workspace/.library/`, so schema and Library
+/// are both reachable from within `LibrarySandbox` boundaries.
+fn workspace_volume_name(topology_name: &str) -> String {
+    let topo = sanitize_name(topology_name);
+    format!("wh-{topo}-workspace")
 }
 
 /// Populate the platform data volume with capabilities.json and cli-reference.md.
@@ -922,6 +944,16 @@ pub fn build_run_args(
     let platform_vol = platform_volume_name(topology_name);
     args.push("-v".to_string());
     args.push(format!("{platform_vol}:/etc/wh:ro"));
+
+    // Mount workspace volume at /workspace (read-write) for Library layout (ADR-036).
+    // Unconditional — every agent in the topology shares the workspace cwd
+    // contract so `claude_client.py` can launch with cwd=/workspace/ (ADR-036
+    // enablement line). Library content (.library/, .wh-schema.md) is populated
+    // by later Epic 13 stories (13-4 commit-per-write, 13-20 schema injection);
+    // at the end of story 13-2 the volume is empty and that is intentional.
+    let workspace_vol = workspace_volume_name(topology_name);
+    args.push("-v".to_string());
+    args.push(format!("{workspace_vol}:/workspace"));
 
     // Mount skills volume read-only for skill definitions
     if has_skills {
@@ -1758,6 +1790,8 @@ mod tests {
                 "wh-dev-personas",
                 "wh-dev-context",
                 "wh-dev-platform",
+                // ADR-036: workspace volume added in Epic 13 story 13-2.
+                "wh-dev-workspace",
             ]
         );
     }
@@ -1774,6 +1808,7 @@ mod tests {
                 "wh-my-app-personas",
                 "wh-my-app-context",
                 "wh-my-app-platform",
+                "wh-my-app-workspace",
             ]
         );
     }
@@ -1781,18 +1816,35 @@ mod tests {
     #[test]
     fn volume_names_count() {
         let names = volume_names("dev");
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 7);
+        assert!(names.iter().any(|n| n == "wh-dev-workspace"));
     }
 
     #[test]
-    fn volume_suffixes_constant_has_six_entries() {
-        assert_eq!(VOLUME_SUFFIXES.len(), 6);
+    fn volume_suffixes_constant_has_seven_entries() {
+        assert_eq!(VOLUME_SUFFIXES.len(), 7);
         assert_eq!(VOLUME_SUFFIXES[0], "wal");
         assert_eq!(VOLUME_SUFFIXES[1], "users");
         assert_eq!(VOLUME_SUFFIXES[2], "skills");
         assert_eq!(VOLUME_SUFFIXES[3], "personas");
         assert_eq!(VOLUME_SUFFIXES[4], "context");
         assert_eq!(VOLUME_SUFFIXES[5], "platform");
+        // ADR-036: workspace volume is the Library root mount (Epic 13).
+        assert_eq!(VOLUME_SUFFIXES[6], "workspace");
+    }
+
+    #[test]
+    fn workspace_volume_name_sanitized() {
+        // ADR-036 + ADR-027: volume names must be sanitized per `sanitize_name`.
+        // The awkward chars ('.', '@') must be replaced by '-' (collapsed).
+        assert_eq!(workspace_volume_name("dev"), "wh-dev-workspace");
+        let sanitized = workspace_volume_name("my.topo@prod");
+        assert!(
+            !sanitized.contains('.') && !sanitized.contains('@'),
+            "workspace volume name must be sanitized, got: {sanitized}"
+        );
+        assert!(sanitized.starts_with("wh-"));
+        assert!(sanitized.ends_with("-workspace"));
     }
 
     #[test]
@@ -1826,6 +1878,12 @@ mod tests {
         assert!(
             !args.iter().any(|a| a == "--network"),
             "should not have --network without network param"
+        );
+        // ADR-036: workspace volume is mounted unconditionally at /workspace.
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "-v" && w[1] == "wh-dev-workspace:/workspace"),
+            "must contain unconditional workspace volume mount (ADR-036)"
         );
     }
 
