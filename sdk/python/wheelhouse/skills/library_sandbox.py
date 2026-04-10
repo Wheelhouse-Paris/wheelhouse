@@ -31,10 +31,12 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import hashlib
+import logging
 import os
 import re
 import shutil
 import subprocess
+import time
 from typing import Any, Callable, Iterator, Union
 
 from wheelhouse.errors import (
@@ -56,6 +58,19 @@ _DEFAULT_MIN_FREE_BYTES = 10 * 1024 * 1024  # 10 MB
 # logic lives in 13-6; under the single-writer assumption no individual
 # git call should approach 30s.
 _GIT_SUBPROCESS_TIMEOUT_S = 30.0
+
+# Stale-lock timeout for `.library/.git/index.lock` per ADR-040 (Story 13-5).
+# A healthy 50K-word ingest takes 60–180s; 5 minutes gives 2–5× headroom
+# before declaring the lock stale. Single source of truth — Story 13-6 will
+# import this same constant for its in-flight retry loop instead of
+# re-declaring its own timeout.
+_DEFAULT_STALE_LOCK_TIMEOUT_S = 300.0
+
+# Module logger used by the boot-time crash-recovery sweep (Story 13-5) to
+# emit operator-visible warnings when the working tree is reset or a stale
+# `index.lock` is removed. Configured via the standard `logging` module by
+# the agent runtime — no handlers attached here.
+_LOGGER = logging.getLogger("wheelhouse.library_sandbox")
 
 # Used by _sanitize_git_stderr to scrub absolute paths from git's stderr
 # before they cross the LibraryCommitError boundary (NFR9 parity with
@@ -153,6 +168,8 @@ class LibrarySandbox:
         agent_name: str = "unknown",
         pre_commit_hook: Callable[[list[str]], None] | None = None,
         disk_space_check: Callable[[str], None] | None = None,
+        stale_lock_timeout_s: float = _DEFAULT_STALE_LOCK_TIMEOUT_S,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         resolved = os.path.realpath(os.fspath(library_root))
         if not os.path.exists(resolved):
@@ -171,6 +188,10 @@ class LibrarySandbox:
             disk_space_check if disk_space_check is not None else _default_disk_space_check
         )
         self._txn: _Transaction | None = None
+        # Crash-recovery configuration (Story 13-5). Both fields have safe
+        # defaults so existing 13-1 / 13-4 call sites are unaffected.
+        self._stale_lock_timeout_s: float = stale_lock_timeout_s
+        self._sleep: Callable[[float], None] = sleep
 
     # ─── Public API ────────────────────────────────────────────────────
 
@@ -540,6 +561,125 @@ class LibrarySandbox:
             self.rollback()
             raise
         self.commit(**handle.commit_metadata)
+
+    # ─── Crash recovery (Story 13-5) ───────────────────────────────────
+
+    def recover_from_crash(self) -> None:
+        """Boot-time crash-recovery sweep — safe to call before any skill runs.
+
+        Implements the ADR-040 recovery sequence:
+
+        1. Remove or wait-out a stale ``.library/.git/index.lock`` left by
+           a ``git`` invocation that never returned (NFR18).
+        2. Discard any uncommitted modifications and untracked files in
+           the working tree (NFR19, NFR23) so the next ingest/lint starts
+           from a clean baseline.
+
+        The method is **idempotent** (a no-op on a clean repo), is **safe
+        to call before any transaction** (does not touch ``self._txn``),
+        and is a **complete no-op when ``git_enabled`` is False** even if
+        a ``.git/`` directory happens to exist under the Library root.
+
+        The agent boot path (Story 13-7 / startup.py) is responsible for
+        calling this exactly once at startup. This module ships only the
+        method and its tests.
+        """
+        # Step 1 — git_enabled gate. Absolute: never inspect the FS or
+        # call git when git is disabled, even if .git/ exists.
+        if not self._git_enabled:
+            return
+
+        # Step 2 — no .git/ yet (sandbox never used) → nothing to recover.
+        if not os.path.isdir(os.path.join(self._root, ".git")):
+            return
+
+        # Step 3 — handle stale .git/index.lock (NFR18, ADR-040).
+        self._recover_index_lock()
+
+        # Step 4 — discard uncommitted working-tree changes (NFR19/NFR23).
+        self._recover_working_tree()
+
+    def _recover_index_lock(self) -> None:
+        """Remove ``.library/.git/index.lock`` if stale, else wait then remove.
+
+        TOCTOU-robust: another process removing the lock between our
+        ``stat()`` and ``unlink()`` calls is treated as success (the
+        post-condition "lock not present" is already met).
+        """
+        lock_path = os.path.join(self._root, ".git", "index.lock")
+        if not os.path.exists(lock_path):
+            return
+        try:
+            st = os.stat(lock_path)
+        except FileNotFoundError:
+            return  # AC-11 race: lock disappeared between exists() and stat()
+
+        age = max(time.time() - st.st_mtime, 0.0)
+        if age >= self._stale_lock_timeout_s:
+            self._unlink_lock_quietly(lock_path)
+            _LOGGER.warning(
+                "Removed stale Library .git/index.lock (age: %.1fs)",
+                age,
+            )
+            return
+
+        # Fresh lock — wait the remaining budget and then remove.
+        remaining = self._stale_lock_timeout_s - age
+        self._sleep(remaining)
+        self._unlink_lock_quietly(lock_path)
+        _LOGGER.warning(
+            "Waited %.1fs for Library .git/index.lock and then removed it",
+            remaining,
+        )
+
+    @staticmethod
+    def _unlink_lock_quietly(lock_path: str) -> None:
+        """``os.unlink`` that swallows ``FileNotFoundError`` (TOCTOU race)."""
+        try:
+            os.unlink(lock_path)
+        except FileNotFoundError:
+            return  # AC-11: another process won the unlink race — fine.
+
+    def _recover_working_tree(self) -> None:
+        """Discard uncommitted modifications and untracked files at boot.
+
+        Uses ``git status --porcelain`` to detect dirty state. On a dirty
+        tree:
+
+        - With HEAD: ``git reset --hard HEAD`` reverts tracked-file
+          modifications, then ``git clean -fd`` removes untracked files.
+          A warning is logged with the short HEAD hash.
+        - Without HEAD (fresh repo): ``git read-tree --empty`` clears any
+          orphaned index entries from a partial ``git add`` before the
+          crash, then ``git clean -fd`` removes the working-tree files.
+          A warning is logged noting "no commits yet".
+
+        Repo-scoped (not path-scoped) because at boot we have no list of
+        what the crashed process was writing — the only safe option is
+        "clean everything not tracked or ignored". Runtime rollback
+        (Story 13-4) is path-scoped because it knows the active
+        transaction's staged paths.
+        """
+        status = self._git(["status", "--porcelain"])
+        if not (status.stdout or "").strip():
+            return  # AC-1: clean tree → no warning, no work.
+
+        if self._has_head():
+            short_hash_result = self._git(["rev-parse", "--short", "HEAD"])
+            short_hash = (short_hash_result.stdout or "").strip() or "<unknown>"
+            self._git(["reset", "--hard", "HEAD"])
+            self._git(["clean", "-fd"], check=False)
+            _LOGGER.warning(
+                "Discarded uncommitted Library changes from prior crash (reset to %s)",
+                short_hash,
+            )
+        else:
+            # No HEAD yet — clear index then wipe untracked working tree.
+            self._git(["read-tree", "--empty"], check=False)
+            self._git(["clean", "-fd"], check=False)
+            _LOGGER.warning(
+                "Discarded uncommitted Library changes from prior crash (no commits yet)"
+            )
 
     @staticmethod
     def _build_commit_message(
