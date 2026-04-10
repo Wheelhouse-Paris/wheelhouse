@@ -1,9 +1,11 @@
-"""Library ingest skill — text / markdown happy path (Stories 13-7, 13-8).
+"""Library ingest skill — text / markdown / PDF (Stories 13-7, 13-8, 13-9).
 
 This module registers the ``library_ingest`` skill with the Wheelhouse
-Library skill dispatch path and delivers both the invocation shell
-(13-7 — parameter schema, plan-state gate, error-code catalogue) and,
-as of 13-8, the text / markdown content pipeline.
+Library skill dispatch path and delivers the invocation shell (13-7 —
+parameter schema, plan-state gate, error-code catalogue), the text /
+markdown content pipeline (13-8), and the PDF extraction branch (13-9)
+that funnels extracted PDF text into the exact same summarizer +
+transaction + writer code path as text/markdown.
 
 Content pipeline (13-8 scope — text / markdown only):
 
@@ -140,6 +142,20 @@ LIBRARY_INGEST_NO_SUMMARIZER = "LIBRARY_INGEST_NO_SUMMARIZER"
 #: because it may embed upstream API payloads.
 LIBRARY_INGEST_SUMMARIZER_FAILED = "LIBRARY_INGEST_SUMMARIZER_FAILED"
 
+#: The supplied PDF bytes could not be parsed by the PDF library —
+#: missing ``%PDF-`` magic, a ``.png`` renamed to ``.pdf`` (adversarial),
+#: password-protected / encrypted PDFs, or structurally corrupt files.
+#: Added by story 13-9. The error message NEVER propagates the upstream
+#: pypdf exception string (NFR9 — may embed paths or raw bytes).
+LIBRARY_INGEST_PDF_INVALID = "LIBRARY_INGEST_PDF_INVALID"
+
+#: The supplied PDF parsed successfully but produced no usable text —
+#: every page's ``extract_text()`` returned empty / whitespace-only.
+#: Classic scanned-image PDFs land here. NFR26 pins the error MESSAGE
+#: verbatim (see :data:`_PDF_EMPTY_EXTRACTION_MESSAGE`) — OCR is an
+#: explicit non-goal in v1. Added by story 13-9.
+LIBRARY_INGEST_PDF_EMPTY_EXTRACTION = "LIBRARY_INGEST_PDF_EMPTY_EXTRACTION"
+
 
 # ─── Fixed message strings (pinned by tests) ──────────────────────────
 
@@ -192,6 +208,21 @@ _NO_SUMMARIZER_MESSAGE = (
 _SUMMARIZER_FAILED_MESSAGE = (
     "library_ingest: the summarizer raised an unexpected error; no "
     "pages were written and the transaction was rolled back."
+)
+
+# NFR26 user-facing wording pinned by epics-library FW-3.3. Tests match
+# this byte-for-byte (em-dash included). Do NOT parameterize or add a
+# path to this string — NFR9 forbids path echoing in error messages.
+_PDF_EMPTY_EXTRACTION_MESSAGE = (
+    "No extractable text found — OCR not supported in v1."
+)
+
+# Terse, NFR9-clean framing. Deliberately does NOT echo the upstream
+# pypdf exception string — pypdf errors sometimes embed the path of the
+# file being parsed, which would leak to cloud logs.
+_PDF_INVALID_MESSAGE = (
+    "library_ingest: source_type=pdf but the supplied content is not "
+    "a valid PDF (magic number mismatch, encrypted, or corrupt)."
 )
 
 
@@ -412,20 +443,57 @@ def _ingest_pipeline(
     6. Returns :class:`SkillResult` with 13-27 piggyback fields set.
     """
     source_type = parameters["source_type"]
-    if source_type not in ("text", "markdown"):
-        # PDF reaches here until 13-9 ships a real branch; URL may
-        # never be implemented. Echoing the value is safe because the
-        # enum is closed (no NFR9 leakage).
+    if source_type not in ("text", "markdown", "pdf"):
+        # ``url`` reaches here — never implemented in v1. Echoing the
+        # value is safe because the enum is closed (no NFR9 leakage).
         raise LibrarySkillError(
             _UNSUPPORTED_TYPE_FMT.format(value=source_type),
             code=LIBRARY_INGEST_UNSUPPORTED_TYPE,
         )
 
     # Step 2 — source resolution. NFR9: no path in the error message.
-    source_text, source_name = _resolve_source_text(sandbox, parameters)
+    # The PDF branch (13-9) extracts text via pypdf and collects a
+    # partial-extraction flag for the commit metadata; the text /
+    # markdown branch (13-8) goes through the original UTF-8 resolver.
+    extra_metadata: dict[str, Any] = {}
+    if source_type == "pdf":
+        source_text, source_name, partial = _resolve_pdf_text(
+            sandbox, parameters
+        )
+        if partial:
+            extra_metadata["pdf_partial_extraction"] = True
+    else:
+        source_text, source_name = _resolve_source_text(sandbox, parameters)
 
+    # Steps 3–6 — shared with the text/markdown path.
+    return _summarize_and_write(
+        sandbox,
+        source_text=source_text,
+        source_name=source_name,
+        user_hint_raw=parameters.get("user_summary_hint"),
+        extra_metadata=extra_metadata,
+    )
+
+
+def _summarize_and_write(
+    sandbox: LibrarySandbox,
+    *,
+    source_text: str,
+    source_name: str,
+    user_hint_raw: Any,
+    extra_metadata: Mapping[str, Any],
+) -> SkillResult:
+    """Summarizer call + single-transaction write path (shared).
+
+    Extracted from :func:`_ingest_pipeline` by story 13-9 so the PDF
+    branch reuses the exact same summarizer → writer → commit_metadata
+    code as the text/markdown branch. ``extra_metadata`` lets a caller
+    thread branch-specific keys (e.g. ``pdf_partial_extraction``) into
+    the transaction's ``commit_metadata`` without this helper needing
+    to know anything about the upstream source format.
+    """
     # Step 3 — summarizer wired? Do this BEFORE opening a transaction
-    # so AC-9's "sandbox.transaction is never called" assertion holds.
+    # so the "sandbox.transaction is never called" invariant holds.
     summarizer = get_summarizer()
     if summarizer is None:
         raise LibrarySkillError(
@@ -433,7 +501,6 @@ def _ingest_pipeline(
             code=LIBRARY_INGEST_NO_SUMMARIZER,
         )
 
-    user_hint_raw = parameters.get("user_summary_hint")
     user_hint = str(user_hint_raw) if user_hint_raw else None
     existing_pages = _list_existing_pages(sandbox)
 
@@ -496,17 +563,12 @@ def _ingest_pipeline(
         handle.commit_metadata["pages_created"] = pages_created
         handle.commit_metadata["pages_updated"] = pages_updated
         handle.commit_metadata["cross_references_added"] = cross_refs_added
+        for key, value in extra_metadata.items():
+            handle.commit_metadata[key] = value
 
     # Step 6 — SkillResult. invocation_id / skill_name are filled in
     # by ``run_library_ingest`` from its own parameters; this function
     # is never called directly by the dispatch layer.
-    #
-    # ``library_page_count`` is the number of content pages the
-    # summarizer emitted (AC-1 pins this to ``len(drafts)``). The
-    # auto-written ``index.md`` bookkeeping page is NOT counted — it
-    # is skill housekeeping, not user-visible Library content, and the
-    # metering Lambda (13-27) treats the count as a proxy for
-    # LLM-generated value.
     drafted_page_count = len(result.drafts)
     output = (
         f"Ingested {source_name}: {len(pages_created)} new page(s), "
@@ -600,6 +662,212 @@ def _resolve_source_text(
             code=LIBRARY_INGEST_BINARY_REJECTED,
         )
     return text, source_name
+
+
+_PDF_MAGIC = b"%PDF-"
+
+
+def _resolve_pdf_bytes(
+    sandbox: LibrarySandbox,
+    parameters: Mapping[str, Any],
+) -> tuple[bytes, str]:
+    """Return ``(pdf_bytes, source_name)`` for a ``source_type="pdf"`` call.
+
+    Resolution order (story 13-9):
+
+    1. If ``parameters["source_content"]`` is present and non-empty,
+       use it directly. Accepted shapes:
+
+       - ``bytes`` — passed verbatim to pypdf.
+       - ``str`` whose first bytes (after Latin-1 re-encoding) match
+         ``%PDF-`` — treated as a raw bytestring smuggled through a
+         string-typed proto field.
+       - ``str`` that looks like base64 — decoded and then re-checked
+         for the ``%PDF-`` magic.
+
+       Any other string falls through to
+       :data:`LIBRARY_INGEST_PDF_INVALID` with no path leakage.
+
+    2. Else :meth:`LibrarySandbox.read_bytes` resolves ``source_ref``
+       inside the sandbox, collapsing :class:`PathEscapeError` /
+       ``FileNotFoundError`` / ``IsADirectoryError`` /
+       ``NotADirectoryError`` / ``ValueError`` into
+       :data:`LIBRARY_INGEST_SOURCE_NOT_FOUND` with NO path echoed
+       (NFR9).
+
+    The returned bytes are NOT yet validated by pypdf — only the magic
+    number is checked. :func:`_extract_pdf_text` runs the full pypdf
+    parse and may still raise :data:`LIBRARY_INGEST_PDF_INVALID` on
+    structurally-corrupt or encrypted input.
+    """
+    import base64
+    import binascii
+
+    source_ref = str(parameters["source_ref"])
+    source_name = os.path.basename(source_ref) or source_ref
+
+    inline = parameters.get("source_content")
+    if inline is not None and inline != "":
+        if isinstance(inline, bytes):
+            raw = inline
+        elif isinstance(inline, str):
+            # Fast path: the string IS the raw bytes (Latin-1 smuggling).
+            try:
+                candidate = inline.encode("latin-1")
+            except UnicodeEncodeError:
+                candidate = b""
+            if candidate.startswith(_PDF_MAGIC):
+                raw = candidate
+            else:
+                # Try base64 decode. A non-base64 string will raise
+                # ``binascii.Error`` (or return gibberish that fails
+                # the magic check below) — either way we reject as
+                # LIBRARY_INGEST_PDF_INVALID.
+                try:
+                    raw = base64.b64decode(inline, validate=False)
+                except (binascii.Error, ValueError):
+                    raise LibrarySkillError(
+                        _PDF_INVALID_MESSAGE,
+                        code=LIBRARY_INGEST_PDF_INVALID,
+                    ) from None
+        else:
+            raise LibrarySkillError(
+                _PDF_INVALID_MESSAGE,
+                code=LIBRARY_INGEST_PDF_INVALID,
+            )
+
+        if not raw.startswith(_PDF_MAGIC):
+            raise LibrarySkillError(
+                _PDF_INVALID_MESSAGE,
+                code=LIBRARY_INGEST_PDF_INVALID,
+            )
+        return raw, source_name
+
+    # Filesystem path — must stay inside the sandbox. NFR9: no path
+    # ever leaks into the error message.
+    try:
+        raw = sandbox.read_bytes(source_ref)
+    except (
+        PathEscapeError,
+        FileNotFoundError,
+        IsADirectoryError,
+        NotADirectoryError,
+        ValueError,
+    ):
+        raise LibrarySkillError(
+            _SOURCE_NOT_FOUND_MESSAGE,
+            code=LIBRARY_INGEST_SOURCE_NOT_FOUND,
+        ) from None
+
+    if not raw.startswith(_PDF_MAGIC):
+        raise LibrarySkillError(
+            _PDF_INVALID_MESSAGE,
+            code=LIBRARY_INGEST_PDF_INVALID,
+        )
+    return raw, source_name
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> tuple[str, bool]:
+    """Return ``(joined_text, partial_extraction_flag)``.
+
+    Parses ``pdf_bytes`` with :mod:`pypdf`, calls ``extract_text()`` on
+    every page individually, and joins the non-empty results with a
+    ``\\n\\n`` separator. Per-page extraction errors are caught and
+    logged at WARNING with only ``type(exc).__name__`` — NFR9 forbids
+    embedding the exception ``str()`` because upstream libraries can
+    leak paths.
+
+    The empty-text gate (NFR26) is enforced here: if NO page produced
+    any non-whitespace text, :data:`LIBRARY_INGEST_PDF_EMPTY_EXTRACTION`
+    is raised with the verbatim user-facing message.
+
+    Raises:
+        :class:`LibrarySkillError` with code
+        :data:`LIBRARY_INGEST_PDF_INVALID` when pypdf cannot open the
+        file (encrypted, corrupt, unrecognized structure) or when the
+        upstream library is missing.
+        :class:`LibrarySkillError` with code
+        :data:`LIBRARY_INGEST_PDF_EMPTY_EXTRACTION` when the parse
+        succeeded but every page was empty (scanned images, NFR26).
+    """
+    try:
+        import pypdf  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover — dep pinned in pyproject
+        logger.warning(
+            "library_ingest: pypdf not installed (%s)", type(exc).__name__
+        )
+        raise LibrarySkillError(
+            _PDF_INVALID_MESSAGE,
+            code=LIBRARY_INGEST_PDF_INVALID,
+        ) from exc
+
+    import io
+
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+    except BaseException as exc:  # noqa: BLE001 — upstream raises a zoo
+        logger.warning(
+            "library_ingest: pypdf.PdfReader failed %s",
+            type(exc).__name__,
+        )
+        raise LibrarySkillError(
+            _PDF_INVALID_MESSAGE,
+            code=LIBRARY_INGEST_PDF_INVALID,
+        ) from exc
+
+    # Encrypted PDFs surface as ``reader.is_encrypted`` — attempting
+    # extract_text() on them raises a pypdf exception we'd then have
+    # to map anyway. Fail fast here with the INVALID code; a future
+    # story can add a dedicated "encrypted, please decrypt" code if
+    # user feedback warrants it.
+    if getattr(reader, "is_encrypted", False):
+        logger.warning("library_ingest: encrypted PDF rejected")
+        raise LibrarySkillError(
+            _PDF_INVALID_MESSAGE,
+            code=LIBRARY_INGEST_PDF_INVALID,
+        )
+
+    extracted_page_texts: list[str] = []
+    skipped_pages = 0
+    for page in reader.pages:
+        try:
+            text = page.extract_text() or ""
+        except BaseException as exc:  # noqa: BLE001 — pypdf zoo
+            skipped_pages += 1
+            logger.warning(
+                "library_ingest: PDF page extract_text() raised %s",
+                type(exc).__name__,
+            )
+            continue
+        if text.strip():
+            extracted_page_texts.append(text)
+
+    joined = "\n\n".join(extracted_page_texts)
+    if not joined.strip():
+        # Empty-text gate — NFR26. Every page was empty or skipped.
+        raise LibrarySkillError(
+            _PDF_EMPTY_EXTRACTION_MESSAGE,
+            code=LIBRARY_INGEST_PDF_EMPTY_EXTRACTION,
+        )
+
+    partial = skipped_pages > 0
+    return joined, partial
+
+
+def _resolve_pdf_text(
+    sandbox: LibrarySandbox,
+    parameters: Mapping[str, Any],
+) -> tuple[str, str, bool]:
+    """Thin wrapper that chains :func:`_resolve_pdf_bytes` and
+    :func:`_extract_pdf_text` and returns ``(text, source_name, partial)``.
+
+    Kept as a seam so that a future story can swap the extraction
+    backend (pdfplumber, tika, OCR) without touching the branching
+    logic inside :func:`_ingest_pipeline`.
+    """
+    pdf_bytes, source_name = _resolve_pdf_bytes(sandbox, parameters)
+    text, partial = _extract_pdf_text(pdf_bytes)
+    return text, source_name, partial
 
 
 def _list_existing_pages(sandbox: LibrarySandbox) -> list[str]:
@@ -773,6 +1041,8 @@ __all__ = [
     "LIBRARY_INGEST_INVALID_ARGS",
     "LIBRARY_INGEST_NO_SUMMARIZER",
     "LIBRARY_INGEST_NOT_IMPLEMENTED",
+    "LIBRARY_INGEST_PDF_EMPTY_EXTRACTION",
+    "LIBRARY_INGEST_PDF_INVALID",
     "LIBRARY_INGEST_SOURCE_NOT_FOUND",
     "LIBRARY_INGEST_SUMMARIZER_FAILED",
     "LIBRARY_INGEST_UNSUPPORTED_TYPE",

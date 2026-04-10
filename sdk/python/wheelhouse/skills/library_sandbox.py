@@ -263,6 +263,22 @@ class LibrarySandbox:
         with open(target, "r", encoding="utf-8") as f:
             return f.read()
 
+    def read_bytes(self, rel_path: str) -> bytes:
+        """Read a raw binary file inside the Library root.
+
+        Mirrors :meth:`read` but returns ``bytes`` instead of a
+        UTF-8-decoded ``str`` — used by the library_ingest PDF branch
+        (story 13-9) where opening the file as text would silently
+        corrupt the PDF binary stream.
+
+        Path canonicalization and the ``PathEscapeError`` / ``ValueError``
+        error semantics are identical to :meth:`read`. This helper does
+        NOT stage a git change — it is a pure read-side accessor.
+        """
+        target = self._validate(rel_path)
+        with open(target, "rb") as f:
+            return f.read()
+
     def write(self, rel_path: str, content: str) -> None:
         """Write a UTF-8 text file inside the Library root.
 
