@@ -20,6 +20,7 @@ import json
 import logging
 from typing import Any
 
+from wheelhouse.skills.library_ingest import SKILL_REGISTRY as LIBRARY_SKILL_REGISTRY
 from wheelhouse.types import (
     CronEvent,
     SkillInvocation,
@@ -100,6 +101,7 @@ async def run_message_loop(
             persona=persona,
             agent_name=agent_name,
             persona_path=persona_path,
+            config=config,
         )
         await connection.subscribe(stream_name, handler)
 
@@ -132,6 +134,7 @@ def _make_handler(
     persona: Persona,
     agent_name: str,
     persona_path: str,
+    config: dict[str, Any] | None = None,
 ) -> Any:
     """Create a message handler for a specific stream.
 
@@ -167,6 +170,7 @@ def _make_handler(
                 await _handle_skill_invocation(
                     message, connection, stream_name, claude_client, persona,
                     agent_name, persona_path,
+                    config=config,
                 )
             elif isinstance(message, SkillProgress):
                 await _handle_skill_progress(
@@ -359,11 +363,18 @@ async def _handle_skill_invocation(
     persona: Persona,
     agent_name: str,
     persona_path: str,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> None:
     """Handle an incoming SkillInvocation (AC #4, #7).
 
     Drops invocations addressed to other agents.
     Publishes SkillProgress within 2s before Claude API call (AC-06).
+
+    Story 13-7: if ``message.skill_name`` is registered in the Library
+    skill registry, dispatch to the Library handler instead of the
+    generic Claude path. This bypasses LLM invocation entirely for
+    ``library_ingest`` (and later 13-14 retrieval, 13-16 lint).
     """
     # Drop invocations addressed to other agents (exact match, case-sensitive)
     if message.agent_id != agent_name:
@@ -372,6 +383,19 @@ async def _handle_skill_invocation(
             message.agent_id,
             agent_name,
             stream_name,
+        )
+        return
+
+    # Story 13-7: Library skill dispatch interception. Happens AFTER the
+    # agent_id drop (Library skills still honour targeting) but BEFORE
+    # any Claude call. Non-library skills (skill_name not in the
+    # registry) fall through to the generic Claude path unchanged.
+    if message.skill_name in LIBRARY_SKILL_REGISTRY:
+        await _handle_library_skill_invocation(
+            message,
+            connection,
+            stream_name,
+            config=config,
         )
         return
 
@@ -473,6 +497,67 @@ async def _handle_skill_invocation(
             skill_result,
             f"type=SkillResult invocation_id={message.invocation_id} success=False",
         )
+
+
+async def _handle_library_skill_invocation(
+    message: SkillInvocation,
+    connection: Any,
+    stream_name: str,
+    *,
+    config: dict[str, Any] | None = None,
+) -> None:
+    """Dispatch a Library skill invocation to its registered handler (Story 13-7).
+
+    The generic Claude path is bypassed entirely — the Library handler
+    constructs the ``SkillResult`` directly from the pre-built
+    ``LibrarySandbox`` and the validated parameters. Preserves the
+    5-4 / ADR-035 SkillProgress ack contract by publishing a
+    ``"Processing..."`` progress message before calling the handler.
+    """
+    # Publish SkillProgress immediately (preserves the 2-second ack
+    # contract from 5-4 / ADR-035 — surfaces display "processing" while
+    # the handler runs).
+    progress = SkillProgress(
+        invocation_id=message.invocation_id,
+        skill_name=message.skill_name,
+        status_message="Processing...",
+    )
+    await connection.publish(stream_name, progress)
+    logger.debug(
+        "SkillProgress published (library): invocation_id=%s stream=%s skill=%s",
+        message.invocation_id,
+        stream_name,
+        message.skill_name,
+    )
+
+    # Resolve the handler from the registry. ``LIBRARY_SKILL_REGISTRY``
+    # is module-level; the dispatch caller has already confirmed the
+    # skill_name is registered, so this lookup is infallible.
+    handler = LIBRARY_SKILL_REGISTRY[message.skill_name]
+
+    # Degrade safely when the startup path did not attach a config dict
+    # — treat as disabled so the handler produces a clean
+    # LIBRARY_DISABLED refusal instead of crashing.
+    cfg = config or {}
+    sandbox = cfg.get("library_sandbox")
+    library_status = cfg.get("library_status", "disabled")
+
+    skill_result: SkillResult = handler(
+        sandbox,
+        dict(message.parameters) if message.parameters else {},
+        library_status=library_status,
+        invocation_id=message.invocation_id,
+        skill_name=message.skill_name,
+    )
+
+    await _publish_response(
+        connection,
+        stream_name,
+        skill_result,
+        f"type=SkillResult invocation_id={message.invocation_id} "
+        f"skill={message.skill_name} success={skill_result.success} "
+        f"error_code={skill_result.error_code or '<none>'}",
+    )
 
 
 async def _handle_skill_progress(

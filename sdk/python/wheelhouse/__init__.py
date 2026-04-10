@@ -28,6 +28,7 @@ from wheelhouse.errors import LibraryBusyError as LibraryBusyError  # noqa: F401
 from wheelhouse.errors import LibraryCommitError as LibraryCommitError  # noqa: F401
 from wheelhouse.errors import LibraryDiskFullError as LibraryDiskFullError  # noqa: F401
 from wheelhouse.errors import LibraryGitError as LibraryGitError  # noqa: F401
+from wheelhouse.errors import LibrarySkillError as LibrarySkillError  # noqa: F401
 from wheelhouse.errors import LibraryTransactionError as LibraryTransactionError  # noqa: F401
 from wheelhouse.errors import PathEscapeError as PathEscapeError  # noqa: F401
 from wheelhouse.errors import PublishTimeout as PublishTimeout  # noqa: F401

@@ -183,3 +183,42 @@ class PathEscapeError(WheelhouseError):
         super().__init__(self._GENERIC_MESSAGE, code=code)
         # Underscore prefix signals: diagnostic-only, not a stable public API.
         self._debug_hash = debug_hash
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Library skill-layer error contract (Story 13-7)
+# ──────────────────────────────────────────────────────────────────────
+#
+# Distinct from :class:`LibraryGitError` on purpose. The LibraryGitError
+# family covers git-layer failures from inside ``LibrarySandbox`` itself
+# (commit failed, disk full, busy lock, transactional misuse).
+# ``LibrarySkillError`` covers SKILL-layer failures surfaced by the
+# invocation handlers in ``wheelhouse.skills.library_ingest`` and (later)
+# ``wheelhouse.skills.library_lint`` / ``library_retrieval``: argument
+# validation, plan-state refusals (read-only), disabled-mode refusals,
+# and the scaffold-sentinel "pipeline not yet implemented" marker used by
+# 13-7 while 13-8 / 13-9 are still in flight.
+#
+# The ``code`` attribute is the stable contract — ``SkillResult.error_code``
+# carries it verbatim into the wh-cloud billing/observability pipeline.
+# 13-7 freezes four codes; 13-8..13-13 will ADD codes but must not rename
+# or repurpose the ones defined here.
+
+
+class LibrarySkillError(WheelhouseError):
+    """Structured failure raised by a Library skill invocation handler.
+
+    Parent of the code catalogue consumed by ``SkillResult.error_code``.
+    Distinct from :class:`LibraryGitError` because skill-layer failures
+    (bad args, read-only plan, disabled Library, not-yet-implemented
+    scaffolding) are not git failures — they must not be caught by an
+    ``except LibraryGitError:`` handler inside sandbox internals.
+
+    The ``code`` argument is mandatory — every call site must name the
+    stable code string it is producing, which becomes the
+    ``SkillResult.error_code`` surfaced to cloud. See
+    ``wheelhouse.skills.library_ingest`` for the initial catalogue.
+    """
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message, code=code)
