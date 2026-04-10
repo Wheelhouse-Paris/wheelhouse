@@ -4,6 +4,7 @@ pub mod capabilities;
 pub mod compact;
 pub mod completion;
 pub mod doctor;
+pub mod library;
 pub mod logs;
 pub mod memory;
 pub mod ps;
