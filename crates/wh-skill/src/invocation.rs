@@ -115,6 +115,12 @@ pub fn build_skill_result_success(
         error_message: String::new(),
         error_code: String::new(),
         timestamp_ms: now_ms(),
+        // Library piggyback fields (Story 13-27, FR35) — populated only by
+        // Library skills (ingest, lint, retrieval). Non-Library skills leave
+        // them unset so wh-cloud's metering Lambda skips them.
+        library_tokens: None,
+        library_page_count: None,
+        library_last_ingest_at: None,
     }
 }
 
@@ -135,6 +141,10 @@ pub fn build_skill_result_error(
         error_message: error_message.to_string(),
         error_code: error_code.to_string(),
         timestamp_ms: now_ms(),
+        // Library piggyback fields (Story 13-27, FR35) — see success builder above.
+        library_tokens: None,
+        library_page_count: None,
+        library_last_ingest_at: None,
     }
 }
 
