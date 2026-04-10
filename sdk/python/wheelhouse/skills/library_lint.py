@@ -64,7 +64,10 @@ See:
 from __future__ import annotations
 
 import dataclasses
+import datetime as _dt
+import json
 import logging
+import subprocess
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from wheelhouse.skills.library_sandbox import LibrarySandbox
@@ -461,20 +464,265 @@ def lint_library(
     return findings
 
 
+# ─── Incremental lint mode (Story 13-17) ──────────────────────────────
+#
+# NFR27 / NFR3: on a growing Library, re-running `library.lint` from
+# scratch every invocation is wasteful — an edit typically touches a
+# handful of pages out of hundreds. The incremental pipeline records the
+# git HEAD sha at the moment of the last successful lint in a marker
+# file at the Library root, and on the next run computes the set of
+# ``*.md`` pages that changed since then (via `git diff --name-only`)
+# and passes them as the ``page_filter`` to :func:`lint_library`. If
+# nothing changed, detection is skipped entirely and an empty findings
+# list is returned.
+#
+# The marker file is persisted through the LibrarySandbox transaction
+# layer (13-4) — it is a committed file just like the pages themselves,
+# so it rides along with crash recovery (13-5) and with git clones.
+
+#: Path to the incremental-mode watermark file, relative to the
+#: Library root. Hidden (leading dot) so it does not appear in
+#: ``wh library list`` which walks ``*.md`` only.
+LINT_STATE_PATH = ".lint-state.json"
+
+
+@dataclasses.dataclass(frozen=True)
+class LintState:
+    """Persistent watermark for :func:`lint_library_incremental`.
+
+    Stored as JSON at :data:`LINT_STATE_PATH` inside the Library root
+    and committed into the Library's git history on every successful
+    incremental lint run. Frozen because it is a value object — call
+    sites compare, save, and reload but never mutate in place.
+
+    Attributes:
+        last_commit_sha: Full git sha of the HEAD commit at the moment
+            the LAST successful lint run completed. The next run diffs
+            this sha against the current HEAD to find changed pages.
+        last_run_at: ISO-8601 UTC timestamp of the last successful lint
+            run. Not used for detection — purely informational for
+            operator output and future NFR3 profiling.
+    """
+
+    last_commit_sha: str
+    last_run_at: str
+
+
+def _now_iso_utc() -> str:
+    """Wall-clock seam — tests monkey-patch this for deterministic timestamps."""
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def load_lint_state(sandbox: LibrarySandbox) -> LintState | None:
+    """Read the persisted :class:`LintState` from the Library root.
+
+    Returns ``None`` on first run (marker absent) so the caller can
+    unambiguously fall back to a full lint. Also returns ``None`` if
+    the marker exists but is malformed — a corrupted marker should not
+    wedge the pipeline; the next successful run rewrites it cleanly.
+    """
+    try:
+        if not sandbox.exists(LINT_STATE_PATH):
+            return None
+        raw = sandbox.read(LINT_STATE_PATH)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("library_lint: failed to read lint state: %s", exc)
+        return None
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("library_lint: lint-state.json is malformed: %s", exc)
+        return None
+    if not isinstance(data, dict):
+        return None
+    sha = data.get("last_commit_sha")
+    run_at = data.get("last_run_at")
+    if not isinstance(sha, str) or not isinstance(run_at, str):
+        return None
+    return LintState(last_commit_sha=sha, last_run_at=run_at)
+
+
+def save_lint_state(sandbox: LibrarySandbox, state: LintState) -> None:
+    """Persist ``state`` as ``.lint-state.json`` via a sandbox transaction.
+
+    The write goes through ``sandbox.begin() / write() / commit()`` so
+    the marker lands in the same git repo as the pages it describes —
+    one `[lint] update incremental marker` commit per call per ADR-039.
+    """
+    payload = json.dumps(
+        {
+            "last_commit_sha": state.last_commit_sha,
+            "last_run_at": state.last_run_at,
+        },
+        sort_keys=True,
+    )
+    sandbox.begin("lint", "update incremental marker")
+    try:
+        sandbox.write(LINT_STATE_PATH, payload + "\n")
+        sandbox.commit(pages_updated=[LINT_STATE_PATH])
+    except BaseException:
+        # best-effort rollback; commit() already rolls back on its own
+        # failure path, but begin-then-write-then-raise needs cleanup.
+        try:
+            sandbox.rollback()
+        except Exception:  # pragma: no cover - defensive
+            pass
+        raise
+
+
+def _git_rev_parse_head(sandbox: LibrarySandbox) -> str | None:
+    """Return the full sha of HEAD, or None if the repo has no commits yet."""
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=sandbox._root,  # type: ignore[attr-defined]
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:  # pragma: no cover - git missing
+        return None
+    if result.returncode != 0:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
+def compute_changed_pages(sandbox: LibrarySandbox, since_sha: str) -> set[str]:
+    """Return the set of ``*.md`` slugs changed between ``since_sha`` and HEAD.
+
+    Uses ``git diff --name-only <since_sha> HEAD -- '*.md'`` so non-page
+    files (e.g. ``.lint-state.json`` itself) are filtered out at the git
+    level. Deleted pages are filtered in the Python layer because they
+    cannot be re-linted — full-lint is the canonical path for purging
+    stale-ref findings against deleted targets.
+    """
+    # AC-5: HEAD == since_sha is a trivial empty diff. Ask git directly
+    # so we don't have to decide what "HEAD equals sha" means when HEAD
+    # is itself an abbreviation.
+    head = _git_rev_parse_head(sandbox)
+    if head is None or head == since_sha:
+        return set()
+
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            [
+                "git",
+                "diff",
+                "--name-only",
+                f"{since_sha}..HEAD",
+                "--",
+                "*.md",
+            ],
+            cwd=sandbox._root,  # type: ignore[attr-defined]
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:  # pragma: no cover - git missing
+        return set()
+
+    if result.returncode != 0:
+        logger.warning(
+            "library_lint: git diff failed (%s): %s",
+            result.returncode,
+            result.stderr.strip(),
+        )
+        return set()
+
+    changed: set[str] = set()
+    for line in result.stdout.splitlines():
+        rel = line.strip()
+        if not rel or not rel.endswith(".md"):
+            continue
+        # Filter deletions — a deleted page cannot be re-linted by the
+        # incremental path (full-lint is the canonical purge path).
+        try:
+            if not sandbox.exists(rel):
+                continue
+        except Exception:  # pragma: no cover - defensive
+            continue
+        changed.add(rel)
+    return changed
+
+
+def lint_library_incremental(
+    sandbox: LibrarySandbox,
+    llm_fn: LlmDetectorFn | None = None,
+) -> list[LintFinding]:
+    """Run lint only on pages changed since the last successful lint run.
+
+    Decision tree:
+
+    * **No marker** → full lint, then persist a fresh marker pointing at
+      the HEAD sha that was linted.
+    * **Marker exists, HEAD unchanged / no changed pages** → skip
+      detection entirely and return ``[]``. The marker is left alone
+      (nothing to update).
+    * **Marker exists, some pages changed** → run :func:`lint_library`
+      with ``page_filter`` = the changed set, then advance the marker
+      to the new HEAD sha.
+
+    The marker is only advanced on successful completion of
+    :func:`lint_library`, preserving the invariant "the marker only
+    ever points at a sha where lint was known to succeed".
+    """
+    state = load_lint_state(sandbox)
+    head = _git_rev_parse_head(sandbox)
+
+    if state is None:
+        # First run: full lint fallback. If there is no HEAD yet (empty
+        # repo, no commits) we still run a full lint — the page set is
+        # just whatever is sitting on disk — but we cannot persist a
+        # marker without a sha, so we skip the save and the next run is
+        # effectively a first run again.
+        findings = lint_library(sandbox, llm_fn=llm_fn, page_filter=None)
+        if head is not None:
+            save_lint_state(
+                sandbox,
+                LintState(last_commit_sha=head, last_run_at=_now_iso_utc()),
+            )
+        return findings
+
+    # Marker present — compute the filter.
+    changed = compute_changed_pages(sandbox, state.last_commit_sha)
+    if not changed:
+        logger.debug(
+            "library_lint: no pages changed since %s — skipping detection",
+            state.last_commit_sha,
+        )
+        return []
+
+    findings = lint_library(sandbox, llm_fn=llm_fn, page_filter=changed)
+    if head is not None and head != state.last_commit_sha:
+        save_lint_state(
+            sandbox,
+            LintState(last_commit_sha=head, last_run_at=_now_iso_utc()),
+        )
+    return findings
+
+
 __all__ = [
     "CATEGORY_CONTRADICTION",
     "CATEGORY_ORPHAN",
     "CATEGORY_OUTDATED_CLAIM",
     "CATEGORY_STALE_REF",
+    "LINT_STATE_PATH",
     "LibraryPage",
     "LintFinding",
+    "LintState",
     "SEVERITY_ERROR",
     "SEVERITY_INFO",
     "SEVERITY_WARN",
+    "compute_changed_pages",
     "detect_contradictions",
     "detect_orphans",
     "detect_outdated_claims",
     "detect_stale_refs",
     "lint_library",
+    "lint_library_incremental",
+    "load_lint_state",
     "parse_pages",
+    "save_lint_state",
 ]
