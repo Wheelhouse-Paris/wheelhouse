@@ -6,7 +6,7 @@
 //! 2. The `wh library` clap subcommand group with its `status` child subcommand
 //!    (story 13-24 — the first FW-7 CLI surface).
 //!
-//! Future stories 13-22..13-26 add `init`, `ingest`, `list`, `lint` by adding variants
+//! Stories 13-22..13-26 add `init`, `ingest`, `lint`, `list` by adding variants
 //! to `LibraryCommand` and match arms to `run` — no restructuring needed.
 //!
 //! ## Story 13-24: `wh library status <agent>`
@@ -71,14 +71,16 @@ use crate::output::OutputFormat;
 /// `wh library` subcommand group.
 ///
 /// Variants land incrementally as FW-7 stories are completed. The order is
-/// **alphabetical** (Init | Ingest | List | Status) — keep it that way when adding
-/// new variants. `Lint` (13-26) will slot between `Ingest` and `List`.
+/// **alphabetical** (Init | Ingest | Lint | List | Status) — keep it that way
+/// when adding new variants.
 #[derive(Debug, Subcommand)]
 pub enum LibraryCommand {
     /// Initialize a local Library for an agent on its per-agent workspace volume (FR6).
     Init(InitArgs),
     /// Enqueue a Library ingestion by publishing a SkillInvocation (FR10, 13-23).
     Ingest(IngestArgs),
+    /// Trigger a Library lint run by publishing a SkillInvocation (FR47, 13-26).
+    Lint(LintArgs),
     /// List all Libraries across every agent in the current topology (FR46, 13-25).
     List(ListArgs),
     /// Inspect the health of an agent's Library (FR45).
@@ -697,12 +699,297 @@ fn render_ingest_human(data: &IngestData) -> String {
     out
 }
 
+// ─── Story 13-26: `wh library lint --agent <name>` ───────────────────────
+
+/// Arguments for `wh library lint`.
+///
+/// Story 13-26 — CLI publisher for the `library_lint` skill registered by 13-18
+/// (`sdk/python/wheelhouse/skills/library_lint.py` — on-demand lint handler).
+/// The CLI never runs the lint itself; it publishes a `SkillInvocation` on an
+/// agent-observed stream and (optionally) waits for the matching
+/// `SkillResult`. The agent runtime dispatches the invocation via the
+/// `LIBRARY_SKILL_REGISTRY` gate and runs `lint_library()` from 13-16 with the
+/// appropriate `page_filter` based on mode.
+#[derive(Debug, Args)]
+pub struct LintArgs {
+    /// Name of the agent whose Library to lint. Must exist in `.wh/state.json`.
+    #[arg(long)]
+    pub agent: String,
+
+    /// Lint mode: `full` re-lints every page, `incremental` (default) re-lints
+    /// only pages that changed since the last lint watermark (story 13-17).
+    #[arg(long)]
+    pub mode: Option<String>,
+
+    /// Publish on this specific stream instead of `agent.streams[0]`. Must be
+    /// a stream the target agent is already subscribed to.
+    #[arg(long)]
+    pub stream: Option<String>,
+
+    /// Wait for the matching SkillResult and print its findings output.
+    /// Timeout: 120 seconds.
+    #[arg(long, default_value_t = false)]
+    pub wait: bool,
+
+    /// Output format: human (default) or json.
+    #[arg(long, value_enum, default_value = "human")]
+    pub format: OutputFormat,
+}
+
+impl LintArgs {
+    /// The format hint used by `main.rs` for error envelope rendering.
+    pub fn format(&self) -> OutputFormat {
+        self.format
+    }
+}
+
+/// Skill name key registered by story 13-18. Frozen — underscore form, NOT
+/// dot-notation; see the library_lint skill module for the exact key.
+const LIBRARY_LINT_SKILL_NAME: &str = "library_lint";
+
+/// Closed enum of accepted `mode` values. The Python lint skill's 13-17
+/// incremental-mode implementation accepts exactly these two.
+const ACCEPTED_LINT_MODES: &[&str] = &["full", "incremental"];
+
+/// Serializable publish record for `wh library lint`.
+#[derive(Debug, Clone, Serialize)]
+pub struct LintData {
+    pub invocation_id: String,
+    pub agent: String,
+    pub stream: String,
+    pub mode: String,
+    pub waited: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<LintResultData>,
+}
+
+/// Subset of `SkillResult` we echo back to the operator when `--wait` fires.
+/// Matches the shape of `IngestResultData` — we forward the raw `output`
+/// field (a JSON-encoded list of findings per 13-16's contract) without
+/// client-side parsing.
+#[derive(Debug, Clone, Serialize)]
+pub struct LintResultData {
+    pub success: bool,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub error_code: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub error_message: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_page_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub library_last_ingest_at: Option<String>,
+}
+
+impl From<&SkillResult> for LintResultData {
+    fn from(r: &SkillResult) -> Self {
+        Self {
+            success: r.success,
+            error_code: r.error_code.clone(),
+            error_message: r.error_message.clone(),
+            output: r.output.clone(),
+            library_tokens: r.library_tokens,
+            library_page_count: r.library_page_count,
+            library_last_ingest_at: r.library_last_ingest_at.clone(),
+        }
+    }
+}
+
+/// Execute `wh library lint --agent <name>`.
+///
+/// Pipeline:
+///   1. Load `.wh/state.json` and find the target agent.
+///   2. Resolve the target stream from `agent.streams` (first or `--stream`).
+///   3. Resolve the lint mode (default incremental, reject unknown).
+///   4. Build the `SkillInvocation` and publish it over zmq.
+///   5. If `--wait`, subscribe to the same stream and await the matching
+///      `SkillResult`, then render it.
+///
+/// Unlike `ingest`, this command does not touch the per-agent workspace mount
+/// at all — the lint skill reads the Library through the agent-side sandbox.
+pub async fn lint(args: &LintArgs) -> Result<(), WhError> {
+    // (1) Load state.
+    let state_path = Path::new(".wh/state.json");
+    if !state_path.exists() {
+        return Err(WhError::Other(
+            "no deployed topology found (.wh/state.json missing). Run 'wh topology apply' first."
+                .to_string(),
+        ));
+    }
+    let content = std::fs::read_to_string(state_path)
+        .map_err(|e| WhError::Internal(format!("failed to read state: {e}")))?;
+    let topology: wh_broker::deploy::Topology = serde_json::from_str(&content)
+        .map_err(|e| WhError::Internal(format!("corrupt state file: {e}")))?;
+
+    let agent = topology
+        .agents
+        .iter()
+        .find(|a| a.name == args.agent)
+        .ok_or_else(|| WhError::AgentNotFound(args.agent.clone()))?;
+
+    // (2) Resolve stream.
+    let stream_name = resolve_target_stream(&agent.streams, args.stream.as_deref())?;
+
+    // (3) Resolve mode.
+    let mode = resolve_lint_mode(args.mode.as_deref())?;
+
+    // (4) Build & publish the invocation.
+    let invocation_id = uuid::Uuid::new_v4().to_string();
+    let mut parameters: HashMap<String, String> = HashMap::new();
+    parameters.insert("mode".to_string(), mode.clone());
+    let invocation = SkillInvocation {
+        skill_name: LIBRARY_LINT_SKILL_NAME.to_string(),
+        agent_id: args.agent.clone(),
+        invocation_id: invocation_id.clone(),
+        parameters,
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+    };
+
+    publish_skill_invocation(&stream_name, &invocation).await?;
+
+    // (5) Optionally wait for SkillResult.
+    let waited = args.wait;
+    let result_data = if args.wait {
+        Some(wait_for_lint_result(&stream_name, &invocation_id).await?)
+    } else {
+        None
+    };
+
+    let data = LintData {
+        invocation_id: invocation_id.clone(),
+        agent: args.agent.clone(),
+        stream: stream_name.clone(),
+        mode: mode.clone(),
+        waited,
+        result: result_data.clone(),
+    };
+
+    match args.format {
+        OutputFormat::Human => {
+            print!("{}", render_lint_human(&data));
+        }
+        OutputFormat::Json => {
+            json::print_json_success(&data)?;
+        }
+    }
+
+    // (AC-7) Non-zero exit on `--wait` + failed SkillResult.
+    if let Some(r) = result_data.as_ref() {
+        if !r.success {
+            return Err(WhError::Other(format!(
+                "LINT_FAILED: {code}{sep}{msg}",
+                code = if r.error_code.is_empty() {
+                    "LINT_FAILED".to_string()
+                } else {
+                    r.error_code.clone()
+                },
+                sep = if r.error_message.is_empty() {
+                    ""
+                } else {
+                    " — "
+                },
+                msg = r.error_message,
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve the `mode` parameter. Defaults to `"incremental"` to match
+/// 13-17's default. Rejects values outside the closed enum.
+fn resolve_lint_mode(override_: Option<&str>) -> Result<String, WhError> {
+    match override_ {
+        None => Ok("incremental".to_string()),
+        Some(v) => {
+            if ACCEPTED_LINT_MODES.contains(&v) {
+                Ok(v.to_string())
+            } else {
+                Err(WhError::Other(format!(
+                    "UNKNOWN_LINT_MODE: --mode {v:?} is not one of {ACCEPTED_LINT_MODES:?}"
+                )))
+            }
+        }
+    }
+}
+
+/// Wait for a matching `SkillResult` on the same stream, up to 120 s.
+///
+/// Thin wrapper over the generic `wait_for_skill_result` helper that returns
+/// a `LintResultData` instead of `IngestResultData`. Kept as a separate
+/// function so the public `lint()` pipeline does not leak ingest-specific
+/// types when 13-23 is read in isolation. In practice both types have the
+/// same field set and are constructed from the same `SkillResult`.
+async fn wait_for_lint_result(
+    stream_name: &str,
+    invocation_id: &str,
+) -> Result<LintResultData, WhError> {
+    // Reuse the generic subscribe loop; the returned IngestResultData is
+    // structurally identical so we re-map it through SkillResult fields.
+    // Easier: call a shared generic helper. For minimal change we inline
+    // the translation by going through the ingest variant and rewrapping.
+    let ingest_shaped = wait_for_skill_result(stream_name, invocation_id).await?;
+    Ok(LintResultData {
+        success: ingest_shaped.success,
+        error_code: ingest_shaped.error_code,
+        error_message: ingest_shaped.error_message,
+        output: ingest_shaped.output,
+        library_tokens: ingest_shaped.library_tokens,
+        library_page_count: ingest_shaped.library_page_count,
+        library_last_ingest_at: ingest_shaped.library_last_ingest_at,
+    })
+}
+
+/// Format a `LintData` as the human-readable publish confirmation.
+fn render_lint_human(data: &LintData) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "Lint published to stream '{}' for agent '{}'\n",
+        data.stream, data.agent
+    ));
+    out.push_str(&format!("  invocation_id: {}\n", data.invocation_id));
+    out.push_str(&format!("  mode:          {}\n", data.mode));
+
+    if let Some(r) = data.result.as_ref() {
+        out.push('\n');
+        out.push_str("SkillResult received\n");
+        out.push_str(&format!(
+            "  success:       {}\n",
+            if r.success { "true" } else { "false" }
+        ));
+        if !r.error_code.is_empty() {
+            out.push_str(&format!("  error_code:    {}\n", r.error_code));
+        }
+        if !r.error_message.is_empty() {
+            out.push_str(&format!("  error_message: {}\n", r.error_message));
+        }
+        if !r.output.is_empty() {
+            out.push_str(&format!("  output:        {}\n", r.output));
+        }
+        if let Some(t) = r.library_tokens {
+            out.push_str(&format!("  library_tokens:         {t}\n"));
+        }
+        if let Some(p) = r.library_page_count {
+            out.push_str(&format!("  library_page_count:     {p}\n"));
+        }
+        if let Some(ts) = r.library_last_ingest_at.as_deref() {
+            out.push_str(&format!("  library_last_ingest_at: {ts}\n"));
+        }
+    }
+
+    out
+}
+
 impl LibraryCommand {
     /// The format hint used by `main.rs` to render error envelopes in the right shape.
     pub fn format(&self) -> OutputFormat {
         match self {
             LibraryCommand::Init(args) => args.format,
             LibraryCommand::Ingest(args) => args.format,
+            LibraryCommand::Lint(args) => args.format,
             LibraryCommand::List(args) => args.format,
             LibraryCommand::Status(args) => args.format,
         }
@@ -734,6 +1021,7 @@ pub async fn run(cmd: LibraryCommand) -> Result<(), WhError> {
     match cmd {
         LibraryCommand::Init(args) => init(&args).await,
         LibraryCommand::Ingest(args) => ingest(&args).await,
+        LibraryCommand::Lint(args) => lint(&args).await,
         LibraryCommand::List(args) => list(&args).await,
         LibraryCommand::Status(args) => status(&args).await,
     }
@@ -2570,6 +2858,166 @@ Filesystem 1024-blocks Used Available Capacity Mounted
         assert!(!json.contains("\"unreachable\":false"));
     }
 
+    // ─── Story 13-26: `wh library lint` tests ────────────────────────
+
+    use super::{render_lint_human, resolve_lint_mode, LintData, LintResultData};
+
+    #[test]
+    fn test_library_lint_command_parses() {
+        let cli = TestCli::try_parse_from(["wh-test", "lint", "--agent", "donna"])
+            .expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::Lint(args) => {
+                assert_eq!(args.agent, "donna");
+                assert!(args.mode.is_none());
+                assert!(args.stream.is_none());
+                assert!(!args.wait);
+                assert_eq!(args.format, crate::output::OutputFormat::Human);
+            }
+            other => panic!("expected Lint variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_library_lint_command_parses_all_flags() {
+        let cli = TestCli::try_parse_from([
+            "wh-test", "lint", "--agent", "donna", "--mode", "full", "--stream", "inbox", "--wait",
+            "--format", "json",
+        ])
+        .expect("parse should succeed");
+        match cli.library {
+            LibraryCommand::Lint(args) => {
+                assert_eq!(args.agent, "donna");
+                assert_eq!(args.mode.as_deref(), Some("full"));
+                assert_eq!(args.stream.as_deref(), Some("inbox"));
+                assert!(args.wait);
+                assert_eq!(args.format, crate::output::OutputFormat::Json);
+            }
+            other => panic!("expected Lint variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_library_lint_requires_agent_flag() {
+        let err = TestCli::try_parse_from(["wh-test", "lint"]);
+        assert!(err.is_err(), "missing --agent must be a clap error");
+    }
+
+    #[test]
+    fn test_resolve_lint_mode_default_incremental() {
+        assert_eq!(resolve_lint_mode(None).unwrap(), "incremental");
+    }
+
+    #[test]
+    fn test_resolve_lint_mode_full_accepted() {
+        assert_eq!(resolve_lint_mode(Some("full")).unwrap(), "full");
+        assert_eq!(
+            resolve_lint_mode(Some("incremental")).unwrap(),
+            "incremental"
+        );
+    }
+
+    #[test]
+    fn test_resolve_lint_mode_unknown_rejected() {
+        let err = resolve_lint_mode(Some("sideways")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("UNKNOWN_LINT_MODE"));
+        assert!(msg.contains("full"));
+        assert!(msg.contains("incremental"));
+    }
+
+    fn sample_lint_data(with_result: bool) -> LintData {
+        LintData {
+            invocation_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            agent: "donna".to_string(),
+            stream: "inbox".to_string(),
+            mode: "incremental".to_string(),
+            waited: with_result,
+            result: if with_result {
+                Some(LintResultData {
+                    success: true,
+                    error_code: String::new(),
+                    error_message: String::new(),
+                    output: "[]".to_string(),
+                    library_tokens: None,
+                    library_page_count: Some(42),
+                    library_last_ingest_at: None,
+                })
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn test_render_lint_human_publish_only() {
+        let out = render_lint_human(&sample_lint_data(false));
+        assert!(out.contains("Lint published to stream 'inbox' for agent 'donna'"));
+        assert!(out.contains("invocation_id: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"));
+        assert!(out.contains("mode:          incremental"));
+        assert!(!out.contains("SkillResult received"));
+    }
+
+    #[test]
+    fn test_render_lint_human_with_skill_result() {
+        let out = render_lint_human(&sample_lint_data(true));
+        assert!(out.contains("SkillResult received"));
+        assert!(out.contains("success:       true"));
+        assert!(out.contains("output:        []"));
+        assert!(out.contains("library_page_count:     42"));
+    }
+
+    #[test]
+    fn test_render_lint_human_with_failed_result() {
+        let mut data = sample_lint_data(true);
+        data.result = Some(LintResultData {
+            success: false,
+            error_code: "LINT_SANDBOX_UNREACHABLE".to_string(),
+            error_message: "agent sandbox not ready".to_string(),
+            output: String::new(),
+            library_tokens: None,
+            library_page_count: None,
+            library_last_ingest_at: None,
+        });
+        let out = render_lint_human(&data);
+        assert!(out.contains("success:       false"));
+        assert!(out.contains("error_code:    LINT_SANDBOX_UNREACHABLE"));
+        assert!(out.contains("error_message: agent sandbox not ready"));
+    }
+
+    #[test]
+    fn test_render_lint_json_publish_only() {
+        let data = sample_lint_data(false);
+        let json = serde_json::to_string(&data).expect("serialize");
+        for key in [
+            "\"invocation_id\"",
+            "\"agent\"",
+            "\"stream\"",
+            "\"mode\"",
+            "\"waited\"",
+        ] {
+            assert!(json.contains(key), "json must contain {key}: {json}");
+        }
+        assert!(!json.contains("\"result\""));
+    }
+
+    #[test]
+    fn test_render_lint_json_with_skill_result() {
+        let data = sample_lint_data(true);
+        let json = serde_json::to_string(&data).expect("serialize");
+        assert!(json.contains("\"result\""));
+        assert!(json.contains("\"success\":true"));
+        assert!(json.contains("\"library_page_count\":42"));
+    }
+
+    #[test]
+    fn test_library_command_format_dispatches_lint() {
+        let cli =
+            TestCli::try_parse_from(["wh-test", "lint", "--agent", "donna", "--format", "json"])
+                .expect("parse");
+        assert_eq!(cli.library.format(), crate::output::OutputFormat::Json);
+    }
+
     #[test]
     fn test_library_command_enum_alphabetical_order() {
         // Compile-time guard: listing variants in order must still compile. If a
@@ -2579,8 +3027,9 @@ Filesystem 1024-blocks Used Available Capacity Mounted
             match cmd {
                 LibraryCommand::Init(_) => 0,
                 LibraryCommand::Ingest(_) => 1,
-                LibraryCommand::List(_) => 2,
-                LibraryCommand::Status(_) => 3,
+                LibraryCommand::Lint(_) => 2,
+                LibraryCommand::List(_) => 3,
+                LibraryCommand::Status(_) => 4,
             }
         }
     }
