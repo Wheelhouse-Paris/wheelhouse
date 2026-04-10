@@ -77,6 +77,65 @@ class RegistryFullError(RegistrationError):
     pass
 
 
+class LibraryGitError(WheelhouseError):
+    """Base class for Library git-backed persistence failures (Story 13-4).
+
+    The Library stores every skill invocation as a single structured git
+    commit (ADR-039). Failures along the commit path — staging, pre-commit
+    checks, the ``git commit`` invocation itself, transactional misuse —
+    surface as subclasses of this error so callers can ``except
+    LibraryGitError`` once and handle the entire family.
+    """
+
+    pass
+
+
+class LibraryCommitError(LibraryGitError):
+    """A ``git`` invocation underneath :class:`LibrarySandbox` failed.
+
+    Raised when ``git add`` / ``git commit`` / ``git reset`` exits non-zero
+    or otherwise misbehaves. The message is sanitized: NFR9 (parity with
+    :class:`PathEscapeError`) requires that absolute filesystem paths from
+    git's stderr never leak into cloud logs, so the sandbox replaces any
+    path-looking token in stderr with ``<path>`` before wrapping it.
+    """
+
+    pass
+
+
+class LibraryDiskFullError(LibraryGitError):
+    """The Library volume is out of space (NFR22).
+
+    Raised by the pre-commit disk-space check before any ``git commit`` is
+    attempted, so the working tree and index are guaranteed not to be
+    half-mutated. The message is a fixed actionable prefix so operators
+    and end-users can recognise and respond to it consistently.
+    """
+
+    _MESSAGE_PREFIX = "Library is full — free disk space to continue writing"
+
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        required_bytes: int | None = None,
+        code: str = "LIBRARY_DISK_FULL",
+    ) -> None:
+        super().__init__(message or self._MESSAGE_PREFIX, code=code)
+        self.required_bytes = required_bytes
+
+
+class LibraryTransactionError(LibraryGitError):
+    """A LibrarySandbox transactional API was used incorrectly.
+
+    Raised for misuse like calling ``commit()`` without an active
+    transaction, calling ``commit()`` / ``rollback()`` when
+    ``git_enabled=False``, or opening a nested transaction.
+    """
+
+    pass
+
+
 class PathEscapeError(WheelhouseError):
     """Filesystem path escapes the Library sandbox root (FR38, NFR7, NFR9).
 
