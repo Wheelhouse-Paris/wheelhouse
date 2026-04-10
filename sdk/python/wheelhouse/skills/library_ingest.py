@@ -79,7 +79,11 @@ SKILL_NAME = "library_ingest"
 REQUIRED_PARAMS: tuple[str, ...] = ("source_type", "source_ref")
 
 #: Parameters the invocation MAY provide.
-OPTIONAL_PARAMS: tuple[str, ...] = ("user_summary_hint",)
+#:
+#: ``accept_large`` is a string-typed override for the FR11 50K-word
+#: size gate (story 13-10). Accepted truthy values are ``"true"`` /
+#: ``"True"`` / ``"1"`` / ``"yes"`` case-insensitively.
+OPTIONAL_PARAMS: tuple[str, ...] = ("user_summary_hint", "accept_large")
 
 #: Closed enum of accepted ``source_type`` values. Safe to echo in error
 #: messages (no NFR9 leakage risk — these are fixed strings, not paths).
@@ -141,6 +145,22 @@ LIBRARY_INGEST_NO_SUMMARIZER = "LIBRARY_INGEST_NO_SUMMARIZER"
 #: exception's ``str()`` is NOT propagated to the error_message
 #: because it may embed upstream API payloads.
 LIBRARY_INGEST_SUMMARIZER_FAILED = "LIBRARY_INGEST_SUMMARIZER_FAILED"
+
+#: Source text exceeds the FR11 50K-word hard cap before the summarizer
+#: is called. Added by story 13-10. The error message names the word
+#: count, the cap, and a rough token-cost estimate (``word_count * 1.3``
+#: input tokens plus 500 output tokens) so the caller knows what they
+#: would have spent; it never echoes any filesystem path (NFR9). A
+#: caller can override by passing ``parameters["accept_large"] = "true"``.
+LIBRARY_INGEST_SOURCE_TOO_LARGE = "LIBRARY_INGEST_SOURCE_TOO_LARGE"
+
+#: Writing the summarizer's drafted new pages would push the Library
+#: past the FR12 500-page hard cap. Added by story 13-10. Raised from
+#: inside the ``sandbox.transaction(...)`` block so the context manager
+#: rolls back cleanly — no partial commit reaches git. The error
+#: message echoes only the current page count and the cap (both
+#: integers, NFR9-safe).
+LIBRARY_INGEST_LIBRARY_FULL = "LIBRARY_INGEST_LIBRARY_FULL"
 
 #: The supplied PDF bytes could not be parsed by the PDF library —
 #: missing ``%PDF-`` magic, a ``.png`` renamed to ``.pdf`` (adversarial),
@@ -224,6 +244,122 @@ _PDF_INVALID_MESSAGE = (
     "library_ingest: source_type=pdf but the supplied content is not "
     "a valid PDF (magic number mismatch, encrypted, or corrupt)."
 )
+
+
+# ─── FR11 / FR12 limit-enforcement constants (Story 13-10) ────────────
+
+#: FR11 hard cap on source word count. A source over this is rejected
+#: with :data:`LIBRARY_INGEST_SOURCE_TOO_LARGE` before the summarizer is
+#: called. Callers can override by passing
+#: ``parameters["accept_large"] = "true"``.
+MAX_INGEST_WORDS = 50_000
+
+#: FR12 soft cap on Library page count. Ingesting into a Library at or
+#: above this threshold logs a ``logger.warning`` but still proceeds.
+PAGE_COUNT_WARN = 200
+
+#: FR12 hard cap on Library page count. An ingest whose summarizer-drafted
+#: NEW pages would push the total past this count is rejected with
+#: :data:`LIBRARY_INGEST_LIBRARY_FULL`. Updates to existing pages are
+#: always allowed — they don't grow the Library.
+PAGE_COUNT_BLOCK = 500
+
+#: Rough tokens-per-word ratio for the FR11 cost estimate. Deliberately
+#: coarse — this is a warning copy aid, not a billing meter.
+_TOKENS_PER_WORD_HEURISTIC = 1.3
+
+#: Fixed output-token cost per summary invocation for the FR11 estimate.
+_SUMMARY_OUTPUT_TOKENS = 500
+
+# FR11 user-facing copy. Echoes only integers — no filesystem paths, no
+# raw source text. Formatted with named keys so tests can assert on the
+# numbers regardless of positional drift.
+_SOURCE_TOO_LARGE_FMT = (
+    "library_ingest: source has {word_count} words, exceeds "
+    "{max} word cap (rough token estimate: ~{tokens} tokens). "
+    "Pass accept_large=true to override."
+)
+
+# FR12 hard-block user-facing copy. Echoes only integers.
+_LIBRARY_FULL_FMT = (
+    "library_ingest: Library has {current} pages; adding {new} "
+    "more would exceed the {cap}-page hard cap (FR12)."
+)
+
+# FR12 advisory warning — logger.warning ONLY, never returned in a
+# SkillResult error_message. The "approaching 500-page soft cap"
+# phrasing is canonical for test assertions.
+_PAGE_COUNT_WARN_FMT = (
+    "library_ingest: Library approaching 500-page soft cap ({current}/500)"
+)
+
+# FR11 override-active warning, logged when accept_large=true is honoured.
+_ACCEPT_LARGE_WARN_FMT = (
+    "library_ingest: accept_large=true override — ingesting "
+    "{word_count}-word source (rough token estimate: ~{tokens} tokens)"
+)
+
+_ACCEPT_LARGE_TRUTHY = frozenset({"true", "1", "yes", "y", "on"})
+
+
+def _count_words(text: str) -> int:
+    """Return the rough word count of ``text`` via ``str.split()``.
+
+    Intentionally simple — collapses all whitespace runs, no
+    language-aware tokenization. This is a runaway guard, not a billing
+    meter (FR11 tolerates a ~20% fudge factor here).
+    """
+    return len(text.split())
+
+
+def _estimate_tokens(word_count: int) -> int:
+    """Rough LLM-token estimate for a ``word_count``-word source.
+
+    Formula: ``word_count * 1.3`` input tokens + 500 output tokens per
+    summary. Surfaced in FR11 error / warning copy so the caller can
+    see what they would have spent.
+    """
+    return int(word_count * _TOKENS_PER_WORD_HEURISTIC) + _SUMMARY_OUTPUT_TOKENS
+
+
+def _is_accept_large(parameters: Mapping[str, Any]) -> bool:
+    """Return ``True`` when ``parameters["accept_large"]`` is truthy.
+
+    The SkillInvocation wire format is string-typed
+    (``map<string, string>``) so the override is compared case-insensitively
+    against a fixed truthy set. Missing / empty / anything else is False.
+    """
+    raw = parameters.get("accept_large")
+    if raw is None:
+        return False
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in _ACCEPT_LARGE_TRUTHY
+
+
+def _count_library_pages(sandbox: LibrarySandbox) -> int:
+    """Return the current count of content pages in the Library.
+
+    Content pages are ``.md`` files returned by ``sandbox.list(".")``,
+    excluding ``index.md`` (bookkeeping) and anything under ``.git/``
+    (belt-and-braces — the sandbox shouldn't surface git internals but
+    we don't rely on it). Used by the FR12 warn / block gates in
+    :func:`_summarize_and_write`.
+    """
+    try:
+        raw = sandbox.list(".")
+    except Exception:  # noqa: BLE001 — caller stays robust on mock / missing dir
+        return 0
+    count = 0
+    for path in raw:
+        if not path.endswith(".md"):
+            continue
+        if path.startswith(".git/"):
+            continue
+        if path == "index.md":
+            continue
+        count += 1
+    return count
 
 
 # ─── Summarizer seam (13-8) ───────────────────────────────────────────
@@ -465,13 +601,16 @@ def _ingest_pipeline(
     else:
         source_text, source_name = _resolve_source_text(sandbox, parameters)
 
-    # Steps 3–6 — shared with the text/markdown path.
+    # Steps 3–6 — shared with the text/markdown path. ``accept_large``
+    # (Story 13-10 FR11 override) is resolved once here and forwarded
+    # so the pre-summarizer size gate knows whether to proceed.
     return _summarize_and_write(
         sandbox,
         source_text=source_text,
         source_name=source_name,
         user_hint_raw=parameters.get("user_summary_hint"),
         extra_metadata=extra_metadata,
+        accept_large=_is_accept_large(parameters),
     )
 
 
@@ -482,6 +621,7 @@ def _summarize_and_write(
     source_name: str,
     user_hint_raw: Any,
     extra_metadata: Mapping[str, Any],
+    accept_large: bool = False,
 ) -> SkillResult:
     """Summarizer call + single-transaction write path (shared).
 
@@ -492,6 +632,33 @@ def _summarize_and_write(
     the transaction's ``commit_metadata`` without this helper needing
     to know anything about the upstream source format.
     """
+    # ── FR11 pre-summarizer size gate (Story 13-10) ──────────────────
+    # Count words BEFORE the summarizer is called so a runaway source
+    # never spends any LLM tokens. ``accept_large=true`` overrides with
+    # a warning so power users can still push a one-off mega-source
+    # through without editing the constant.
+    word_count = _count_words(source_text)
+    if word_count > MAX_INGEST_WORDS:
+        token_estimate = _estimate_tokens(word_count)
+        if accept_large:
+            # Override path — proceed with a warning. (Kept as a seam
+            # in case future stories want to gate the override behind
+            # plan state.)
+            logger.warning(
+                _ACCEPT_LARGE_WARN_FMT.format(
+                    word_count=word_count, tokens=token_estimate
+                )
+            )
+        else:
+            raise LibrarySkillError(
+                _SOURCE_TOO_LARGE_FMT.format(
+                    word_count=word_count,
+                    max=MAX_INGEST_WORDS,
+                    tokens=token_estimate,
+                ),
+                code=LIBRARY_INGEST_SOURCE_TOO_LARGE,
+            )
+
     # Step 3 — summarizer wired? Do this BEFORE opening a transaction
     # so the "sandbox.transaction is never called" invariant holds.
     summarizer = get_summarizer()
@@ -499,6 +666,16 @@ def _summarize_and_write(
         raise LibrarySkillError(
             _NO_SUMMARIZER_MESSAGE,
             code=LIBRARY_INGEST_NO_SUMMARIZER,
+        )
+
+    # ── FR12 pre-transaction advisory warning (Story 13-10) ──────────
+    # Emitted BEFORE the transaction opens so the page count reflects
+    # the on-disk state, not the mid-transaction staging area. Log-only
+    # (not in SkillResult) — 13-27 didn't add a warnings channel.
+    existing_page_count = _count_library_pages(sandbox)
+    if existing_page_count >= PAGE_COUNT_WARN:
+        logger.warning(
+            _PAGE_COUNT_WARN_FMT.format(current=existing_page_count)
         )
 
     user_hint = str(user_hint_raw) if user_hint_raw else None
@@ -528,6 +705,33 @@ def _summarize_and_write(
     ingest_ts = _utc_now_iso()
 
     with sandbox.transaction("ingest", commit_subject) as handle:
+        # ── FR12 hard-block page-count gate (Story 13-10) ────────────
+        # We re-count existing content pages inside the transaction
+        # (using the same on-disk state as the pre-transaction warn
+        # gate — LibrarySandbox.transaction does not stage writes in
+        # a separate view) and compute how many of the summarizer's
+        # drafts are NEW pages vs. updates to existing ones. If adding
+        # the new ones would cross the hard cap, raise
+        # LIBRARY_INGEST_LIBRARY_FULL — the context manager rolls back
+        # the (still-empty) transaction and no writes are persisted.
+        _existing_now = _count_library_pages(sandbox)
+        _new_page_count = 0
+        for _draft in result.drafts:
+            _p = _normalize_page_path(_draft.path)
+            if _p == "index.md":
+                continue
+            if not sandbox.exists(_p):
+                _new_page_count += 1
+        if _existing_now + _new_page_count > PAGE_COUNT_BLOCK:
+            raise LibrarySkillError(
+                _LIBRARY_FULL_FMT.format(
+                    current=_existing_now,
+                    new=_new_page_count,
+                    cap=PAGE_COUNT_BLOCK,
+                ),
+                code=LIBRARY_INGEST_LIBRARY_FULL,
+            )
+
         new_page_entries: list[tuple[str, str]] = []  # (path, title)
         for draft in result.drafts:
             page_path = _normalize_page_path(draft.path)
@@ -1039,15 +1243,20 @@ __all__ = [
     "LIBRARY_DISABLED",
     "LIBRARY_INGEST_BINARY_REJECTED",
     "LIBRARY_INGEST_INVALID_ARGS",
+    "LIBRARY_INGEST_LIBRARY_FULL",
     "LIBRARY_INGEST_NO_SUMMARIZER",
     "LIBRARY_INGEST_NOT_IMPLEMENTED",
     "LIBRARY_INGEST_PDF_EMPTY_EXTRACTION",
     "LIBRARY_INGEST_PDF_INVALID",
     "LIBRARY_INGEST_SOURCE_NOT_FOUND",
+    "LIBRARY_INGEST_SOURCE_TOO_LARGE",
     "LIBRARY_INGEST_SUMMARIZER_FAILED",
     "LIBRARY_INGEST_UNSUPPORTED_TYPE",
     "LIBRARY_READ_ONLY",
+    "MAX_INGEST_WORDS",
     "OPTIONAL_PARAMS",
+    "PAGE_COUNT_BLOCK",
+    "PAGE_COUNT_WARN",
     "PageDraft",
     "REQUIRED_PARAMS",
     "SKILL_NAME",
