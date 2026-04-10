@@ -1284,17 +1284,23 @@ def _resolve_source_text(
 
     # Filesystem path — must stay inside the sandbox. NFR9: no path
     # ever leaks into the error message.
+    #
+    # Order matters: `UnicodeDecodeError` is a subclass of `ValueError`
+    # (stdlib hierarchy), so the binary-rejection branch MUST come first
+    # or pyright will flag the ValueError catch as shadowing it and the
+    # binary path becomes dead code. This used to misreport `.png`
+    # sources as `SOURCE_NOT_FOUND` instead of `BINARY_REJECTED`.
     try:
         text = sandbox.read(source_ref)
-    except (PathEscapeError, FileNotFoundError, IsADirectoryError, NotADirectoryError, ValueError):
-        raise LibrarySkillError(
-            _SOURCE_NOT_FOUND_MESSAGE,
-            code=LIBRARY_INGEST_SOURCE_NOT_FOUND,
-        ) from None
     except UnicodeDecodeError:
         raise LibrarySkillError(
             _BINARY_REJECTED_MESSAGE,
             code=LIBRARY_INGEST_BINARY_REJECTED,
+        ) from None
+    except (PathEscapeError, FileNotFoundError, IsADirectoryError, NotADirectoryError, ValueError):
+        raise LibrarySkillError(
+            _SOURCE_NOT_FOUND_MESSAGE,
+            code=LIBRARY_INGEST_SOURCE_NOT_FOUND,
         ) from None
 
     if "\x00" in text:
