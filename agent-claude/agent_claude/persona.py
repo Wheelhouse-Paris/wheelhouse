@@ -25,20 +25,28 @@ class Persona:
     stream_contexts: dict[str, str] = field(default_factory=dict)
     streams: list[str] = field(default_factory=list)
     platform_context: str = ""
+    library_schema_path: str | None = None
 
     def build_system_prompt(self) -> str:
         """Build the system prompt by concatenating platform context, persona files,
-        stream contexts, and batch output instructions.
+        stream contexts, Library schema, and batch output instructions.
 
-        Layer order (ADR-033, E12-10):
+        Layer order (ADR-033, E12-10, Story 13.21):
           L0-L2: platform_context (capabilities, CLI reference, topology state)
           L3:    SOUL + IDENTITY + MEMORY
           L4:    per-stream CONTEXT.md sections
+          L5:    Library schema from ``library_schema_path`` (read fresh per turn)
           +      batch output instruction (ADR-022)
 
         Stream context sections are appended in alphabetical order by stream name.
-        Each section has a markdown header: '## Stream Context: <stream_name>'
+        Each section has a markdown header: '## Stream Context: <stream_name>'.
+
+        L5 is injected only when ``library_schema_path`` is set (set by
+        ``run_startup`` iff WH_LIBRARY_STATUS != "disabled"). The schema file
+        is re-read on every call to pick up broker-side updates without
+        requiring an agent restart (Story 13.21 AC).
         """
+        from agent_claude.layers import load_l5_library_schema
         from agent_claude.response_parser import format_batch_instruction
 
         parts: list[str] = []
@@ -54,6 +62,12 @@ class Persona:
         for stream_name in sorted(self.stream_contexts):
             content = self.stream_contexts[stream_name]
             parts.append(f"## Stream Context: {stream_name}\n\n{content}")
+
+        # L5: Library schema (Story 13.21, FR27, ADR-037) — fresh read per turn
+        if self.library_schema_path:
+            l5 = load_l5_library_schema(self.library_schema_path)
+            if l5 is not None:
+                parts.append(l5)
 
         # Batch output instruction (ADR-022)
         parts.append(format_batch_instruction(self.streams))

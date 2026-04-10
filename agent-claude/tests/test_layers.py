@@ -497,3 +497,177 @@ class TestAssemblePlatformContext:
         assert "## Wheelhouse Capabilities" in result
         assert "CLI Reference" not in result
         assert "Topology State" not in result
+
+
+# ---------------------------------------------------------------------------
+# Story 13.21: L5 Library schema layer
+# ---------------------------------------------------------------------------
+
+
+class TestLayer5LibrarySchema:
+    """L5 Library schema is appended after L4 and re-read fresh on each turn.
+
+    Covers AC-1 through AC-4 of Story 13.21.
+    """
+
+    def test_ac1_l5_is_after_l4_and_before_batch_instruction(
+        self, tmp_path: Path
+    ) -> None:
+        """AC-1: L5 appears after L4 and before the batch output instruction."""
+        from agent_claude.persona import Persona
+
+        schema_file = tmp_path / ".wh-schema.md"
+        schema_file.write_text("# Library Schema\n\nhow to use Library")
+
+        persona = Persona(
+            soul="s",
+            identity="i",
+            memory="m",
+            stream_contexts={"main": "ctx"},
+            streams=["main"],
+            platform_context="## Wheelhouse Capabilities\n\ncaps",
+            library_schema_path=str(schema_file),
+        )
+        prompt = persona.build_system_prompt()
+
+        assert "## Library Schema" in prompt
+        assert "how to use Library" in prompt
+
+        idx_l4 = prompt.index("## Stream Context: main")
+        idx_l5 = prompt.index("## Library Schema")
+        assert idx_l5 > idx_l4, "L5 must appear after L4"
+
+        # Batch output instruction should be the last part — it comes after L5.
+        from agent_claude.response_parser import format_batch_instruction
+
+        batch_text = format_batch_instruction(["main"])
+        # Find a stable marker from inside the batch instruction.
+        idx_batch = prompt.index(batch_text)
+        assert idx_batch > idx_l5, (
+            "batch output instruction must remain last, after L5"
+        )
+
+    def test_ac2_l5_absent_when_library_schema_path_is_none(self) -> None:
+        """AC-2: L5 is absent when library_schema_path is None (default)."""
+        from agent_claude.persona import Persona
+
+        persona = Persona(
+            soul="s",
+            identity="i",
+            memory="m",
+            stream_contexts={"main": "ctx"},
+            streams=["main"],
+        )
+        assert persona.library_schema_path is None
+        prompt = persona.build_system_prompt()
+        assert "## Library Schema" not in prompt
+
+    def test_ac2_byte_identical_to_pre_story_output(self) -> None:
+        """AC-2: When L5 is not wired, the prompt is byte-identical to a
+        Persona built without the library_schema_path field — no stray blank
+        lines or extra separators."""
+        from agent_claude.persona import Persona
+
+        with_field = Persona(
+            soul="s",
+            identity="i",
+            memory="m",
+            stream_contexts={"main": "ctx"},
+            streams=["main"],
+            platform_context="## Wheelhouse Capabilities\n\ncaps",
+            library_schema_path=None,
+        )
+        without_field = Persona(
+            soul="s",
+            identity="i",
+            memory="m",
+            stream_contexts={"main": "ctx"},
+            streams=["main"],
+            platform_context="## Wheelhouse Capabilities\n\ncaps",
+        )
+        assert with_field.build_system_prompt() == without_field.build_system_prompt()
+
+    def test_ac3_file_vanishes_between_turns(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """AC-3: If the schema file is deleted between turns, the next call
+        simply skips L5, emits a debug log, and does NOT raise."""
+        from agent_claude.persona import Persona
+
+        schema_file = tmp_path / ".wh-schema.md"
+        schema_file.write_text("v1")
+
+        persona = Persona(
+            soul="s",
+            identity="i",
+            memory="m",
+            streams=["main"],
+            library_schema_path=str(schema_file),
+        )
+        prompt_turn_n = persona.build_system_prompt()
+        assert "## Library Schema" in prompt_turn_n
+
+        schema_file.unlink()
+
+        with caplog.at_level(logging.DEBUG, logger="agent_claude"):
+            prompt_turn_n_plus_1 = persona.build_system_prompt()
+
+        assert "## Library Schema" not in prompt_turn_n_plus_1
+        assert any(
+            "L5 Library schema file not found" in record.message
+            for record in caplog.records
+        )
+
+    def test_ac4_l5_is_re_read_fresh_on_every_turn(self, tmp_path: Path) -> None:
+        """AC-4: The schema file is re-read on every call so updates propagate."""
+        from agent_claude.persona import Persona
+
+        schema_file = tmp_path / ".wh-schema.md"
+        schema_file.write_text("v1")
+
+        persona = Persona(
+            soul="s",
+            identity="i",
+            memory="m",
+            streams=["main"],
+            library_schema_path=str(schema_file),
+        )
+        prompt_1 = persona.build_system_prompt()
+        assert "v1" in prompt_1
+
+        schema_file.write_text("v2")
+        prompt_2 = persona.build_system_prompt()
+        assert "v2" in prompt_2
+        assert "v1" not in prompt_2
+
+    def test_load_l5_library_schema_empty_file_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Empty content is treated as absent — no empty L5 heading in prompt."""
+        from agent_claude.layers import load_l5_library_schema
+
+        empty_file = tmp_path / ".wh-schema.md"
+        empty_file.write_text("   \n  \n")
+
+        assert load_l5_library_schema(str(empty_file)) is None
+
+    def test_load_l5_library_schema_missing_file_returns_none(
+        self, tmp_path: Path
+    ) -> None:
+        """Missing file returns None, never raises."""
+        from agent_claude.layers import load_l5_library_schema
+
+        missing = tmp_path / "nope.md"
+        assert load_l5_library_schema(str(missing)) is None
+
+    def test_load_l5_library_schema_formats_heading(self, tmp_path: Path) -> None:
+        """Successful load returns a well-formed markdown section."""
+        from agent_claude.layers import load_l5_library_schema
+
+        schema_file = tmp_path / ".wh-schema.md"
+        schema_file.write_text("# Library Schema\n\nbody content\n")
+
+        result = load_l5_library_schema(str(schema_file))
+        assert result is not None
+        assert result.startswith("## Library Schema\n\n")
+        assert "body content" in result

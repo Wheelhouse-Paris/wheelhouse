@@ -1,17 +1,19 @@
-"""Layered context assembly for agent-claude (ADR-033, Story 12.4).
+"""Layered context assembly for agent-claude (ADR-033, Story 12.4, Story 13.21).
 
-Assembles startup context in 5 layers, each additive, in fixed order:
+Assembles startup context in 6 layers, each additive, in fixed order:
 
   L0: /etc/wh/capabilities.json — what Wheelhouse can do
   L1: /etc/wh/cli-reference.md (or `wh reference` subprocess) — how to invoke wh commands
   L2: `wh topology plan --format json` subprocess — current topology state
   L3: /persona/{SOUL,IDENTITY,MEMORY}.md — agent identity (existing, handled by persona.py)
   L4: .wh/context/<stream>/CONTEXT.md — per-stream context (existing, handled by context.py)
+  L5: /workspace/.wh-schema.md — Library schema (Story 13.21, FR27, ADR-037)
 
 Constraints:
-  E12-10: Layer assembly order L0→L1→L2→L3→L4 is fixed
+  E12-10: Layer assembly order L0→L1→L2→L3→L4→L5 is fixed
   E12-11: Missing layers are skipped with a warning log — agent still starts
   E12-12: Total context size logged at startup for observability
+  13-21:  L5 is re-read fresh at every turn (not cached) so schema updates propagate immediately
 """
 
 from __future__ import annotations
@@ -207,6 +209,53 @@ def load_l2_topology_state() -> str | None:
         len(output.encode("utf-8")),
     )
     return f"## Topology State\n\n```json\n{output}\n```"
+
+
+def load_l5_library_schema(path: str) -> str | None:
+    """Load L5: Library schema file content (Story 13.21, FR27, ADR-037).
+
+    Reads the schema file freshly on every call — the epic AC explicitly
+    forbids caching so that schema updates (via broker redeploy) propagate
+    to the next conversation turn without an agent restart.
+
+    Any failure to read (missing file, permission error, empty content) is
+    logged at DEBUG and returns None. This function never raises; it is the
+    caller's contract to gate on ``Persona.library_schema_path`` being set
+    in the first place, so the disabled case doesn't even reach here.
+
+    Args:
+        path: Absolute path to the schema file (typically /workspace/.wh-schema.md).
+
+    Returns:
+        Formatted context section "## Library Schema\\n\\n<content>", or None if
+        the file is missing, unreadable, or empty.
+    """
+    schema_path = Path(path)
+
+    if not schema_path.exists():
+        logger.debug(
+            "L5 Library schema file not found at %s — skipping layer", path
+        )
+        return None
+
+    try:
+        raw = schema_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.debug(
+            "L5 Library schema unreadable at %s: %s — skipping layer",
+            path,
+            exc,
+        )
+        return None
+
+    content = raw.strip()
+    if not content:
+        logger.debug(
+            "L5 Library schema at %s is empty — skipping layer", path
+        )
+        return None
+
+    return f"## Library Schema\n\n{content}"
 
 
 def assemble_platform_context() -> str:
