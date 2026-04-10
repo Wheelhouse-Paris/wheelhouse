@@ -182,6 +182,14 @@ async def run_startup() -> dict[str, Any]:
     # clean LIBRARY_DISABLED refusal in that case.
     config["library_sandbox"] = build_library_sandbox(config)
 
+    # Step 1d: Wire the Claude-backed summarizer into the library_ingest
+    # skill. Without this, every ingest fails with LIBRARY_INGEST_NO_SUMMARIZER
+    # because the SDK ships only the seam, not the LLM bridge.
+    if config.get("library_sandbox") is not None:
+        from agent_claude import library_summarizer
+
+        library_summarizer.install(config)
+
     # Step 1b: Assemble platform context layers L0-L2 (ADR-033)
     platform_context = assemble_platform_context()
 

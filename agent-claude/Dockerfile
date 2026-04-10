@@ -27,12 +27,15 @@ FROM python:3.12-slim
 ARG GIT_SHA=unknown
 ARG VERSION=0.1.0
 
-# Install Node.js (required for Claude Code CLI)
+# Install Node.js (required for Claude Code CLI) and git (Epic 13 / NFR33 —
+# the LibrarySandbox shells out to `git init`, `git add`, `git commit`, etc.
+# at runtime, so the binary must be present in the agent container).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
         gnupg \
+        git \
     && mkdir -p /etc/apt/keyrings \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
