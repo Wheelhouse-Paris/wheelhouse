@@ -5,7 +5,10 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict
+from typing import (
+    Dict,
+    Optional,
+)
 
 import betterproto
 
@@ -28,6 +31,20 @@ class TextMessage(betterproto.Message):
     Target user ID for response routing (FR59).
      Set by agents when responding to a specific user.
      Surfaces use this to route responses to the correct chat/session.
+    """
+
+    source_stream: str = betterproto.string_field(6)
+    """
+    Source stream name — populated by surfaces on inbound messages (Epic 10, Story 10.2).
+     Identifies which stream this message originated from.
+     Empty string for messages published by agents or non-surface publishers.
+    """
+
+    source_topic: str = betterproto.string_field(7)
+    """
+    Source topic name — human-readable topic label, populated by wh-telegram (Epic 10, Story 10.2).
+     For Telegram multi-chat surfaces: the topic name (e.g. "Iktos", "General").
+     Empty string for non-topic surfaces (CLI, single-stream Telegram).
     """
 
 
@@ -76,6 +93,17 @@ class SkillResult(betterproto.Message):
     error_message: str = betterproto.string_field(5)
     error_code: str = betterproto.string_field(6)
     timestamp_ms: int = betterproto.int64_field(7)
+    library_tokens: Optional[int] = betterproto.uint32_field(8, optional=True)
+    """
+    Wheelhouse Library piggyback fields (Story 13-27, FR35, Epic 13
+     Cross-Codebase Contract §1). Populated by Library skills (ingest, lint,
+     retrieval) so wh-cloud's metering Lambda can aggregate usage without a
+     new message type or transport (NFR29). Older consumers ignore unknown
+     optional fields per proto3 wire compatibility.
+    """
+
+    library_page_count: Optional[int] = betterproto.uint32_field(9, optional=True)
+    library_last_ingest_at: Optional[str] = betterproto.string_field(10, optional=True)
 
 
 @dataclass(eq=False, repr=False)
@@ -83,9 +111,9 @@ class SkillProgress(betterproto.Message):
     """
     SkillProgress — intermediate progress update during skill execution (CM-06).
 
-    Used for two patterns:
-    1. General progress: progress_percent + status_message (e.g., agent starting)
-    2. Streaming output: chunk + sequence (e.g., wh-cli line-by-line output, E12-21)
+     Used for two patterns:
+     1. General progress: progress_percent + status_message (e.g., agent starting)
+     2. Streaming output: chunk + sequence (e.g., wh-cli line-by-line output, E12-21)
     """
 
     invocation_id: str = betterproto.string_field(1)
@@ -94,10 +122,9 @@ class SkillProgress(betterproto.Message):
     status_message: str = betterproto.string_field(4)
     timestamp_ms: int = betterproto.int64_field(5)
     chunk: str = betterproto.string_field(6)
-    """One line/chunk of output (Story 12-7, E12-21)."""
+    """Streaming output fields (Story 12-7, E12-21)"""
 
     sequence: int = betterproto.uint32_field(7)
-    """Ordering number for chunk reassembly (Story 12-7)."""
 
 
 @dataclass(eq=False, repr=False)

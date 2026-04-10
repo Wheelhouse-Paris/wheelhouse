@@ -171,11 +171,66 @@ mod tests {
             error_message: String::new(),
             error_code: String::new(),
             timestamp_ms: 1710000000000,
+            // Library piggyback fields (Story 13-27, FR35).
+            library_tokens: None,
+            library_page_count: None,
+            library_last_ingest_at: None,
         };
         let encoded = original.encode_to_vec();
         let decoded = SkillResult::decode(encoded.as_slice()).unwrap();
         assert!(decoded.success);
         assert_eq!(original.output, decoded.output);
+    }
+
+    #[test]
+    fn skill_result_library_piggyback_roundtrip() {
+        // Story 13-27 / FR35: Library skills populate the new optional fields
+        // and they round-trip across the wire intact.
+        let original = SkillResult {
+            invocation_id: "inv-lib-1".to_string(),
+            skill_name: "library_ingest".to_string(),
+            success: true,
+            output: "ingested 12 pages".to_string(),
+            error_message: String::new(),
+            error_code: String::new(),
+            timestamp_ms: 1710000000000,
+            library_tokens: Some(4096),
+            library_page_count: Some(12),
+            library_last_ingest_at: Some("2026-04-10T14:30:00Z".to_string()),
+        };
+        let encoded = original.encode_to_vec();
+        let decoded = SkillResult::decode(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.library_tokens, Some(4096));
+        assert_eq!(decoded.library_page_count, Some(12));
+        assert_eq!(
+            decoded.library_last_ingest_at.as_deref(),
+            Some("2026-04-10T14:30:00Z")
+        );
+    }
+
+    #[test]
+    fn skill_result_legacy_bytes_decode_with_default_library_fields() {
+        // Story 13-27 backward-compat: a SkillResult byte sequence emitted by
+        // pre-13-27 code (no library_* fields) decodes cleanly with the new
+        // optionals defaulting to None.
+        let legacy = SkillResult {
+            invocation_id: "inv-legacy".to_string(),
+            skill_name: "echo".to_string(),
+            success: true,
+            output: "hello".to_string(),
+            error_message: String::new(),
+            error_code: String::new(),
+            timestamp_ms: 1700000000000,
+            library_tokens: None,
+            library_page_count: None,
+            library_last_ingest_at: None,
+        };
+        let encoded = legacy.encode_to_vec();
+        let decoded = SkillResult::decode(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.invocation_id, "inv-legacy");
+        assert_eq!(decoded.library_tokens, None);
+        assert_eq!(decoded.library_page_count, None);
+        assert_eq!(decoded.library_last_ingest_at, None);
     }
 
     #[test]

@@ -24,6 +24,15 @@ message SkillResult {
   string error_code = 6;
   int64 timestamp_ms = 7;
 
+  // Wheelhouse Library piggyback fields (Story 13-27, FR35, Epic 13
+  // Cross-Codebase Contract §1). Populated by Library skills (ingest, lint,
+  // retrieval) so wh-cloud's metering Lambda can aggregate usage without a
+  // new message type or transport (NFR29). Older consumers ignore unknown
+  // optional fields per proto3 wire compatibility.
+  optional uint32 library_tokens = 8;            // Total LLM tokens consumed
+  optional uint32 library_page_count = 9;        // Total page count after the operation
+  optional string library_last_ingest_at = 10;   // ISO 8601 timestamp of last successful ingest
+
   // Reserved for future evolution (TT-02)
   reserved 50 to 100;
 }
