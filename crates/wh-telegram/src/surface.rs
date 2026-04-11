@@ -10,10 +10,39 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use teloxide::net::Download;
 use teloxide::prelude::*;
 use teloxide::types::{ChatAction, ChatId, MessageId, ThreadId};
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{error, instrument};
+use tracing::{error, info, instrument, warn};
+
+/// Maximum attachment size accepted by the Library ingest path.
+///
+/// 5 MiB is the Library's practical ingest budget: Telegram's free-bot
+/// `getFile` API caps at 20 MiB, LLM context economics make pages >500 KiB
+/// after extraction a bad tradeoff, and our transport carries the bytes
+/// inline in a proto3 message. Files larger than this limit are rejected
+/// surface-side with a clear user-visible error before the envelope is
+/// built — we never pay the download cost for oversized files.
+const MAX_ATTACHMENT_BYTES: u32 = 5 * 1024 * 1024;
+
+/// Classify a document's MIME type against the Library ingest allow-list.
+///
+/// Returns `true` for types the 13-7 / 13-8 / 13-9 ingest pipeline can
+/// currently handle: PDFs (`application/pdf`), plain text, and markdown
+/// in its various reported forms. Other types (Office documents, images,
+/// archives, etc.) are not yet ingestable — the surface still forwards
+/// them so the agent can decide, but we log a warning when we see one.
+fn is_ingestable_mime(mime: &str) -> bool {
+    matches!(
+        mime,
+        "application/pdf"
+            | "text/plain"
+            | "text/markdown"
+            | "text/x-markdown"
+            | "text/x-web-markdown"
+    )
+}
 
 use wh_proto::TextMessage;
 use wh_user::UserStore;
@@ -81,16 +110,144 @@ impl TelegramSurface {
         }
     }
 
+    /// Attempt to download a document attachment from an incoming message.
+    ///
+    /// Returns:
+    /// - `Ok(Some((bytes, filename, mime_type)))` — document present and
+    ///   within the size cap, downloaded successfully.
+    /// - `Ok(None)` — no document attached (plain text or non-document
+    ///   message type like photo/voice/video).
+    /// - `Err(AttachmentTooLarge)` — document present but over
+    ///   [`MAX_ATTACHMENT_BYTES`]. Caller should reply to the user and
+    ///   NOT publish an envelope.
+    /// - `Err(AttachmentDownloadFailed)` — Telegram API error during
+    ///   `get_file` or `download_file`. Propagate.
+    ///
+    /// Only the `document` message kind is in scope for v1 — photos
+    /// (which arrive as resized `PhotoSize` entries), voice, video, and
+    /// stickers are intentionally skipped because they have no
+    /// meaningful Library ingest mapping.
+    async fn try_download_document(
+        &self,
+        bot: &Bot,
+        msg: &Message,
+    ) -> Result<Option<(Vec<u8>, String, String)>, TelegramError> {
+        let Some(doc) = msg.document() else {
+            return Ok(None);
+        };
+
+        // Size gate: reject before even touching the Telegram API so we
+        // never pay for the download on oversized files.
+        if doc.file.size > MAX_ATTACHMENT_BYTES {
+            return Err(TelegramError::AttachmentTooLarge {
+                size: u64::from(doc.file.size),
+                limit: u64::from(MAX_ATTACHMENT_BYTES),
+            });
+        }
+
+        let file_meta = bot
+            .get_file(doc.file.id.clone())
+            .await
+            .map_err(|e| TelegramError::AttachmentDownloadFailed(format!("get_file: {e}")))?;
+
+        // Re-check the real reported size in case `doc.file.size` was an
+        // estimate — Telegram's `getFile` returns the authoritative value.
+        if file_meta.size > MAX_ATTACHMENT_BYTES {
+            return Err(TelegramError::AttachmentTooLarge {
+                size: u64::from(file_meta.size),
+                limit: u64::from(MAX_ATTACHMENT_BYTES),
+            });
+        }
+
+        let mut buffer: Vec<u8> = Vec::with_capacity(file_meta.size as usize);
+        bot.download_file(&file_meta.path, &mut buffer)
+            .await
+            .map_err(|e| TelegramError::AttachmentDownloadFailed(format!("download_file: {e}")))?;
+
+        let filename = doc
+            .file_name
+            .clone()
+            .unwrap_or_else(|| format!("telegram-{}", doc.file.id));
+        let mime_type = doc
+            .mime_type
+            .as_ref()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+
+        // Soft-warn on mime types we do not (yet) know how to ingest —
+        // the agent-side router will reject them cleanly, but flagging
+        // here helps trace the path in the surface logs.
+        if !is_ingestable_mime(&mime_type) {
+            warn!(
+                %filename,
+                %mime_type,
+                "document mime_type is not a known Library ingest type; \
+                 forwarding anyway — agent will decide"
+            );
+        }
+
+        Ok(Some((buffer, filename, mime_type)))
+    }
+
     /// Processes an incoming Telegram message.
     ///
     /// 1. Registers user profile via UserStore
     /// 2. Records chat_id <-> user_id mapping
-    /// 3. Creates and queues TextMessage for stream publication
-    /// 4. Starts ack timer
+    /// 3. Downloads any file attachment (document) if present — capped at
+    ///    [`MAX_ATTACHMENT_BYTES`]; oversized files are rejected with a
+    ///    user-visible error reply and no envelope is published.
+    /// 4. Creates and queues TextMessage (with optional attachment bytes)
+    ///    for stream publication
+    /// 5. Starts ack timer
     #[instrument(skip(self, bot, msg))]
     pub async fn handle_incoming(&self, bot: &Bot, msg: &Message) -> Result<(), TelegramError> {
         let chat_id = msg.chat.id.0;
-        let text = msg.text().unwrap_or("").to_string();
+
+        // Read text body: prefer `caption` when a document/photo is present
+        // (Telegram puts any accompanying text there), else fall back to
+        // `text` for plain-text messages.
+        let text = msg
+            .caption()
+            .or_else(|| msg.text())
+            .unwrap_or("")
+            .to_string();
+
+        // Attempt to download a file attachment if the message is a
+        // document. Photos / voice / video are intentionally out of scope
+        // for v1 — only the `document` path is handled since that is how
+        // PDFs, markdown files, and text files arrive via Telegram.
+        let (attachment_bytes, attachment_filename, attachment_mime_type) =
+            match self.try_download_document(bot, msg).await {
+                Ok(Some(a)) => (a.0, a.1, a.2),
+                Ok(None) => (Vec::new(), String::new(), String::new()),
+                Err(TelegramError::AttachmentTooLarge { size, limit }) => {
+                    // Tell the user directly without publishing an envelope.
+                    let reply = format!(
+                        "⚠ File too large for Library ingest ({size} bytes). \
+                         Maximum accepted size is {limit} bytes ({} MiB).",
+                        limit / (1024 * 1024)
+                    );
+                    let send_result = bot.send_message(ChatId(chat_id), reply).await;
+                    if let Err(e) = send_result {
+                        error!(error = %e, "failed to send oversized-file reply");
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!(error = %e, "failed to download Telegram attachment");
+                    return Err(e);
+                }
+            };
+        let has_attachment = !attachment_bytes.is_empty();
+        if has_attachment {
+            info!(
+                filename = %attachment_filename,
+                mime = %attachment_mime_type,
+                size = attachment_bytes.len(),
+                "Telegram attachment downloaded; forwarding as TextMessage"
+            );
+        }
+
         let display_name = msg
             .from
             .as_ref()
@@ -138,6 +295,9 @@ impl TelegramSurface {
             reply_to_user_id: String::new(),
             source_stream,
             source_topic,
+            attachment_bytes,
+            attachment_filename,
+            attachment_mime_type,
         };
 
         // Queue for stream publication

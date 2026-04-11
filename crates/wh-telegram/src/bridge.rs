@@ -198,6 +198,12 @@ impl ZmqBridge {
             TelegramError::StreamError(format!("failed to connect PUB socket: {e}"))
         })?;
 
+        // ZMQ PUB/SUB slow-joiner mitigation: sleep 100 ms after connect
+        // so the broker's `subscribe("")` has a chance to propagate to
+        // our freshly-connected PUB socket before any real send. Mirrors
+        // the `wh-cli::commands::stream::execute_publish` pattern (WW-02).
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
         tracing::info!(
             endpoint = %pub_endpoint,
             "PUB socket connected to broker SUB endpoint"
@@ -321,6 +327,9 @@ mod tests {
             reply_to_user_id: String::new(),
             source_stream: String::new(),
             source_topic: String::new(),
+            attachment_bytes: Vec::new(),
+            attachment_filename: String::new(),
+            attachment_mime_type: String::new(),
         };
 
         let envelope_bytes = encode_text_message_envelope("main", "telegram-surface", &msg);
@@ -348,6 +357,9 @@ mod tests {
             reply_to_user_id: "usr_456".to_string(),
             source_stream: String::new(),
             source_topic: String::new(),
+            attachment_bytes: Vec::new(),
+            attachment_filename: String::new(),
+            attachment_mime_type: String::new(),
         };
 
         let envelope_bytes = encode_text_message_envelope("main", "agent-donna", &msg);

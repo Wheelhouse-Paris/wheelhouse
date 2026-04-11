@@ -39,6 +39,20 @@ pub enum TelegramError {
     /// State persistence error.
     #[error("state error: {0}")]
     StateError(String),
+
+    /// A Telegram document attachment exceeds the Library ingest size cap.
+    ///
+    /// Surfaced in-band (user-visible reply) rather than sanitized so the
+    /// operator can retry with a smaller file. The message shown to the
+    /// user is assembled by the caller — the error itself carries just
+    /// the numeric budget.
+    #[error("attachment too large: {size} bytes (limit {limit} bytes)")]
+    AttachmentTooLarge { size: u64, limit: u64 },
+
+    /// Failed to download a Telegram file attachment (network, missing
+    /// `file_path`, etc.).
+    #[error("attachment download failed: {0}")]
+    AttachmentDownloadFailed(String),
 }
 
 /// Sanitizes any error to a user-safe message.
@@ -68,6 +82,11 @@ mod tests {
             TelegramError::InvalidToken,
             TelegramError::MappingError("corrupt YAML".into()),
             TelegramError::StateError("file not found".into()),
+            TelegramError::AttachmentTooLarge {
+                size: 10_000_000,
+                limit: 5_242_880,
+            },
+            TelegramError::AttachmentDownloadFailed("network timeout".into()),
         ];
         for err in &errors {
             assert_eq!(
