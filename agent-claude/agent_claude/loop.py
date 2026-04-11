@@ -20,7 +20,10 @@ import json
 import logging
 from typing import Any
 
-from wheelhouse.skills.library_ingest import SKILL_REGISTRY as LIBRARY_SKILL_REGISTRY
+from wheelhouse.skills.library_ingest import (
+    SKILL_REGISTRY as LIBRARY_SKILL_REGISTRY,
+    run_library_ingest,
+)
 from wheelhouse.types import (
     CronEvent,
     SkillInvocation,
@@ -160,6 +163,7 @@ def _make_handler(
                 await _handle_text_message(
                     message, connection, stream_name, claude_client, persona,
                     agent_name, persona_path,
+                    config=config,
                 )
             elif isinstance(message, CronEvent):
                 await _handle_cron_event(
@@ -230,6 +234,7 @@ async def _handle_text_message(
     persona: Persona,
     agent_name: str,
     persona_path: str,
+    config: dict[str, Any] | None = None,
 ) -> None:
     """Handle an incoming TextMessage (AC #2, #6)."""
     # Self-echo filter (AC-07): skip messages published by this agent
@@ -240,6 +245,36 @@ async def _handle_text_message(
             message.publisher_id,
         )
         return
+
+    # Attachment branch: if the surface forwarded a file attachment
+    # alongside the text (e.g. a PDF dropped in Telegram), route the
+    # bytes into the Library ingest skill instead of the Claude chat
+    # loop. Gated on library_sandbox availability — if Library is
+    # disabled or the sandbox failed to build, we fall through to the
+    # normal chat path so the user still gets a useful response (the
+    # bytes are dropped in that case; this is the intended degradation
+    # per NFR24).
+    if message.attachment_bytes:
+        sandbox = (config or {}).get("library_sandbox")
+        if sandbox is not None:
+            await _handle_attached_ingest(
+                message,
+                connection,
+                stream_name,
+                claude_client,
+                persona,
+                agent_name,
+                persona_path,
+                config or {},
+            )
+            return
+        logger.info(
+            "TextMessage has attachment but Library sandbox is unavailable — "
+            "ignoring attachment bytes and falling through to chat path: "
+            "stream=%s filename=%s",
+            stream_name,
+            message.attachment_filename or "<unnamed>",
+        )
 
     # Re-read MEMORY.md before each Claude API call (AC-04)
     persona.reload_memory(persona_path)
@@ -289,6 +324,347 @@ async def _handle_text_message(
             source_stream=stream_name,
             reply_to_user_id=message.user_id,
         )
+
+
+async def _handle_attached_ingest(
+    message: TextMessage,
+    connection: Any,
+    stream_name: str,
+    claude_client: ClaudeClient,
+    persona: Persona,
+    agent_name: str,
+    persona_path: str,
+    config: dict[str, Any],
+) -> None:
+    """Route a TextMessage with attachment bytes to the Library ingest skill.
+
+    Called by ``_handle_text_message`` when ``message.attachment_bytes``
+    is non-empty and a per-agent LibrarySandbox is available. Builds an
+    inline ``library_ingest`` parameter map (using ``source_content``
+    rather than ``source_ref`` so the skill does not need to re-read the
+    bytes from inside the sandbox root) and dispatches the handler in a
+    thread so the synchronous Claude summarizer does not block the event
+    loop.
+
+    After a successful ingest, the newly written pages are read back
+    from the sandbox and injected into Claude's conversation session as
+    a synthetic user turn — this is the ONLY way Claude's session can
+    learn about the upload, because the attachment path bypasses the
+    normal chat flow entirely. Without this priming, follow-up questions
+    like "what do you know about this paper?" have no referent because
+    Claude's session never saw the filename or the content.
+    """
+    sandbox = config.get("library_sandbox")
+    library_status = config.get("library_status", "disabled")
+
+    filename = message.attachment_filename or "attachment"
+    mime_type = message.attachment_mime_type or ""
+    source_type = _mime_to_source_type(mime_type, filename)
+
+    # Publish a SkillProgress-style ack early so the user gets feedback
+    # while Claude summarises (can take 10-30s).
+    ack_text = TextMessage(
+        content=f"Ingesting **{filename}** into the Library — one moment…",
+        publisher_id=agent_name,
+        reply_to_user_id=message.user_id,
+    )
+    await _publish_response(
+        connection,
+        stream_name,
+        ack_text,
+        f"type=TextMessage(ingest-ack) stream={stream_name} filename={filename}",
+    )
+
+    # PDFs round-trip via Latin-1 so the bytes survive the proto3
+    # map<string,string> skill parameter; text/markdown is decoded as
+    # UTF-8 with a clean reject on invalid sequences.
+    try:
+        source_content = _bytes_to_param(message.attachment_bytes, source_type)
+    except UnicodeDecodeError:
+        reply = TextMessage(
+            content=(
+                f"⚠ Could not ingest **{filename}**: the file is not valid "
+                f"UTF-8 and `{source_type}` requires UTF-8. If it's a PDF, "
+                f"check the filename extension."
+            ),
+            publisher_id=agent_name,
+            reply_to_user_id=message.user_id,
+        )
+        await _publish_response(
+            connection, stream_name, reply, "type=TextMessage(ingest-err)"
+        )
+        return
+
+    parameters = {
+        "source_type": source_type,
+        "source_ref": filename,
+        "source_content": source_content,
+    }
+
+    invocation_id = f"surface-{stream_name}-{message.timestamp_ms}"
+    logger.info(
+        "library_ingest triggered by surface attachment: stream=%s filename=%s "
+        "size=%d source_type=%s",
+        stream_name,
+        filename,
+        len(message.attachment_bytes),
+        source_type,
+    )
+
+    skill_result: SkillResult = await asyncio.to_thread(
+        run_library_ingest,
+        sandbox,
+        parameters,
+        library_status=library_status,
+        invocation_id=invocation_id,
+    )
+
+    if not skill_result.success:
+        code = skill_result.error_code or "INGEST_FAILED"
+        msg = skill_result.error_message or "unknown error"
+        body = f"⚠ Could not ingest **{filename}** — `{code}`: {msg}"
+        logger.warning(
+            "library_ingest failed via surface attachment: "
+            "filename=%s code=%s msg=%s",
+            filename,
+            code,
+            msg,
+        )
+        reply = TextMessage(
+            content=body,
+            publisher_id=agent_name,
+            reply_to_user_id=message.user_id,
+        )
+        await _publish_response(
+            connection,
+            stream_name,
+            reply,
+            f"type=TextMessage(ingest-err) stream={stream_name} "
+            f"filename={filename} code={code}",
+        )
+        return
+
+    # Success path: read the newly-written pages back from the sandbox
+    # and prime Claude's conversation session with their content, so
+    # the user's follow-up questions ("what do you know about this
+    # paper?") have something to land on. Without this, Claude's
+    # session has zero record of the upload because the attachment
+    # bypassed the normal chat path entirely.
+    page_count = skill_result.library_page_count or 0
+    tokens = skill_result.library_tokens or 0
+    logger.info(
+        "library_ingest succeeded: filename=%s pages=%d tokens=%d — "
+        "priming claude session",
+        filename,
+        page_count,
+        tokens,
+    )
+
+    new_pages = _load_ingest_pages(sandbox, filename)
+    synthetic_prompt = _build_ingest_session_prompt(
+        filename, page_count, tokens, new_pages
+    )
+
+    # Re-read MEMORY.md (same as normal chat path) so the system prompt
+    # is current.
+    persona.reload_memory(persona_path)
+    system_prompt = persona.build_system_prompt()
+
+    result = await claude_client.complete(
+        system_prompt=system_prompt,
+        user_message=synthetic_prompt,
+        msg_type="TextMessage(ingest-prime)",
+        stream_name=stream_name,
+        conversation_id=message.user_id or stream_name,
+        timeout=180.0,  # Summarizer + confirmation together can take a while.
+    )
+
+    if result is None or not result.text.strip():
+        # Fallback: Claude timed out or refused. Still tell the user the
+        # ingest itself succeeded so they know the upload landed.
+        fallback = TextMessage(
+            content=(
+                f"✓ Ingested **{filename}** into your Library "
+                f"({page_count} page{'s' if page_count != 1 else ''}, "
+                f"{tokens} tokens). Ask me about it anytime."
+            ),
+            publisher_id=agent_name,
+            reply_to_user_id=message.user_id,
+        )
+        await _publish_response(
+            connection,
+            stream_name,
+            fallback,
+            f"type=TextMessage(ingest-result-fallback) stream={stream_name} "
+            f"filename={filename}",
+        )
+        return
+
+    # Parse the batch response like the normal chat path does so the
+    # output routing respects ADR-022.
+    items = parse_batch_response(result.text)
+    if items is None:
+        logger.warning(
+            "Malformed batch response from ingest prime — falling back "
+            "to plain text: stream=%s",
+            stream_name,
+        )
+        fallback = TextMessage(
+            content=result.text,
+            publisher_id=agent_name,
+            reply_to_user_id=message.user_id,
+        )
+        await _publish_response(
+            connection,
+            stream_name,
+            fallback,
+            f"type=TextMessage(ingest-prime-fallback) stream={stream_name} "
+            f"filename={filename} chars={len(result.text)}",
+        )
+        return
+    if not items:
+        logger.debug("Empty ingest-prime batch response: stream=%s", stream_name)
+        return
+    await publish_batch(
+        connection,
+        items,
+        agent_name,
+        source_stream=stream_name,
+        reply_to_user_id=message.user_id,
+    )
+
+
+def _load_ingest_pages(
+    sandbox: Any, filename: str
+) -> list[tuple[str, str]]:
+    """Read pages just written by a library_ingest call for ``filename``.
+
+    Uses ``.provenance.json`` (story 13-13) to enumerate the slugs that
+    match the source name, then reads each page via the sandbox. Returns
+    a list of ``(slug, body)`` tuples in provenance order, or an empty
+    list on any failure — the caller's fallback path handles that.
+
+    Kept defensive: provenance read errors, missing files, and invalid
+    JSON are all swallowed so a corrupted sidecar can never block the
+    chat reply.
+    """
+    try:
+        provenance_raw = sandbox.read(".provenance.json")
+    except Exception as exc:
+        logger.debug("could not read .provenance.json: %s", exc)
+        return []
+    try:
+        provenance = json.loads(provenance_raw)
+    except Exception as exc:
+        logger.debug("could not parse .provenance.json: %s", exc)
+        return []
+
+    entries = provenance.get("entries", {}) if isinstance(provenance, dict) else {}
+    if not isinstance(entries, dict):
+        return []
+
+    matching_slugs: list[str] = []
+    for slug, record in entries.items():
+        if not isinstance(record, dict):
+            continue
+        src = record.get("source") or ""
+        if src == filename:
+            matching_slugs.append(slug)
+
+    pages: list[tuple[str, str]] = []
+    for slug in matching_slugs:
+        try:
+            body = sandbox.read(slug)
+        except Exception as exc:
+            logger.debug("could not read page %s: %s", slug, exc)
+            continue
+        pages.append((slug, body))
+    return pages
+
+
+def _build_ingest_session_prompt(
+    filename: str,
+    page_count: int,
+    tokens: int,
+    pages: list[tuple[str, str]],
+) -> str:
+    """Build the synthetic user-turn text that primes Claude's session
+    with the content of a newly-ingested document.
+
+    Rendered as a single long user message so Claude's ``claude -p``
+    session (started or resumed under the user's ``conversation_id``)
+    picks it up as real conversation history. Subsequent follow-up
+    questions like "what do you know about this paper?" then resolve
+    against this content without requiring Claude to go hunt the
+    filesystem via its Bash tool.
+    """
+    parts: list[str] = []
+    parts.append(
+        f"I just uploaded a file via Telegram: **{filename}**. "
+        f"You summarized it into your Library as "
+        f"{page_count} page{'s' if page_count != 1 else ''} "
+        f"({tokens} tokens total). The pages are shown below — treat "
+        f"them as your working memory for this document. When I ask "
+        f"follow-up questions about it, answer from these pages first, "
+        f"and cite both the Library page slug and the source filename."
+    )
+    if pages:
+        parts.append("---\n## Library pages just written\n")
+        for slug, body in pages:
+            parts.append(f"### `{slug}`\n\n{body.strip()}\n")
+    else:
+        parts.append(
+            "_(I was unable to read the pages back from the sandbox — "
+            "if the user asks a follow-up, grep `/workspace/.library/` "
+            "directly.)_"
+        )
+    parts.append(
+        "Acknowledge that you've read the document and give me a "
+        "one-sentence summary. I'll ask follow-ups next."
+    )
+    return "\n\n".join(parts)
+
+
+def _mime_to_source_type(mime: str, filename: str) -> str:
+    """Map a MIME type (with filename fallback) to a library_ingest source_type.
+
+    The 13-7 enum is `text | markdown | pdf | url`. Unknown types fall
+    back to `text`, letting the skill's content-level validation produce
+    a clear error — a fallback is better than a hard-reject at this
+    layer because we've already paid for the download and the user
+    deserves a specific error from the ingest pipeline rather than a
+    vague surface rejection.
+    """
+    mime_lower = mime.lower().strip()
+    if mime_lower == "application/pdf":
+        return "pdf"
+    if mime_lower in ("text/markdown", "text/x-markdown", "text/x-web-markdown"):
+        return "markdown"
+    if mime_lower.startswith("text/"):
+        return "text"
+    # Fallback on file extension.
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext == "pdf":
+        return "pdf"
+    if ext in ("md", "markdown"):
+        return "markdown"
+    return "text"
+
+
+def _bytes_to_param(raw: bytes, source_type: str) -> str:
+    """Encode attachment bytes for transit through the ingest skill's
+    ``source_content`` parameter (which is typed ``str``).
+
+    * PDF → Latin-1 round-trip: every byte maps to one codepoint in
+      0..=255. The Python ingest skill's ``_resolve_pdf_bytes`` accepts
+      a str whose first 5 characters are ``%PDF-`` and re-encodes via
+      ``latin-1`` to recover the original bytes.
+    * Text / markdown → strict UTF-8 decode. ``UnicodeDecodeError``
+      propagates; the caller maps it to a user-facing error.
+    """
+    if source_type == "pdf":
+        return raw.decode("latin-1")
+    return raw.decode("utf-8")
 
 
 async def _handle_cron_event(
