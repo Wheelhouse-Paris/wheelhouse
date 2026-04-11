@@ -1,6 +1,13 @@
 # Rust
 target/
-vendor/
+# `vendor/` is generally ignored, but we keep vendor/zeromq/ under
+# version control because it's a patched fork of zeromq-rs 0.4.1 pulled
+# in via `[patch.crates-io]` in Cargo.toml to fix the upstream silent
+# large-message drop in `PubSocket::send` (see epic-13 live-deploy retro
+# §G8). Must be committed so clean clones reproduce the patched build.
+vendor/*
+!vendor/zeromq/
+vendor/zeromq/target/
 # Note: Cargo.lock is committed — shipped binary project (KR-02)
 
 # Node / Docs

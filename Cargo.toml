@@ -57,3 +57,13 @@ protoc-bin-vendored = "3"
 # Internal crates
 wh-proto = { path = "crates/wh-proto" }
 wh-skill = { path = "crates/wh-skill" }
+
+# Vendored zeromq-rs 0.4.1 with a patched `PubSocket::send` that replaces
+# the upstream `try_send` + noop-waker + ZMTP-silent-drop path with a
+# proper `SinkExt::send(...).await`. The upstream implementation
+# silently drops any message larger than the TCP send buffer on a
+# long-lived PUB socket because `poll_flush` is only polled once under a
+# noop waker. See `_bmad-output/implementation-artifacts/wh/epic-13-live-deployment-retro-2026-04-11.md`
+# §G8 for the full write-up and `vendor/zeromq/src/pub.rs` for the fix.
+[patch.crates-io]
+zeromq = { path = "vendor/zeromq" }
