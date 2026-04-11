@@ -27,6 +27,31 @@ message TextMessage {
   // Empty string for non-topic surfaces (CLI, single-stream Telegram).
   string source_topic = 7;
 
+  // ─── Attachment fields (Library ingest from surfaces) ─────────────────
+  //
+  // When a user attaches a file in a surface (e.g. a PDF dropped in a
+  // Telegram chat), the surface populates these three fields alongside
+  // the text `content` (which holds any caption). Agents that have the
+  // Library enabled can route such messages to the `library_ingest`
+  // skill without the operator running `wh library ingest` manually.
+  //
+  // `attachment_bytes` is the raw file content. Size is capped
+  // surface-side at 5 MiB; larger files are rejected with a clear
+  // user-visible error before the envelope is built.
+  //
+  // `attachment_filename` is the original filename as reported by the
+  // surface (Telegram `document.file_name`, CLI basename, etc.). Used
+  // as the `source_ref` for provenance and dedup.
+  //
+  // `attachment_mime_type` is the MIME type reported by the surface
+  // (Telegram `document.mime_type`). Agents map this to the
+  // `library_ingest` `source_type` enum (`application/pdf` → `pdf`,
+  // `text/*` → `text`/`markdown`).
+
+  bytes attachment_bytes = 8;
+  string attachment_filename = 9;
+  string attachment_mime_type = 10;
+
   // Reserved for future evolution (TT-02)
   reserved 50 to 100;
   reserved "metadata";

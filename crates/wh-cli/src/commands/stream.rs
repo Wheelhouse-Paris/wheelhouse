@@ -212,6 +212,9 @@ async fn execute_publish(
                 reply_to_user_id: String::new(),
                 source_stream: String::new(),
                 source_topic: String::new(),
+                attachment_bytes: Vec::new(),
+                attachment_filename: String::new(),
+                attachment_mime_type: String::new(),
             };
             ("wheelhouse.v1.TextMessage".to_string(), msg.encode_to_vec())
         }

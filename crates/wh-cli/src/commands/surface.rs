@@ -258,6 +258,9 @@ pub async fn run_cli(stream: &str, output_format: OutputFormat) -> Result<(), Wh
                     reply_to_user_id: String::new(),
                     source_stream: stream_name.clone(),
                     source_topic: String::new(),
+                    attachment_bytes: Vec::new(),
+                    attachment_filename: String::new(),
+                    attachment_mime_type: String::new(),
                 };
 
                 // Wrap in StreamEnvelope

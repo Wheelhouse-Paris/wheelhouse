@@ -43,6 +43,9 @@ pub fn build_text_message(content: &str, publisher_id: &str) -> wh_proto::TextMe
         reply_to_user_id: String::new(),
         source_stream: String::new(),
         source_topic: String::new(),
+        attachment_bytes: Vec::new(),
+        attachment_filename: String::new(),
+        attachment_mime_type: String::new(),
     }
 }
 

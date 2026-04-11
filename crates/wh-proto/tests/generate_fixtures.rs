@@ -15,7 +15,9 @@ const FIXTURE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixt
 fn generate_v1_fixtures() {
     std::fs::create_dir_all(FIXTURE_DIR).expect("Failed to create fixture directory");
 
-    // TextMessage fixture
+    // TextMessage fixture — all attachment fields left at their proto3
+    // defaults so the serialised bytes match the v1 baseline exactly
+    // (proto3 elides default-valued scalars/bytes on the wire).
     let text_msg = wh_proto::TextMessage {
         content: "Hello from Wheelhouse v0.1.0".to_string(),
         publisher_id: "fixture-generator".to_string(),
@@ -24,6 +26,9 @@ fn generate_v1_fixtures() {
         reply_to_user_id: String::new(),
         source_stream: String::new(),
         source_topic: String::new(),
+        attachment_bytes: Vec::new(),
+        attachment_filename: String::new(),
+        attachment_mime_type: String::new(),
     };
     let path = format!("{FIXTURE_DIR}/v1_text_message.bin");
     std::fs::write(&path, text_msg.encode_to_vec()).expect("Failed to write TextMessage fixture");

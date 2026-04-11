@@ -95,6 +95,9 @@ fn build_text_envelope(stream: &str, content: &str, publisher: &str) -> Vec<u8> 
         reply_to_user_id: String::new(),
         source_stream: String::new(),
         source_topic: String::new(),
+        attachment_bytes: Vec::new(),
+        attachment_filename: String::new(),
+        attachment_mime_type: String::new(),
     };
     let envelope = StreamEnvelope {
         stream_name: stream.to_string(),

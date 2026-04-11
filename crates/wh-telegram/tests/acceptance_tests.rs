@@ -89,6 +89,9 @@ mod ac2_incoming_message {
             reply_to_user_id: String::new(),
             source_stream: String::new(),
             source_topic: String::new(),
+            attachment_bytes: Vec::new(),
+            attachment_filename: String::new(),
+            attachment_mime_type: String::new(),
         };
         assert_eq!(msg.user_id, "usr_abc123");
     }
@@ -151,6 +154,9 @@ mod ac3_outgoing_response {
             reply_to_user_id: "usr_abc123".to_string(),
             source_stream: String::new(),
             source_topic: String::new(),
+            attachment_bytes: Vec::new(),
+            attachment_filename: String::new(),
+            attachment_mime_type: String::new(),
         };
         assert_eq!(msg.reply_to_user_id, "usr_abc123");
     }

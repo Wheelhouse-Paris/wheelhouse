@@ -47,6 +47,10 @@ class TextMessage(betterproto.Message):
      Empty string for non-topic surfaces (CLI, single-stream Telegram).
     """
 
+    attachment_bytes: bytes = betterproto.bytes_field(8)
+    attachment_filename: str = betterproto.string_field(9)
+    attachment_mime_type: str = betterproto.string_field(10)
+
 
 @dataclass(eq=False, repr=False)
 class FileMessage(betterproto.Message):
