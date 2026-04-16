@@ -31,6 +31,7 @@ from wheelhouse.librarian.decision_log import (
 )
 from wheelhouse.librarian.proto import LibraryWriteEvent
 from wheelhouse.librarian.types import DecisionResult
+from wheelhouse.skills.library_sandbox import LibrarySandbox
 from wheelhouse.skills.librarian.decide import decide
 from wheelhouse.skills.librarian.types import (
     ConversationMessage as PolicyConversationMessage,
@@ -70,7 +71,7 @@ class LibrarianLoop:
         library_id: str,
         locales: list[str] | None = None,
         llm_fn: Callable[[str, str], str] | None = None,
-        sandbox: object | None = None,
+        sandbox: LibrarySandbox | None = None,
         dedup: DedupCache | None = None,
         publish_skill_result: Callable[..., Any] | None = None,
         agent_name: str = "",

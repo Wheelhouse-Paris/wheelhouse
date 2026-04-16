@@ -135,7 +135,7 @@ def make_anthropic_llm_fn(api_key: str) -> Any:
 
     The Anthropic client is instantiated once and reused across calls.
     """
-    import anthropic
+    import anthropic  # type: ignore[import-untyped]
 
     client = anthropic.Anthropic(api_key=api_key)
 
