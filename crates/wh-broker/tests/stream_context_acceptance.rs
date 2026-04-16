@@ -246,6 +246,7 @@ fn description_yaml_roundtrip() {
         }],
         surfaces: vec![],
         guardrails: None,
+        subsystems: vec![],
     };
     let yaml = serde_yaml::to_string(&topo).unwrap();
     let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();

@@ -518,6 +518,7 @@ pub fn plan_with_options(
                 streams: vec![],
                 surfaces: vec![],
                 guardrails: None,
+                subsystems: vec![],
             };
             diff_topologies(&empty, &desired)
         }
@@ -676,7 +677,8 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -685,6 +687,7 @@ mod tests {
             }],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -726,11 +729,13 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -812,6 +817,7 @@ mod tests {
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -853,11 +859,13 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -900,11 +908,13 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -953,11 +963,13 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -1113,7 +1125,8 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -1122,6 +1135,7 @@ mod tests {
             }],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -1172,7 +1186,8 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![Surface {
@@ -1183,6 +1198,7 @@ mod tests {
                 chats: None,
             }],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -1233,7 +1249,8 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![
                 Stream {
@@ -1255,6 +1272,7 @@ mod tests {
                 chats: None,
             }],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),
@@ -1311,7 +1329,8 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -1329,6 +1348,7 @@ mod tests {
                 chats: None,
             }],
             guardrails: None,
+            subsystems: vec![],
         };
         std::fs::write(
             wh_dir.join("state.json"),

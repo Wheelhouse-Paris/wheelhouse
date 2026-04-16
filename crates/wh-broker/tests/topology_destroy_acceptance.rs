@@ -74,7 +74,8 @@ fn setup_deployed_repo() -> tempfile::TempDir {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![wh_broker::deploy::Stream {
             name: "main".to_string(),
@@ -83,6 +84,7 @@ fn setup_deployed_repo() -> tempfile::TempDir {
         }],
         surfaces: vec![],
         guardrails: None,
+        subsystems: vec![],
     };
     std::fs::write(
         wh_dir.join("state.json"),
@@ -256,6 +258,7 @@ fn destroy_on_empty_deployed_state_is_noop() {
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
+        subsystems: vec![],
     };
     std::fs::write(
         wh_dir.join("state.json"),

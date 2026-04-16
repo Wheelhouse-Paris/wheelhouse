@@ -194,7 +194,8 @@ fn agent_struct_persona_field_included_in_serialization() {
         persona: Some("agents/donna/".to_string()),
         skills: None,
         topology_edit: None,
-        volumes: None,
+        volumes: vec![],
+        env: None,
     };
     let yaml = serde_yaml::to_string(&agent).unwrap();
     assert!(

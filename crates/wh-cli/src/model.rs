@@ -37,6 +37,33 @@ pub struct WhFile {
     /// Optional broker configuration (ADR-029).
     /// When absent, native process fallback is used (deprecated).
     pub broker: Option<BrokerCliSpec>,
+
+    /// Subsystem declarations (ADR-045). Each entry references a subsystem
+    /// composition folder and provides operator parameters for template expansion.
+    pub subsystems: Option<Vec<SubsystemDecl>>,
+}
+
+/// A subsystem declaration within a `.wh` file (ADR-045).
+///
+/// References a composition folder (e.g., `subsystems/llm-wiki/`) and provides
+/// operator parameters that the composition loader uses to expand the subsystem
+/// into concrete topology primitives (agents, streams, volumes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubsystemDecl {
+    /// Path to the subsystem composition folder (e.g., `subsystems/llm-wiki/`).
+    pub path: Option<String>,
+
+    /// Agent names that participate in this subsystem.
+    pub members: Option<Vec<String>>,
+
+    /// Library name for the subsystem. Defaults to the topology name if omitted.
+    pub library_name: Option<String>,
+
+    /// Locale list for the librarian (e.g., `["en", "fr"]`).
+    pub locales: Option<Vec<String>>,
+
+    /// Optional custom decision prompt path.
+    pub decision_prompt: Option<String>,
 }
 
 /// Broker specification within a `.wh` file (ADR-029).

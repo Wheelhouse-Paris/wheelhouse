@@ -9,6 +9,7 @@
 pub mod apply;
 pub mod approval;
 pub mod autonomous;
+pub mod composition;
 pub mod gitignore;
 pub mod lint;
 pub mod memory;
@@ -91,6 +92,48 @@ pub struct Topology {
     /// Optional guardrails for safety constraints (e.g., max_replicas).
     #[serde(default)]
     pub guardrails: Option<Guardrails>,
+    /// Subsystem declarations (ADR-045). Expanded by the composition loader
+    /// before lint/plan/apply. After expansion, this vec is empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subsystems: Vec<SubsystemDecl>,
+}
+
+/// A subsystem declaration within a topology (ADR-045).
+///
+/// Consumed by the composition loader to generate concrete agents, streams,
+/// and volume mounts. After expansion, subsystem declarations are removed
+/// from the topology and their generated primitives are merged in.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubsystemDecl {
+    /// Path to the subsystem composition folder (e.g., `subsystems/llm-wiki/`).
+    pub path: String,
+    /// Agent names that participate in this subsystem.
+    #[serde(default)]
+    pub members: Vec<String>,
+    /// Library name. Defaults to the topology name if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_name: Option<String>,
+    /// Locale list for the librarian (e.g., `["en", "fr"]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locales: Option<Vec<String>>,
+    /// Optional custom decision prompt path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_prompt: Option<String>,
+}
+
+/// A volume mount declaration on an agent (ADR-043).
+///
+/// Specifies a named volume to mount at a given path inside the container,
+/// with an optional mount mode (`rw` or `ro`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VolumeMount {
+    /// Named volume (e.g., `wh-lab-llm-wiki-research`).
+    pub name: String,
+    /// Mount path inside the container (e.g., `/workspace/.library`).
+    pub mount: String,
+    /// Mount mode: `"rw"` (default) or `"ro"` (read-only, kernel-enforced EROFS).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_mode: Option<String>,
 }
 
 /// A skill reference in an agent's configuration.
@@ -160,9 +203,15 @@ pub struct Agent {
     /// Defaults to `false`. Must be declared in the `.wh` spec — not configurable at runtime (E12-13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology_edit: Option<bool>,
-    /// Additional named volume mounts with explicit mount points and access modes (ADR-043).
+    /// Explicit volume mounts (ADR-043). Used by subsystem composition to attach
+    /// library volumes with RO/RW mode. Existing persona/context mounts continue
+    /// using their boolean flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub volumes: Vec<VolumeMount>,
+    /// Optional environment variables for the agent container (ADR-045).
+    /// Used by subsystem composition to inject `WH_LIBRARY_WRITE_STREAM` etc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub volumes: Option<Vec<AgentVolumeMount>>,
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 fn default_replicas() -> u32 {
@@ -296,6 +345,9 @@ pub enum DeployError {
 
     #[error("topology edit denied: {0}")]
     TopologyEditDenied(String),
+
+    #[error("subsystem expansion failed: {0}")]
+    SubsystemExpansionFailed(String),
 }
 
 impl DeployError {
@@ -317,6 +369,7 @@ impl DeployError {
             DeployError::SecretsDetected(_) => "SECRETS_DETECTED",
             DeployError::ApprovalRequired(_) => "APPROVAL_REQUIRED",
             DeployError::TopologyEditDenied(_) => "TOPOLOGY_EDIT_DENIED",
+            DeployError::SubsystemExpansionFailed(_) => "SUBSYSTEM_EXPANSION_FAILED",
         }
     }
 }
@@ -484,6 +537,7 @@ fn load_topology_folder(
         streams: Vec::new(),
         surfaces: Vec::new(),
         guardrails: None,
+        subsystems: Vec::new(),
     };
 
     let mut source_map = ComponentSourceMap::default();
@@ -575,6 +629,9 @@ fn load_topology_folder(
                 .insert(format!("surface:{}", surface.name), filename.clone());
             merged.surfaces.push(surface);
         }
+
+        // Merge subsystems (ADR-045) — accumulate from all files
+        merged.subsystems.extend(topo.subsystems);
     }
 
     Ok((merged, source_map))
@@ -672,7 +729,8 @@ agents:
 
                     skills: None,
                     topology_edit: None,
-                    volumes: None,
+                    volumes: vec![],
+                    env: None,
                 },
                 Agent {
                     name: "alpha".to_string(),
@@ -683,7 +741,8 @@ agents:
 
                     skills: None,
                     topology_edit: None,
-                    volumes: None,
+                    volumes: vec![],
+                    env: None,
                 },
             ],
             streams: vec![
@@ -700,6 +759,7 @@ agents:
             ],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let canonical = canonicalize_topology(topo);
         assert_eq!(canonical.agents[0].name, "alpha");
@@ -806,11 +866,13 @@ streams:
                     version: "1.0.0".to_string(),
                 }]),
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
@@ -901,6 +963,7 @@ agents:
                 },
             ],
             guardrails: None,
+            subsystems: vec![],
         };
         let canonical = canonicalize_topology(topo);
         assert_eq!(canonical.surfaces[0].name, "alpha-surface");
@@ -951,6 +1014,7 @@ streams:
             }],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
@@ -975,6 +1039,7 @@ streams:
             }],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         assert!(
@@ -1053,6 +1118,7 @@ broker:
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
@@ -1070,6 +1136,7 @@ broker:
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         assert!(
@@ -1134,11 +1201,13 @@ agents:
                 persona: None,
                 skills: None,
                 topology_edit: Some(true),
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         assert!(
@@ -1164,11 +1233,13 @@ agents:
                 persona: None,
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         assert!(
@@ -1199,15 +1270,15 @@ agents:
         mount_mode: ro
 "#;
         let topo = parse_topology(yaml).unwrap();
-        let vols = topo.agents[0].volumes.as_ref().unwrap();
+        let vols = &topo.agents[0].volumes;
         assert_eq!(vols.len(), 1);
         assert_eq!(vols[0].name, "shared-lib");
         assert_eq!(vols[0].mount, "/workspace/.library");
-        assert_eq!(vols[0].mount_mode, MountMode::Ro);
+        assert_eq!(vols[0].mount_mode.as_deref(), Some("ro"));
     }
 
     #[test]
-    fn parse_topology_volume_mount_mode_defaults_to_rw() {
+    fn parse_topology_volume_mount_mode_defaults_to_none() {
         let yaml = r#"
 api_version: wheelhouse.dev/v1
 name: dev
@@ -1219,12 +1290,12 @@ agents:
         mount: /workspace/.library
 "#;
         let topo = parse_topology(yaml).unwrap();
-        let vols = topo.agents[0].volumes.as_ref().unwrap();
-        assert_eq!(vols[0].mount_mode, MountMode::Rw);
+        let vols = &topo.agents[0].volumes;
+        assert_eq!(vols[0].mount_mode, None);
     }
 
     #[test]
-    fn parse_topology_without_volumes_defaults_to_none() {
+    fn parse_topology_without_volumes_defaults_to_empty() {
         let yaml = r#"
 api_version: wheelhouse.dev/v1
 name: dev
@@ -1233,7 +1304,7 @@ agents:
     image: researcher:latest
 "#;
         let topo = parse_topology(yaml).unwrap();
-        assert!(topo.agents[0].volumes.is_none());
+        assert!(topo.agents[0].volumes.is_empty());
     }
 
     #[test]
@@ -1251,15 +1322,17 @@ agents:
                 persona: None,
                 skills: None,
                 topology_edit: None,
-                volumes: Some(vec![AgentVolumeMount {
+                volumes: vec![VolumeMount {
                     name: "shared-lib".to_string(),
                     mount: "/workspace/.library".to_string(),
-                    mount_mode: MountMode::Rw,
-                }]),
+                    mount_mode: None,
+                }],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
@@ -1267,7 +1340,7 @@ agents:
     }
 
     #[test]
-    fn agent_volumes_none_not_serialized() {
+    fn agent_volumes_empty_not_serialized() {
         let topo = Topology {
             api_version: "wheelhouse.dev/v1".to_string(),
             name: "dev".to_string(),
@@ -1281,16 +1354,18 @@ agents:
                 persona: None,
                 skills: None,
                 topology_edit: None,
-                volumes: None,
+                volumes: vec![],
+                env: None,
             }],
             streams: vec![],
             surfaces: vec![],
             guardrails: None,
+            subsystems: vec![],
         };
         let yaml = serde_yaml::to_string(&topo).unwrap();
         assert!(
             !yaml.contains("volumes"),
-            "volumes: None should be omitted from YAML: {yaml}"
+            "volumes: [] should be omitted from YAML: {yaml}"
         );
     }
 
