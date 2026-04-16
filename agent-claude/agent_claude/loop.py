@@ -34,6 +34,7 @@ from agent_claude.claude_client import ClaudeClient
 from agent_claude.errors import ClaudeAuthError
 from agent_claude.persona import Persona
 from agent_claude.response_parser import parse_batch_response
+from wheelhouse.librarian.emit import maybe_emit_write_event
 
 logger = logging.getLogger("agent_claude")
 
@@ -274,6 +275,14 @@ async def _handle_text_message(
                 fallback,
                 f"type=TextMessage(fallback) stream={stream_name} chars={len(result.text)}",
             )
+            # Emit LibraryWriteEvent for librarian subsystem (ADR-042)
+            await maybe_emit_write_event(
+                connection=connection,
+                agent_name=agent_name,
+                user_message=message.content,
+                assistant_response=result.text,
+                conversation_id=message.user_id or stream_name,
+            )
             return
         if not items:
             logger.debug("Empty batch response (no-op): stream=%s", stream_name)
@@ -284,6 +293,14 @@ async def _handle_text_message(
             agent_name,
             source_stream=stream_name,
             reply_to_user_id=message.user_id,
+        )
+        # Emit LibraryWriteEvent for librarian subsystem (ADR-042)
+        await maybe_emit_write_event(
+            connection=connection,
+            agent_name=agent_name,
+            user_message=message.content,
+            assistant_response=result.text,
+            conversation_id=message.user_id or stream_name,
         )
 
 
@@ -335,6 +352,14 @@ async def _handle_cron_event(
                 fallback,
                 f"type=TextMessage(fallback) stream={stream_name} chars={len(result.text)}",
             )
+            # Emit LibraryWriteEvent for librarian subsystem (ADR-042)
+            await maybe_emit_write_event(
+                connection=connection,
+                agent_name=agent_name,
+                user_message=user_message,
+                assistant_response=result.text,
+                conversation_id=stream_name,
+            )
             return
         if not items:
             logger.debug(
@@ -348,6 +373,14 @@ async def _handle_cron_event(
             agent_name,
             source_stream=stream_name,
             reply_to_user_id=None,
+        )
+        # Emit LibraryWriteEvent for librarian subsystem (ADR-042)
+        await maybe_emit_write_event(
+            connection=connection,
+            agent_name=agent_name,
+            user_message=user_message,
+            assistant_response=result.text,
+            conversation_id=stream_name,
         )
 
 

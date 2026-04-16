@@ -37,6 +37,9 @@ from wheelhouse._proto.wheelhouse.v1 import (
     TextMessage,
     TopologyShutdown,
 )
+from wheelhouse._proto.wheelhouse.librarian.v1 import (
+    LibraryWriteEvent,
+)
 
 logger = logging.getLogger("wheelhouse")
 
@@ -56,6 +59,7 @@ _registered_types: dict[str, type] = {}
 _BUILTIN_TYPES: dict[str, type] = {
     "TextMessage": TextMessage,
     "CronEvent": CronEvent,
+    "LibraryWriteEvent": LibraryWriteEvent,
     "SkillInvocation": SkillInvocation,
     "SkillProgress": SkillProgress,
     "SkillResult": SkillResult,
