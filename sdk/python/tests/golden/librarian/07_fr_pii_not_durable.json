@@ -1,0 +1,18 @@
+{
+  "input": {
+    "segment": [
+      {"role": "user", "content": "Mon numero de telephone est le 06 12 34 56 78, appelle-moi si besoin.", "timestamp_ms": 1713000000000},
+      {"role": "assistant", "content": "Merci pour votre numero. Je le note.", "timestamp_ms": 1713000001000}
+    ],
+    "locale": "fr",
+    "library_state": {"index_content": "", "existing_pages": {}},
+    "mock_llm_response": "{\"reason\": \"pii_not_durable\", \"committed\": false, \"page_path\": null, \"content\": null}"
+  },
+  "expected": {
+    "reason": "pii_not_durable",
+    "committed": false,
+    "page_path": null,
+    "content": null,
+    "schema_version": 1
+  }
+}

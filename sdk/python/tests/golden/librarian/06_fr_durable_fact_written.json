@@ -1,0 +1,18 @@
+{
+  "input": {
+    "segment": [
+      {"role": "user", "content": "Marc a decide de repousser la levee de fonds Series A au T3 2027. On veut atteindre 500k ARR d'abord.", "timestamp_ms": 1713000000000},
+      {"role": "assistant", "content": "Compris. J'ai note que la levee Series A est repoussee au T3 2027, avec un objectif de 500k ARR avant de lever.", "timestamp_ms": 1713000001000}
+    ],
+    "locale": "fr",
+    "library_state": {"index_content": "", "existing_pages": {}},
+    "mock_llm_response": "{\"reason\": \"durable_fact_written\", \"committed\": true, \"page_path\": \"pages/calendrier-levee-fonds.md\", \"content\": \"---\\nsource_agent_id: agent-b\\nconversation_id: conv-010\\ntimestamp: 2024-04-13T12:00:00Z\\nsnippet: Marc a decide de repousser la levee de fonds Series A au T3 2027.\\n---\\n\\n# Calendrier de levee de fonds\\n\\nLevee Series A repoussee au T3 2027. Objectif : 500k ARR avant de lever.\"}"
+  },
+  "expected": {
+    "reason": "durable_fact_written",
+    "committed": true,
+    "page_path": "pages/calendrier-levee-fonds.md",
+    "content": "---\nsource_agent_id: agent-b\nconversation_id: conv-010\ntimestamp: 2024-04-13T12:00:00Z\nsnippet: Marc a decide de repousser la levee de fonds Series A au T3 2027.\n---\n\n# Calendrier de levee de fonds\n\nLevee Series A repoussee au T3 2027. Objectif : 500k ARR avant de lever.",
+    "schema_version": 1
+  }
+}
