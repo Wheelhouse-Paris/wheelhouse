@@ -1,0 +1,60 @@
+# LLM-Wiki Subsystem Composition Template
+#
+# This file documents the expansion pattern used by the composition loader
+# (crates/wh-broker/src/deploy/composition.rs). It is NOT parsed at runtime.
+# The composition loader hardcodes the expansion logic in expand_llm_wiki().
+#
+# Template variables (resolved by the composition loader):
+#   {{library_name}}   - Library name (defaults to topology name if omitted)
+#   {{topology_name}}  - Name of the parent topology
+#   {{members}}        - List of member agent names
+#   {{locales}}        - Optional list of locale codes (e.g., [en, fr])
+#
+# Usage in a .wh topology file:
+#
+#   subsystems:
+#     - path: subsystems/llm-wiki/
+#       members: [agent-a, agent-b]
+#       library_name: research
+#       locales: [en, fr]
+#
+# The composition loader expands this into the following primitives:
+
+api_version: wheelhouse.dev/v1
+name: "{{topology_name}}"
+
+# --- Generated volume ---
+# Name: wh-{{topology_name}}-llm-wiki-{{library_name}}
+# Created via: podman volume create --ignore wh-<topo>-llm-wiki-<library_name>
+
+# --- Generated librarian agent ---
+agents:
+  - name: "librarian-{{library_name}}"
+    image: ghcr.io/wheelhouse-paris/wh-librarian:latest
+    streams: []  # Populated with eot-<member>-<library_name> for each member
+    volumes:
+      - name: "wh-{{topology_name}}-llm-wiki-{{library_name}}"
+        mount: /workspace/.library
+        mount_mode: rw
+    env:
+      WH_AGENT_NAME: "librarian-{{library_name}}"
+      WH_STREAMS: "eot-<member1>-{{library_name}},eot-<member2>-{{library_name}}"
+      WH_LIBRARY_PATH: /workspace/.library
+      WH_LIBRARY_ID: "{{library_name}}"
+      WH_LIBRARIAN_LOCALES: "{{locales}}"  # Only set if locales parameter provided
+
+# --- Generated streams (one per member) ---
+streams:
+  - name: "eot-<member>-{{library_name}}"
+    description: "End-of-turn events for llm-wiki subsystem '{{library_name}}'"
+
+# --- Member agent augmentation ---
+# For each member agent, the loader adds:
+#   1. RO volume mount:
+#        volumes:
+#          - name: wh-{{topology_name}}-llm-wiki-{{library_name}}
+#            mount: /workspace/.library
+#            mount_mode: ro
+#   2. Environment variable:
+#        env:
+#          WH_LIBRARY_WRITE_STREAM: eot-<member>-{{library_name}}
