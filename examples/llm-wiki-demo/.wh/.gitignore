@@ -1,0 +1,13 @@
+
+# Wheelhouse managed — do not remove these patterns
+.env
+.env.*
+*.token
+secrets/
+*.key
+*.pem
+*_secret*
+*.db
+*.db-wal
+*.db-shm
+workspace.lock

@@ -1,0 +1,44 @@
+{
+  "api_version": "wheelhouse.dev/v1",
+  "name": "llm-wiki-demo",
+  "agents": [
+    {
+      "name": "assistant-en",
+      "image": "ghcr.io/wheelhouse-paris/agent-claude:latest",
+      "replicas": 1,
+      "streams": [
+        "main-en"
+      ],
+      "persona": "You are an English-speaking assistant.\nHelp the user with their questions and tasks.\n"
+    },
+    {
+      "name": "assistant-fr",
+      "image": "ghcr.io/wheelhouse-paris/agent-claude:latest",
+      "replicas": 1,
+      "streams": [
+        "main-fr"
+      ],
+      "persona": "Tu es un assistant francophone.\nAide l'utilisateur dans ses questions et taches.\n"
+    }
+  ],
+  "streams": [
+    {
+      "name": "main-en",
+      "retention": null,
+      "description": "Primary conversation stream for assistant-en"
+    },
+    {
+      "name": "main-fr",
+      "retention": null,
+      "description": "Primary conversation stream for assistant-fr"
+    }
+  ],
+  "surfaces": [
+    {
+      "name": "cli",
+      "kind": "cli",
+      "stream": "main-en"
+    }
+  ],
+  "guardrails": null
+}

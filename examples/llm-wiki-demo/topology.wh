@@ -29,6 +29,7 @@ agents:
   - name: assistant-en
     image: ghcr.io/wheelhouse-paris/agent-claude:latest
     streams: [main-en]
+    max_replicas: 1
     persona: |
       You are an English-speaking assistant.
       Help the user with their questions and tasks.
@@ -36,6 +37,7 @@ agents:
   - name: assistant-fr
     image: ghcr.io/wheelhouse-paris/agent-claude:latest
     streams: [main-fr]
+    max_replicas: 1
     persona: |
       Tu es un assistant francophone.
       Aide l'utilisateur dans ses questions et taches.
