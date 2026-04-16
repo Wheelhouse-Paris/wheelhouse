@@ -2,12 +2,13 @@
 
 DecisionResult is the output of LibrarianLoop.process_event().
 The full field set is populated by the decision policy (story 14-1-3);
-this story provides the skeleton with all fields defined.
+structured decision logging fields added in story 14-1-5.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -23,6 +24,9 @@ class DecisionResult:
         content: Page content that was written (None if skipped).
         tokens_consumed: LLM tokens used for this decision.
         schema_version: Always 1 in V1.
+        commit_hash: Git commit SHA after successful write (None if skipped).
+        duration_ms: Total processing time in milliseconds.
+        step_spans: Timing spans for trace recovery (14-1-5, NFR24).
     """
 
     reason: str = "pending"
@@ -33,3 +37,6 @@ class DecisionResult:
     content: str | None = None
     tokens_consumed: int = 0
     schema_version: int = 1
+    commit_hash: str | None = None
+    duration_ms: int = 0
+    step_spans: list[dict[str, Any]] = field(default_factory=list)
