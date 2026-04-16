@@ -535,6 +535,24 @@ pub fn destroy(
         );
     }
 
+    // Remove subsystem-generated volumes (ADR-044). Collect unique volume
+    // names from agent volume mount declarations. Best-effort — log warn on failure.
+    {
+        let mut extra_volumes: Vec<String> = topology
+            .agents
+            .iter()
+            .flat_map(|a| a.volumes.iter().map(|v| v.name.clone()))
+            .collect();
+        extra_volumes.sort();
+        extra_volumes.dedup();
+        if let Err(e) = podman::remove_extra_volumes(&extra_volumes) {
+            tracing::warn!(
+                error = %e,
+                "failed to remove subsystem volumes during destroy — continuing"
+            );
+        }
+    }
+
     // Write cleared state to .wh/state.json
     let wh_dir = workspace_root.join(".wh");
     std::fs::create_dir_all(&wh_dir).map_err(DeployError::FileRead)?;
