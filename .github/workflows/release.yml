@@ -231,3 +231,49 @@ jobs:
         with:
           subject-name: ghcr.io/wheelhouse-paris/wh-telegram
           subject-digest: ${{ steps.build.outputs.digest }}
+
+  # ──────────────────────────────────────────────
+  # wh-librarian container image (ADR-041)
+  # Runs in parallel with build/release jobs
+  # ──────────────────────────────────────────────
+  build-librarian-image:
+    name: Build wh-librarian Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        id: build
+        with:
+          context: .
+          file: librarian/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/wheelhouse-paris/wh-librarian:${{ github.ref_name }}
+            ghcr.io/wheelhouse-paris/wh-librarian:latest
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ github.ref_name }}
+
+      - name: Attest SLSA provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/wheelhouse-paris/wh-librarian
+          subject-digest: ${{ steps.build.outputs.digest }}

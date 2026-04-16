@@ -64,6 +64,7 @@ _BUILTIN_TYPES: dict[str, type] = {
     "SkillProgress": SkillProgress,
     "SkillResult": SkillResult,
     "TopologyShutdown": TopologyShutdown,
+    "LibraryWriteEvent": LibraryWriteEvent,
 }
 
 
