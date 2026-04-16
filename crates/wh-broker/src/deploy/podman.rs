@@ -619,6 +619,16 @@ pub fn workspace_volume_name(topology_name: &str, agent_name: &str) -> String {
 const DEFAULT_SCHEMA_TEMPLATE: &str =
     include_str!("../../../wh-cli/templates/library/wh-schema.md.tmpl");
 
+/// Reader-only Library schema template — for agents in the `llm-wiki` subsystem
+/// that have read-only access to the Library volume (ADR-048, story 14-2-3).
+///
+/// When the composition loader (`expand_llm_wiki`) attaches a Library volume
+/// with `mount_mode: ro` to a member agent, this template is used instead of
+/// `DEFAULT_SCHEMA_TEMPLATE`. The reader template contains NO write instructions
+/// — the librarian agent handles all writes autonomously.
+const READER_SCHEMA_TEMPLATE: &str =
+    include_str!("../../../../subsystems/llm-wiki/schema-template-reader.md");
+
 /// Resolve the two documented `{{...}}` placeholders in the default schema template.
 ///
 /// V1 substitution rules (Epic 13 story 13-20, ADR-037):
@@ -632,6 +642,29 @@ fn render_default_schema(agent_name: &str, domain: &str) -> String {
     DEFAULT_SCHEMA_TEMPLATE
         .replace("{{agent_name}}", agent_name)
         .replace("{{domain_description}}", domain)
+}
+
+/// Resolve placeholders in the reader-only schema template (ADR-048).
+///
+/// Same substitution rules as `render_default_schema` but uses the reader
+/// template which contains no write instructions.
+fn render_reader_schema(agent_name: &str, domain: &str) -> String {
+    READER_SCHEMA_TEMPLATE
+        .replace("{{agent_name}}", agent_name)
+        .replace("{{domain_description}}", domain)
+}
+
+/// Check whether an agent has a read-only Library volume mount.
+///
+/// After `expand_subsystems()`, member agents in the `llm-wiki` subsystem have
+/// a `VolumeMount` with `mount: "/workspace/.library"` and `mount_mode: Some("ro")`.
+/// When detected, `populate_workspace_volumes` injects the reader-only schema
+/// template instead of the default writer schema.
+fn has_ro_library_volume(agent: &crate::deploy::Agent) -> bool {
+    agent
+        .volumes
+        .iter()
+        .any(|v| v.mount == "/workspace/.library" && v.mount_mode.as_deref() == Some("ro"))
 }
 
 /// V1 default domain string for the schema template.
@@ -740,7 +773,14 @@ pub fn populate_workspace_volumes(
             sanitize_name(&agent.name)
         );
 
-        let resolved_schema = render_default_schema(&agent.name, DEFAULT_LIBRARY_DOMAIN);
+        // ADR-048: agents with RO Library volume (llm-wiki members) get the
+        // reader-only schema; all other agents get the default writer schema.
+        let resolved_schema = if has_ro_library_volume(agent) {
+            tracing::debug!(agent = %agent.name, "agent has RO library volume — using reader schema (ADR-048)");
+            render_reader_schema(&agent.name, DEFAULT_LIBRARY_DOMAIN)
+        } else {
+            render_default_schema(&agent.name, DEFAULT_LIBRARY_DOMAIN)
+        };
         let script = build_workspace_populate_script(&resolved_schema);
 
         let mount_arg = format!("{vol}:/workspace");
@@ -3222,6 +3262,157 @@ mod tests {
             v_mounts.is_empty(),
             "should have no library volume mounts when None: {:?}",
             v_mounts
+        );
+    }
+
+    // ── Story 14-2-3: Reader-only schema template and prompt injection defenses ──
+
+    /// AC-1: the reader schema template loads from the subsystems folder at
+    /// compile time. Guard against empty or wrong file regressions.
+    #[test]
+    fn reader_schema_template_loads_from_disk() {
+        assert!(
+            !READER_SCHEMA_TEMPLATE.is_empty(),
+            "READER_SCHEMA_TEMPLATE must not be empty — include_str! path may have drifted"
+        );
+        assert!(
+            READER_SCHEMA_TEMPLATE.contains("# Your Library (Read-Only)"),
+            "reader template must contain the canonical top heading from ADR-048"
+        );
+        assert!(
+            READER_SCHEMA_TEMPLATE.contains("{{agent_name}}"),
+            "reader template must contain the {{{{agent_name}}}} placeholder"
+        );
+        assert!(
+            READER_SCHEMA_TEMPLATE.contains("{{domain_description}}"),
+            "reader template must contain the {{{{domain_description}}}} placeholder"
+        );
+    }
+
+    /// AC-1: reader template must NOT contain any write instructions from the
+    /// default writer schema (ADR-037). These exact strings are the ADR-048
+    /// removal list.
+    #[test]
+    fn reader_schema_has_no_write_instructions() {
+        let write_phrases = [
+            "When writing",
+            "When to write",
+            "Commit after every write",
+            "Maintain index.md",
+            "write a Library page",
+            "write a new page",
+            "How to write",
+            "Maintaining `index.md`",
+            "Category A",
+            "Category B",
+            "Category C",
+            "Category D",
+        ];
+        for phrase in &write_phrases {
+            assert!(
+                !READER_SCHEMA_TEMPLATE.contains(phrase),
+                "reader schema must NOT contain write instruction '{}' — violates ADR-048",
+                phrase
+            );
+        }
+    }
+
+    /// AC-1: reader template MUST contain the read-only declaration and citation
+    /// guidance per ADR-048.
+    #[test]
+    fn reader_schema_has_required_read_only_content() {
+        assert!(
+            READER_SCHEMA_TEMPLATE.contains("You CANNOT write to the Library"),
+            "reader schema must contain the read-only declaration"
+        );
+        assert!(
+            READER_SCHEMA_TEMPLATE.contains("How to cite"),
+            "reader schema must contain citation guidance"
+        );
+    }
+
+    /// AC-1: render_reader_schema substitutes placeholders and leaves none behind.
+    #[test]
+    fn render_reader_schema_substitutes_placeholders() {
+        let rendered = render_reader_schema("donna", "general knowledge");
+        assert!(
+            rendered.contains("donna"),
+            "rendered reader schema must contain the substituted agent name"
+        );
+        assert!(
+            rendered.contains("general knowledge"),
+            "rendered reader schema must contain the substituted domain string"
+        );
+        let placeholder_re = regex::Regex::new(r"\{\{[^}]+\}\}").unwrap();
+        assert!(
+            !placeholder_re.is_match(&rendered),
+            "rendered reader schema must contain zero unresolved placeholders"
+        );
+    }
+
+    /// AC-1: `has_ro_library_volume` returns true for agents with an RO Library
+    /// mount and false otherwise.
+    #[test]
+    fn has_ro_library_volume_detection() {
+        use crate::deploy::{Agent, VolumeMount};
+
+        // Agent with RO library volume (llm-wiki member)
+        let ro_agent = Agent {
+            name: "agent-a".to_string(),
+            image: "agent-claude:latest".to_string(),
+            replicas: 1,
+            streams: vec![],
+            persona: None,
+            skills: None,
+            topology_edit: None,
+            volumes: vec![VolumeMount {
+                name: "wh-lab-llm-wiki-research".to_string(),
+                mount: "/workspace/.library".to_string(),
+                mount_mode: Some("ro".to_string()),
+            }],
+            env: None,
+        };
+        assert!(
+            has_ro_library_volume(&ro_agent),
+            "agent with RO library mount must be detected"
+        );
+
+        // Agent with RW library volume (librarian)
+        let rw_agent = Agent {
+            name: "librarian-research".to_string(),
+            image: "wh-librarian:latest".to_string(),
+            replicas: 1,
+            streams: vec![],
+            persona: None,
+            skills: None,
+            topology_edit: None,
+            volumes: vec![VolumeMount {
+                name: "wh-lab-llm-wiki-research".to_string(),
+                mount: "/workspace/.library".to_string(),
+                mount_mode: Some("rw".to_string()),
+            }],
+            env: None,
+        };
+        assert!(
+            !has_ro_library_volume(&rw_agent),
+            "librarian with RW library mount must NOT be detected as RO"
+        );
+
+        // Agent with no library volume (no subsystem)
+        let plain_agent = Agent {
+            name: "agent-b".to_string(),
+            image: "agent-claude:latest".to_string(),
+            replicas: 1,
+            streams: vec![],
+            persona: None,
+            skills: None,
+            topology_edit: None,
+            volumes: vec![],
+            env: None,
+        };
+        assert!(
+            !has_ro_library_volume(&plain_agent),
+            "agent with no volumes must NOT be detected as having RO library"
         );
     }
 }
