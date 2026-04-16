@@ -228,7 +228,8 @@ class TestLibrarianLoop:
         assert isinstance(result, DecisionResult)
         assert result.event_id == "evt-test-001"
         assert result.locale == "en"
-        assert result.reason == "pending"
+        # With llm_fn=None, process_event returns decision_error (story 14-1-3)
+        assert result.reason == "decision_error"
         assert result.committed is False
 
     def test_process_event_logs_event_id(
