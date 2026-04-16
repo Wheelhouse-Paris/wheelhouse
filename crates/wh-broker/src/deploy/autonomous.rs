@@ -587,6 +587,7 @@ mod tests {
             persona: None,
             skills: None,
             topology_edit: None,
+            volumes: None,
         }
     }
 

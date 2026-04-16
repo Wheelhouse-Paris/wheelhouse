@@ -74,6 +74,7 @@ fn setup_deployed_repo() -> tempfile::TempDir {
             persona: None,
             skills: None,
             topology_edit: None,
+            volumes: None,
         }],
         streams: vec![wh_broker::deploy::Stream {
             name: "main".to_string(),
