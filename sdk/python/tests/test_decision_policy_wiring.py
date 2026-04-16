@@ -69,12 +69,46 @@ def _mock_llm_response(
     )
 
 
+class _TxnHandle:
+    """Minimal TransactionHandle stand-in for mock sandbox."""
+
+    def __init__(self):
+        self.commit_metadata: dict = {}
+
+
+class _FakeTxnContext:
+    """Context manager returned by sandbox.transaction() in tests."""
+
+    def __init__(self, sandbox_mock: MagicMock):
+        self._sandbox = sandbox_mock
+        self.txn = _TxnHandle()
+
+    def __enter__(self) -> _TxnHandle:
+        return self.txn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            # Mimic real sandbox.transaction(): call commit(**commit_metadata)
+            self._sandbox.commit(**self.txn.commit_metadata)
+        return False  # do not suppress exceptions
+
+
 def _make_sandbox_mock() -> MagicMock:
-    """Create a mock LibrarySandbox with reasonable defaults."""
+    """Create a mock LibrarySandbox with reasonable defaults.
+
+    sandbox.transaction() returns a _FakeTxnContext so tests can inspect
+    the commit kwargs via sandbox.commit.call_args, mirroring the real
+    LibrarySandbox.transaction() contextmanager behaviour.
+    """
     sandbox = MagicMock()
     sandbox.exists.return_value = False
     sandbox.list.return_value = []
     sandbox.read.return_value = ""
+
+    def _transaction(**kwargs):
+        return _FakeTxnContext(sandbox)
+
+    sandbox.transaction.side_effect = _transaction
     return sandbox
 
 
@@ -117,9 +151,9 @@ class TestDurableFactWritten:
         assert result.content == page_content
 
         # Verify sandbox interactions
-        sandbox.begin_transaction.assert_called_once()
-        call_kwargs = sandbox.begin_transaction.call_args
-        assert call_kwargs[1]["operation"] == "librarian_decide"
+        sandbox.transaction.assert_called_once()
+        call_kwargs = sandbox.transaction.call_args
+        assert call_kwargs.kwargs["operation"] == "librarian_decide"
         sandbox.write.assert_called_once_with("pages/fundraise.md", page_content)
         sandbox.commit.assert_called_once()
         # New page => pages_created
@@ -155,7 +189,7 @@ class TestTransientContextSkipped:
         assert result.page_path is None
         assert result.content is None
 
-        sandbox.begin_transaction.assert_not_called()
+        sandbox.transaction.assert_not_called()
         sandbox.write.assert_not_called()
         sandbox.commit.assert_not_called()
 

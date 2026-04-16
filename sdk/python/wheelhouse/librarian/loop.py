@@ -179,39 +179,34 @@ class LibrarianLoop:
         reason = policy_result.reason
         is_update = reason in ("update_existing_page", "dedup_merged")
 
-        # Begin transaction — include source_agent_id in summary for
+        # Transaction — include source_agent_id in summary for
         # multi-agent attribution (story 14-2-4, FR22, FR40).
         source = event.source_agent_id or "unknown"
-        self.sandbox.begin_transaction(
-            operation="librarian_decide",
-            summary=f"{reason}: {page_path} (source: {source})",
-        )
 
         try:
-            # Write page
-            self.sandbox.write(page_path, content)
+            with self.sandbox.transaction(
+                operation="librarian_decide",
+                summary=f"{reason}: {page_path} (source: {source})",
+            ) as txn:
+                # Write page
+                self.sandbox.write(page_path, content)
 
-            # Commit with structured metadata — sources carries the
-            # originating agent so git log shows attribution (ADR-039).
-            commit_kwargs: dict = {}
-            if is_update:
-                commit_kwargs["pages_updated"] = [page_path]
-            else:
-                commit_kwargs["pages_created"] = [page_path]
-            commit_kwargs["sources"] = [source]
+                # Commit metadata — sources carries the originating agent
+                # so git log shows attribution (ADR-039).
+                if is_update:
+                    txn.commit_metadata["pages_updated"] = [page_path]
+                else:
+                    txn.commit_metadata["pages_created"] = [page_path]
+                txn.commit_metadata["sources"] = [source]
 
-            with timer.span("git_commit"):
-                self.sandbox.commit(**commit_kwargs)
+                with timer.span("git_commit"):
+                    pass  # commit happens on transaction __exit__
         except Exception:
             logger.exception(
                 "Failed to write/commit page %s for event %s",
                 page_path,
                 event.event_id,
             )
-            try:
-                self.sandbox.rollback()
-            except Exception:
-                logger.debug("Rollback after failed commit also failed")
             return None
 
         # Extract commit hash after successful commit (14-1-5, AC-1).

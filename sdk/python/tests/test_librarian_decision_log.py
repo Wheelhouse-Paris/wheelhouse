@@ -85,13 +85,48 @@ def _make_llm_fn(response: dict | str | None = None, delay: float = 0.0):
     return llm_fn
 
 
+class _TxnHandle:
+    """Minimal TransactionHandle stand-in for mock sandbox."""
+
+    def __init__(self):
+        self.commit_metadata: dict = {}
+
+
+class _FakeTxnContext:
+    """Context manager returned by sandbox.transaction() in tests."""
+
+    def __init__(self, sandbox_mock: MagicMock):
+        self._sandbox = sandbox_mock
+        self.txn = _TxnHandle()
+
+    def __enter__(self) -> _TxnHandle:
+        return self.txn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            # Mimic real sandbox.transaction(): call commit(**commit_metadata)
+            self._sandbox.commit(**self.txn.commit_metadata)
+        return False  # do not suppress exceptions
+
+
 def _make_sandbox(commit_succeeds: bool = True):
-    """Create a mock LibrarySandbox."""
+    """Create a mock LibrarySandbox.
+
+    sandbox.transaction() returns a _FakeTxnContext so the loop's
+    ``with sandbox.transaction(...) as txn`` works and sandbox.commit()
+    is called with the metadata set on txn.commit_metadata, mirroring
+    the real LibrarySandbox.transaction() contextmanager behaviour.
+    """
     sandbox = MagicMock()
     sandbox.exists.return_value = False
     sandbox.list.return_value = []
     if not commit_succeeds:
         sandbox.commit.side_effect = RuntimeError("commit failed")
+
+    def _transaction(**kwargs):
+        return _FakeTxnContext(sandbox)
+
+    sandbox.transaction.side_effect = _transaction
     return sandbox
 
 

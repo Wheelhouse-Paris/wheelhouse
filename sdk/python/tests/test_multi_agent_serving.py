@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, call
 
@@ -73,12 +74,47 @@ def _mock_llm_response(
     )
 
 
+class _TxnHandle:
+    """Minimal TransactionHandle stand-in for mock sandbox."""
+
+    def __init__(self):
+        self.commit_metadata: dict = {}
+
+
+class _FakeTxnContext:
+    """Context manager returned by sandbox.transaction() in tests."""
+
+    def __init__(self, sandbox_mock: MagicMock, call_kwargs: dict):
+        self._sandbox = sandbox_mock
+        self._call_kwargs = call_kwargs
+        self.txn = _TxnHandle()
+
+    def __enter__(self) -> _TxnHandle:
+        return self.txn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            # Mimic real sandbox.transaction(): call commit(**commit_metadata)
+            self._sandbox.commit(**self.txn.commit_metadata)
+        return False  # do not suppress exceptions
+
+
 def _make_sandbox_mock() -> MagicMock:
-    """Create a mock LibrarySandbox with reasonable defaults."""
+    """Create a mock LibrarySandbox with reasonable defaults.
+
+    sandbox.transaction() returns a _FakeTxnContext so tests can inspect
+    txn.commit_metadata and the resulting sandbox.commit() call, mirroring
+    the real LibrarySandbox.transaction() contextmanager behaviour.
+    """
     sandbox = MagicMock()
     sandbox.exists.return_value = False
     sandbox.list.return_value = []
     sandbox.read.return_value = ""
+
+    def _transaction(**kwargs):
+        return _FakeTxnContext(sandbox, kwargs)
+
+    sandbox.transaction.side_effect = _transaction
     return sandbox
 
 
@@ -158,7 +194,9 @@ class TestMultiAgentAttribution:
         event = _make_event(source_agent_id="agent-b")
         loop.process_event(event)
 
-        # Verify sandbox.commit() was called with sources=["agent-b"]
+        # Verify sandbox.transaction() was entered and commit() called with
+        # the metadata that the loop set on txn.commit_metadata.
+        sandbox.transaction.assert_called_once()
         sandbox.commit.assert_called_once()
         commit_kwargs = sandbox.commit.call_args
         assert commit_kwargs.kwargs.get("sources") == ["agent-b"]
@@ -180,8 +218,8 @@ class TestMultiAgentAttribution:
         event = _make_event(source_agent_id="agent-c")
         loop.process_event(event)
 
-        sandbox.begin_transaction.assert_called_once()
-        summary_arg = sandbox.begin_transaction.call_args.kwargs.get("summary", "")
+        sandbox.transaction.assert_called_once()
+        summary_arg = sandbox.transaction.call_args.kwargs.get("summary", "")
         assert "agent-c" in summary_arg
 
     def test_interleaved_events_attributed_correctly(self, tmp_path: Path):
@@ -357,7 +395,7 @@ class TestSequentialProcessing:
         assert result.committed is False
         assert result.reason == "transient_context"
         sandbox.commit.assert_not_called()
-        sandbox.begin_transaction.assert_not_called()
+        sandbox.transaction.assert_not_called()
 
     def test_mixed_write_and_skip_from_different_agents(self, tmp_path: Path):
         """Mix of writes and skips from different agents processed correctly."""

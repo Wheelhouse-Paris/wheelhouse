@@ -70,11 +70,26 @@ def _mock_llm_response(
     )
 
 
+class _TxnHandle:
+    def __init__(self) -> None:
+        self.commit_metadata: dict = {}
+
+class _FakeTxnCtx:
+    def __init__(self, sandbox: MagicMock) -> None:
+        self._sandbox = sandbox
+        self.handle = _TxnHandle()
+    def __enter__(self) -> _TxnHandle:
+        return self.handle
+    def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+        if exc_type is None:
+            self._sandbox.commit(**self.handle.commit_metadata)
+
 def _make_sandbox_mock() -> MagicMock:
     sandbox = MagicMock()
     sandbox.exists.return_value = False
     sandbox.list.return_value = []
     sandbox.read.return_value = ""
+    sandbox.transaction.side_effect = lambda **kw: _FakeTxnCtx(sandbox)
     return sandbox
 
 
@@ -321,7 +336,7 @@ class TestDedupInLibrarianLoop:
         assert llm_fn.call_count == 1  # NOT incremented
 
         # No additional sandbox interactions
-        assert sandbox.begin_transaction.call_count == 1
+        assert sandbox.transaction.call_count == 1
 
     def test_different_event_ids_both_processed(self) -> None:
         """Different event_ids are both processed normally."""
