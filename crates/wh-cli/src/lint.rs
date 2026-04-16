@@ -137,6 +137,7 @@ pub fn lint_file(path: &Path) -> Result<(LintResult, Option<LintedFile>), LintEr
     validate_stream_references(&wh_file, &filename, &mut errors);
     validate_surfaces(&wh_file, &filename, &mut errors);
     validate_broker(&wh_file, &filename, &mut errors, &mut warnings);
+    validate_agent_volumes(&wh_file, &filename, &mut errors, &mut warnings);
 
     let result = LintResult { errors, warnings };
 
@@ -627,6 +628,128 @@ fn validate_broker(
                     hint: "add image: ghcr.io/wheelhouse-paris/wh-broker:latest".to_string(),
                 });
             }
+        }
+    }
+}
+
+/// Validate agent volume mount declarations (ADR-043).
+///
+/// Checks:
+/// - Each volume mount has required fields (`name`, `mount`).
+/// - No two volumes on the same agent share the same mount path.
+/// - Single-writer invariant: at most one `rw` mount per volume across all agents.
+/// - Warning if a volume has no `rw` mount (orphaned — no agent can write).
+fn validate_agent_volumes(
+    wh_file: &WhFile,
+    filename: &str,
+    errors: &mut Vec<LintDiagnostic>,
+    warnings: &mut Vec<LintDiagnostic>,
+) {
+    use crate::model::MountMode;
+
+    let agents = match &wh_file.agents {
+        Some(agents) => agents,
+        None => return,
+    };
+
+    // Collect all volume mounts across all agents for cross-agent checks.
+    // Key: volume name, Value: list of (agent_name, mount_mode).
+    let mut volume_writers: std::collections::BTreeMap<String, Vec<(String, MountMode)>> =
+        std::collections::BTreeMap::new();
+
+    for agent in agents {
+        let agent_name = agent.name.as_deref().unwrap_or("unknown");
+
+        let volumes = match &agent.volumes {
+            Some(v) => v,
+            None => continue,
+        };
+
+        // Per-agent: check required fields and duplicate mount paths.
+        let mut seen_paths: HashSet<String> = HashSet::new();
+
+        for (vi, vol) in volumes.iter().enumerate() {
+            let vol_label = vol
+                .name
+                .as_deref()
+                .map(|n| format!("volume '{n}' on agent '{agent_name}'"))
+                .unwrap_or_else(|| format!("volume at index {vi} on agent '{agent_name}'"));
+
+            // Validate required fields
+            if vol.name.is_none() {
+                errors.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    level: DiagnosticLevel::Error,
+                    message: format!("field 'name' is required on {vol_label}"),
+                    hint: "add the named volume to mount".to_string(),
+                });
+            }
+
+            if vol.mount.is_none() {
+                errors.push(LintDiagnostic {
+                    file: filename.to_string(),
+                    line: None,
+                    level: DiagnosticLevel::Error,
+                    message: format!("field 'mount' is required on {vol_label}"),
+                    hint: "add the container mount path (e.g., /workspace/.library)".to_string(),
+                });
+            }
+
+            // Duplicate mount path on same agent
+            if let Some(mount) = &vol.mount {
+                if !seen_paths.insert(mount.clone()) {
+                    errors.push(LintDiagnostic {
+                        file: filename.to_string(),
+                        line: None,
+                        level: DiagnosticLevel::Error,
+                        message: format!("duplicate mount path '{mount}' on agent '{agent_name}'"),
+                        hint: "each volume mount path must be unique per agent".to_string(),
+                    });
+                }
+            }
+
+            // Collect for cross-agent checks
+            if let Some(vol_name) = &vol.name {
+                volume_writers
+                    .entry(vol_name.clone())
+                    .or_default()
+                    .push((agent_name.to_string(), vol.mount_mode));
+            }
+        }
+    }
+
+    // Cross-agent checks: single-writer invariant (ADR-043)
+    for (vol_name, mounts) in &volume_writers {
+        let rw_agents: Vec<&str> = mounts
+            .iter()
+            .filter(|(_, mode)| *mode == MountMode::Rw)
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        if rw_agents.len() > 1 {
+            errors.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Error,
+                message: format!(
+                    "Volume '{vol_name}' has multiple rw mounts ({}) \u{2014} single-writer invariant violated",
+                    rw_agents.join(", ")
+                ),
+                hint: "only one agent should mount a shared volume as rw".to_string(),
+            });
+        }
+
+        if rw_agents.is_empty() {
+            warnings.push(LintDiagnostic {
+                file: filename.to_string(),
+                line: None,
+                level: DiagnosticLevel::Warning,
+                message: format!(
+                    "Volume '{vol_name}' has no rw mount \u{2014} no agent can write to it"
+                ),
+                hint: "at least one agent should mount the volume as rw".to_string(),
+            });
         }
     }
 }
@@ -1391,6 +1514,343 @@ streams:
             result.errors.iter().any(|e| e.message.contains("broker")),
             "expected broker image error, got: {:?}",
             result.errors
+        );
+    }
+
+    // ── Agent volume mount tests (Story 14-2-1, ADR-043) ──
+
+    #[test]
+    fn agent_with_ro_volume_parses_correctly() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: researcher
+    image: r:latest
+    max_replicas: 1
+    streams: [main]
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: ro
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+        // Should have a warning: no rw mount for shared-lib
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("no rw mount")),
+            "expected no-rw-mount warning, got: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn agent_with_rw_volume_no_warning() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: librarian
+    image: l:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: rw
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+        // No volume-related warnings
+        let vol_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("Volume"))
+            .collect();
+        assert!(
+            vol_warnings.is_empty(),
+            "no volume warning expected: {:?}",
+            vol_warnings
+        );
+    }
+
+    #[test]
+    fn multiple_rw_mounts_same_volume_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: agent-a
+    image: a:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: rw
+  - name: agent-b
+    image: b:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: rw
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("multiple rw mounts")
+                    && e.message.contains("single-writer")),
+            "expected single-writer error, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn volume_no_rw_mount_produces_warning() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: agent-a
+    image: a:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: ro
+  - name: agent-b
+    image: b:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /data/.library
+        mount_mode: ro
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("no rw mount")),
+            "expected no-rw-mount warning, got: {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn volume_missing_name_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: researcher
+    image: r:latest
+    max_replicas: 1
+    volumes:
+      - mount: /workspace/.library
+        mount_mode: ro
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("'name' is required")),
+            "expected name required error, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn volume_missing_mount_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: researcher
+    image: r:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount_mode: ro
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("'mount' is required")),
+            "expected mount required error, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn duplicate_mount_path_same_agent_produces_error() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: researcher
+    image: r:latest
+    max_replicas: 1
+    volumes:
+      - name: vol-a
+        mount: /workspace/.library
+        mount_mode: ro
+      - name: vol-b
+        mount: /workspace/.library
+        mount_mode: ro
+"#,
+        );
+        let (result, _) = lint_file(f.path()).unwrap();
+        assert!(result.has_errors());
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.message.contains("duplicate mount path")),
+            "expected duplicate mount path error, got: {:?}",
+            result.errors
+        );
+    }
+
+    #[test]
+    fn mount_mode_defaults_to_rw() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: librarian
+    image: l:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+        // No warning about no rw mount (default is rw)
+        let no_rw_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("no rw mount"))
+            .collect();
+        assert!(
+            no_rw_warnings.is_empty(),
+            "default mount_mode should be rw: {:?}",
+            no_rw_warnings
+        );
+    }
+
+    #[test]
+    fn valid_shared_volume_one_rw_one_ro() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: librarian
+    image: l:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: rw
+  - name: reader
+    image: r:latest
+    max_replicas: 1
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: ro
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+        // No volume-related warnings
+        let vol_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("Volume") || w.message.contains("rw mount"))
+            .collect();
+        assert!(
+            vol_warnings.is_empty(),
+            "expected no volume warnings for valid config: {:?}",
+            vol_warnings
+        );
+    }
+
+    #[test]
+    fn agents_without_volumes_produce_no_volume_diagnostics() {
+        let f = write_wh(
+            r#"
+apiVersion: wheelhouse.dev/v1
+broker:
+  image: ghcr.io/wheelhouse-paris/wh-broker:latest
+agents:
+  - name: researcher
+    image: r:latest
+    max_replicas: 1
+    streams: [main]
+streams:
+  - name: main
+    compaction_cron: "0 2 * * *"
+"#,
+        );
+        let (result, linted) = lint_file(f.path()).unwrap();
+        assert!(!result.has_errors(), "errors: {:?}", result.errors);
+        assert!(linted.is_some());
+        // No volume-related warnings
+        let vol_warnings: Vec<_> = result
+            .warnings
+            .iter()
+            .filter(|w| w.message.contains("Volume") || w.message.contains("mount"))
+            .collect();
+        assert!(
+            vol_warnings.is_empty(),
+            "no volume diagnostics expected without volumes: {:?}",
+            vol_warnings
         );
     }
 }

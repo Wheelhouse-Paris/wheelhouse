@@ -676,6 +676,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -725,6 +726,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -851,6 +853,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -897,6 +900,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -949,6 +953,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -1108,6 +1113,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),
@@ -1166,6 +1172,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![Surface {
@@ -1226,6 +1233,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![
                 Stream {
@@ -1303,6 +1311,7 @@ mod tests {
 
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![Stream {
                 name: "main".to_string(),

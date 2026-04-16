@@ -53,6 +53,44 @@ pub struct BrokerCliSpec {
     pub ports: Option<Vec<String>>,
 }
 
+/// Volume mount mode for agent volume declarations (ADR-043).
+///
+/// Controls whether the volume is mounted read-write or read-only.
+/// When `ro`, Podman passes `,ro` to the mount options, causing the kernel
+/// to return `EROFS` on any write attempt inside the container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MountMode {
+    /// Read-write mount (default). Agent can read and write to the volume.
+    Rw,
+    /// Read-only mount. Kernel returns `EROFS` on write attempts.
+    Ro,
+}
+
+impl Default for MountMode {
+    fn default() -> Self {
+        Self::Rw
+    }
+}
+
+/// A volume mount declaration on an agent (ADR-043).
+///
+/// Allows agents to declare additional named volume mounts with explicit
+/// mount points and access modes. Used by the LLM-Wiki subsystem to mount
+/// a shared Library volume as RO on member agents and RW on the librarian.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentVolumeMount {
+    /// Named volume to mount (e.g., `wh-lab-llm-wiki-research`).
+    pub name: Option<String>,
+
+    /// Mount point inside the container (e.g., `/workspace/.library`).
+    pub mount: Option<String>,
+
+    /// Mount mode: `rw` (default) or `ro` (read-only, kernel-enforced).
+    #[serde(default)]
+    pub mount_mode: MountMode,
+}
+
 /// Agent specification within a `.wh` file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpec {
@@ -71,6 +109,10 @@ pub struct AgentSpec {
     /// Whether this agent can create/modify `.wh` files and run `wh topology apply` (ADR-034).
     /// Defaults to `false`. Must be declared in the `.wh` spec — not configurable at runtime (E12-13).
     pub topology_edit: Option<bool>,
+
+    /// Additional named volume mounts with explicit mount points and access modes (ADR-043).
+    /// Used for shared volumes like the LLM-Wiki Library.
+    pub volumes: Option<Vec<AgentVolumeMount>>,
 }
 
 /// Stream specification within a `.wh` file.

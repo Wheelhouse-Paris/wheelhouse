@@ -129,6 +129,7 @@ fn build_run_args_includes_persona_volume_when_set() {
         false,
         &[],
         None,
+        None,
     );
     // Should include -v for personas named volume mount
     let has_volume = args
@@ -159,6 +160,7 @@ fn build_run_args_excludes_persona_when_not_set() {
         false,
         false,
         &[],
+        None,
         None,
     );
     // Should NOT include persona-related args
@@ -192,6 +194,7 @@ fn agent_struct_persona_field_included_in_serialization() {
         persona: Some("agents/donna/".to_string()),
         skills: None,
         topology_edit: None,
+        volumes: None,
     };
     let yaml = serde_yaml::to_string(&agent).unwrap();
     assert!(

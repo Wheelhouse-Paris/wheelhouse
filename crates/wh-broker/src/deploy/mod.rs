@@ -105,6 +105,41 @@ pub struct SkillRefConfig {
     pub version: String,
 }
 
+/// Volume mount mode for agent volume declarations (ADR-043).
+///
+/// Controls whether the volume is mounted read-write or read-only.
+/// When `Ro`, the CLI passes `,ro` to Podman mount options, causing the kernel
+/// to return `EROFS` on any write attempt inside the container.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MountMode {
+    /// Read-write mount (default). Agent can read and write to the volume.
+    Rw,
+    /// Read-only mount. Kernel returns `EROFS` on write attempts.
+    Ro,
+}
+
+impl Default for MountMode {
+    fn default() -> Self {
+        Self::Rw
+    }
+}
+
+/// A volume mount declaration on an agent (ADR-043).
+///
+/// Allows agents to declare additional named volume mounts with explicit
+/// mount points and access modes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AgentVolumeMount {
+    /// Named volume to mount (e.g., `wh-lab-llm-wiki-research`).
+    pub name: String,
+    /// Mount point inside the container (e.g., `/workspace/.library`).
+    pub mount: String,
+    /// Mount mode: `rw` (default) or `ro` (read-only, kernel-enforced).
+    #[serde(default)]
+    pub mount_mode: MountMode,
+}
+
 /// An agent declaration within a topology.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Agent {
@@ -125,6 +160,9 @@ pub struct Agent {
     /// Defaults to `false`. Must be declared in the `.wh` spec — not configurable at runtime (E12-13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topology_edit: Option<bool>,
+    /// Additional named volume mounts with explicit mount points and access modes (ADR-043).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volumes: Option<Vec<AgentVolumeMount>>,
 }
 
 fn default_replicas() -> u32 {
@@ -634,6 +672,7 @@ agents:
 
                     skills: None,
                     topology_edit: None,
+                    volumes: None,
                 },
                 Agent {
                     name: "alpha".to_string(),
@@ -644,6 +683,7 @@ agents:
 
                     skills: None,
                     topology_edit: None,
+                    volumes: None,
                 },
             ],
             streams: vec![
@@ -766,6 +806,7 @@ streams:
                     version: "1.0.0".to_string(),
                 }]),
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -1093,6 +1134,7 @@ agents:
                 persona: None,
                 skills: None,
                 topology_edit: Some(true),
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -1122,6 +1164,7 @@ agents:
                 persona: None,
                 skills: None,
                 topology_edit: None,
+                volumes: None,
             }],
             streams: vec![],
             surfaces: vec![],
@@ -1138,5 +1181,134 @@ agents:
     fn topology_edit_denied_error_code() {
         let err = DeployError::TopologyEditDenied("test".to_string());
         assert_eq!(err.code(), "TOPOLOGY_EDIT_DENIED");
+    }
+
+    // ── Agent volume mount tests (Story 14-2-1, ADR-043) ──
+
+    #[test]
+    fn parse_topology_with_agent_volumes() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+        mount_mode: ro
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        let vols = topo.agents[0].volumes.as_ref().unwrap();
+        assert_eq!(vols.len(), 1);
+        assert_eq!(vols[0].name, "shared-lib");
+        assert_eq!(vols[0].mount, "/workspace/.library");
+        assert_eq!(vols[0].mount_mode, MountMode::Ro);
+    }
+
+    #[test]
+    fn parse_topology_volume_mount_mode_defaults_to_rw() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: librarian
+    image: librarian:latest
+    volumes:
+      - name: shared-lib
+        mount: /workspace/.library
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        let vols = topo.agents[0].volumes.as_ref().unwrap();
+        assert_eq!(vols[0].mount_mode, MountMode::Rw);
+    }
+
+    #[test]
+    fn parse_topology_without_volumes_defaults_to_none() {
+        let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: dev
+agents:
+  - name: researcher
+    image: researcher:latest
+"#;
+        let topo = parse_topology(yaml).unwrap();
+        assert!(topo.agents[0].volumes.is_none());
+    }
+
+    #[test]
+    fn agent_volumes_yaml_roundtrip() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            broker: None,
+            skills_repo: None,
+            agents: vec![Agent {
+                name: "librarian".to_string(),
+                image: "librarian:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+                persona: None,
+                skills: None,
+                topology_edit: None,
+                volumes: Some(vec![AgentVolumeMount {
+                    name: "shared-lib".to_string(),
+                    mount: "/workspace/.library".to_string(),
+                    mount_mode: MountMode::Rw,
+                }]),
+            }],
+            streams: vec![],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        let parsed: Topology = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(topo, parsed);
+    }
+
+    #[test]
+    fn agent_volumes_none_not_serialized() {
+        let topo = Topology {
+            api_version: "wheelhouse.dev/v1".to_string(),
+            name: "dev".to_string(),
+            broker: None,
+            skills_repo: None,
+            agents: vec![Agent {
+                name: "donna".to_string(),
+                image: "agent-claude:latest".to_string(),
+                replicas: 1,
+                streams: vec![],
+                persona: None,
+                skills: None,
+                topology_edit: None,
+                volumes: None,
+            }],
+            streams: vec![],
+            surfaces: vec![],
+            guardrails: None,
+        };
+        let yaml = serde_yaml::to_string(&topo).unwrap();
+        assert!(
+            !yaml.contains("volumes"),
+            "volumes: None should be omitted from YAML: {yaml}"
+        );
+    }
+
+    #[test]
+    fn mount_mode_serde_lowercase() {
+        let ro: MountMode = serde_yaml::from_str("ro").unwrap();
+        assert_eq!(ro, MountMode::Ro);
+        let rw: MountMode = serde_yaml::from_str("rw").unwrap();
+        assert_eq!(rw, MountMode::Rw);
+
+        let ro_str = serde_yaml::to_string(&MountMode::Ro).unwrap();
+        assert!(ro_str.trim() == "ro", "got: {ro_str}");
+        let rw_str = serde_yaml::to_string(&MountMode::Rw).unwrap();
+        assert!(rw_str.trim() == "rw", "got: {rw_str}");
+    }
+
+    #[test]
+    fn mount_mode_default_is_rw() {
+        assert_eq!(MountMode::default(), MountMode::Rw);
     }
 }

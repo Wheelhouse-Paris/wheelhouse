@@ -1094,6 +1094,8 @@ fn run_podman_checked(
 /// and sets `WH_CONTEXT_PATH` for per-stream context files.
 /// `extra_env` is a list of additional `(KEY, VALUE)` pairs injected as `-e` flags
 /// (used to pass secrets like `CLAUDE_CODE_OAUTH_TOKEN` from the CLI keychain).
+/// `agent_volumes` are additional named volume mounts declared on the agent (ADR-043).
+/// Each mount respects `mount_mode`: RW mounts use `-v name:path`, RO mounts use `-v name:path:ro`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_run_args(
     topology_name: &str,
@@ -1106,6 +1108,7 @@ pub fn build_run_args(
     has_skills: bool,
     extra_env: &[(String, String)],
     network: Option<&str>,
+    agent_volumes: Option<&[crate::deploy::AgentVolumeMount]>,
 ) -> Vec<String> {
     let name = container_name(topology_name, agent_name);
     let url = broker_url.unwrap_or(BROKER_DNS_URL);
@@ -1175,6 +1178,21 @@ pub fn build_run_args(
         args.push("WH_SKILLS_PATH=/skills".to_string());
     }
 
+    // Mount agent-declared volumes with RO/RW mode (ADR-043)
+    if let Some(volumes) = agent_volumes {
+        for vol in volumes {
+            args.push("-v".to_string());
+            match vol.mount_mode {
+                crate::deploy::MountMode::Ro => {
+                    args.push(format!("{}:{}:ro", vol.name, vol.mount));
+                }
+                crate::deploy::MountMode::Rw => {
+                    args.push(format!("{}:{}", vol.name, vol.mount));
+                }
+            }
+        }
+    }
+
     // Attach to topology network (ADR-024)
     if let Some(net) = network {
         args.push("--network".to_string());
@@ -1206,6 +1224,7 @@ pub fn podman_run(
     has_skills: bool,
     extra_env: &[(String, String)],
     network: Option<&str>,
+    agent_volumes: Option<&[crate::deploy::AgentVolumeMount]>,
 ) -> Result<(), DeployError> {
     let podman = find_podman()?;
     let args = build_run_args(
@@ -1219,6 +1238,7 @@ pub fn podman_run(
         has_skills,
         extra_env,
         network,
+        agent_volumes,
     );
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
@@ -1894,6 +1914,7 @@ pub fn provision_containers(
                     has_skills,
                     extra_env,
                     Some(&topo_network),
+                    agent.volumes.as_deref(),
                 ) {
                     Ok(()) => result.created += 1,
                     Err(e) => {
@@ -1948,6 +1969,7 @@ pub fn provision_containers(
                     has_skills,
                     extra_env,
                     Some(&topo_network),
+                    agent.volumes.as_deref(),
                 ) {
                     Ok(()) => result.changed += 1,
                     Err(e) => {
@@ -2131,6 +2153,7 @@ mod tests {
             false,
             &[],
             None,
+            None,
         );
         assert_eq!(args[0], "run");
         assert_eq!(args[1], "-d");
@@ -2248,6 +2271,7 @@ mod tests {
             false,
             &[],
             Some("wh-dev"),
+            None,
         );
         let net_idx = args
             .iter()
@@ -2271,6 +2295,7 @@ mod tests {
             false,
             &[],
             None,
+            None,
         );
         assert_eq!(args[5], "WH_URL=tcp://10.0.0.1:5555");
         assert_eq!(args[9], "WH_STREAMS=events,logs");
@@ -2288,6 +2313,7 @@ mod tests {
             false,
             false,
             &[],
+            None,
             None,
         );
         // Should contain personas named volume mount
@@ -2318,6 +2344,7 @@ mod tests {
             false,
             false,
             &[],
+            None,
             None,
         );
         assert!(
@@ -2895,6 +2922,147 @@ mod tests {
         assert!(
             chmod_444 < mkdir_lib && mkdir_lib < chown_lib,
             "ordering: chmod 444 on schema → mkdir .library → chown .library"
+        );
+    }
+
+    // ── Agent volume mount tests (Story 14-2-1, ADR-043) ──
+
+    #[test]
+    fn build_run_args_with_ro_volume() {
+        let volumes = vec![crate::deploy::AgentVolumeMount {
+            name: "shared-lib".to_string(),
+            mount: "/workspace/.library".to_string(),
+            mount_mode: crate::deploy::MountMode::Ro,
+        }];
+        let args = build_run_args(
+            "dev",
+            "researcher",
+            "r:latest",
+            &["main".to_string()],
+            None,
+            false,
+            false,
+            false,
+            &[],
+            None,
+            Some(&volumes),
+        );
+        // Should contain -v shared-lib:/workspace/.library:ro
+        let v_indices: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "-v")
+            .map(|(i, _)| i)
+            .collect();
+        let has_ro_mount = v_indices.iter().any(|&i| {
+            args.get(i + 1)
+                .is_some_and(|v| v == "shared-lib:/workspace/.library:ro")
+        });
+        assert!(has_ro_mount, "should have RO volume mount: {:?}", args);
+        // Image is still the last arg
+        assert_eq!(args.last().unwrap(), "r:latest");
+    }
+
+    #[test]
+    fn build_run_args_with_rw_volume() {
+        let volumes = vec![crate::deploy::AgentVolumeMount {
+            name: "shared-lib".to_string(),
+            mount: "/workspace/.library".to_string(),
+            mount_mode: crate::deploy::MountMode::Rw,
+        }];
+        let args = build_run_args(
+            "dev",
+            "librarian",
+            "l:latest",
+            &["main".to_string()],
+            None,
+            false,
+            false,
+            false,
+            &[],
+            None,
+            Some(&volumes),
+        );
+        // Should contain -v shared-lib:/workspace/.library (no :ro suffix)
+        let v_indices: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "-v")
+            .map(|(i, _)| i)
+            .collect();
+        let has_rw_mount = v_indices.iter().any(|&i| {
+            args.get(i + 1)
+                .is_some_and(|v| v == "shared-lib:/workspace/.library")
+        });
+        assert!(
+            has_rw_mount,
+            "should have RW volume mount (no :ro suffix): {:?}",
+            args
+        );
+        // Image is still the last arg
+        assert_eq!(args.last().unwrap(), "l:latest");
+    }
+
+    #[test]
+    fn build_run_args_with_multiple_volumes() {
+        let volumes = vec![
+            crate::deploy::AgentVolumeMount {
+                name: "lib-vol".to_string(),
+                mount: "/workspace/.library".to_string(),
+                mount_mode: crate::deploy::MountMode::Ro,
+            },
+            crate::deploy::AgentVolumeMount {
+                name: "data-vol".to_string(),
+                mount: "/data".to_string(),
+                mount_mode: crate::deploy::MountMode::Rw,
+            },
+        ];
+        let args = build_run_args(
+            "dev",
+            "agent",
+            "a:latest",
+            &["main".to_string()],
+            None,
+            false,
+            false,
+            false,
+            &[],
+            None,
+            Some(&volumes),
+        );
+        assert!(
+            args.iter().any(|a| a == "lib-vol:/workspace/.library:ro"),
+            "should have RO library mount: {:?}",
+            args
+        );
+        assert!(
+            args.iter().any(|a| a == "data-vol:/data"),
+            "should have RW data mount: {:?}",
+            args
+        );
+    }
+
+    #[test]
+    fn build_run_args_no_volumes_unchanged() {
+        let args = build_run_args(
+            "dev",
+            "researcher",
+            "r:latest",
+            &["main".to_string()],
+            None,
+            false,
+            false,
+            false,
+            &[],
+            None,
+            None,
+        );
+        // No agent-declared volume mounts
+        let v_mounts: Vec<&String> = args.iter().filter(|a| a.contains(".library")).collect();
+        assert!(
+            v_mounts.is_empty(),
+            "should have no library volume mounts when None: {:?}",
+            v_mounts
         );
     }
 }
