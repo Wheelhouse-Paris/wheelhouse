@@ -525,6 +525,115 @@ mod tests {
         );
     }
 
+    // ── Story 14-2-4: Tenant isolation via volume scoping ──
+
+    /// Two topologies with the same library_name produce distinct volume names
+    /// because the topology name is part of the naming convention (ADR-027, FR40).
+    #[test]
+    fn tenant_isolation_distinct_volume_names() {
+        // Topology A: "acme-prod"
+        let mut topo_a = make_topology_with_subsystem(Some("research"), None, vec!["agent-a"]);
+        topo_a.name = "acme-prod".to_string();
+        let expanded_a = expand_subsystems(topo_a).unwrap();
+
+        // Topology B: "globex-prod"
+        let mut topo_b = make_topology_with_subsystem(Some("research"), None, vec!["agent-a"]);
+        topo_b.name = "globex-prod".to_string();
+        let expanded_b = expand_subsystems(topo_b).unwrap();
+
+        // Extract volume names from librarian agents
+        let vol_a = &expanded_a
+            .agents
+            .iter()
+            .find(|a| a.name.starts_with("librarian"))
+            .unwrap()
+            .volumes[0]
+            .name;
+        let vol_b = &expanded_b
+            .agents
+            .iter()
+            .find(|a| a.name.starts_with("librarian"))
+            .unwrap()
+            .volumes[0]
+            .name;
+
+        assert_ne!(
+            vol_a, vol_b,
+            "different topologies must produce different volume names"
+        );
+        assert_eq!(vol_a, "wh-acme-prod-llm-wiki-research");
+        assert_eq!(vol_b, "wh-globex-prod-llm-wiki-research");
+    }
+
+    /// Same topology name but different library_name also produces distinct volumes.
+    #[test]
+    fn tenant_isolation_distinct_library_names() {
+        let topo_a = make_topology_with_subsystem(Some("research"), None, vec!["agent-a"]);
+        let topo_b = make_topology_with_subsystem(Some("support"), None, vec!["agent-a"]);
+
+        let expanded_a = expand_subsystems(topo_a).unwrap();
+        let expanded_b = expand_subsystems(topo_b).unwrap();
+
+        let vol_a = &expanded_a
+            .agents
+            .iter()
+            .find(|a| a.name.starts_with("librarian"))
+            .unwrap()
+            .volumes[0]
+            .name;
+        let vol_b = &expanded_b
+            .agents
+            .iter()
+            .find(|a| a.name.starts_with("librarian"))
+            .unwrap()
+            .volumes[0]
+            .name;
+
+        assert_ne!(vol_a, vol_b);
+        assert_eq!(vol_a, "wh-lab-llm-wiki-research");
+        assert_eq!(vol_b, "wh-lab-llm-wiki-support");
+    }
+
+    /// Multi-agent expansion: 3 members all get the same topology-scoped volume.
+    #[test]
+    fn multi_agent_same_volume_scoped_to_topology() {
+        let topo =
+            make_topology_with_subsystem(Some("wiki"), None, vec!["agent-a", "agent-b", "agent-c"]);
+        let expanded = expand_subsystems(topo).unwrap();
+
+        let expected_vol = "wh-lab-llm-wiki-wiki";
+
+        // All 3 members and the librarian share the same volume name
+        for name in &["agent-a", "agent-b", "agent-c", "librarian-wiki"] {
+            let agent = expanded.agents.iter().find(|a| a.name == *name).unwrap();
+            let vol = agent
+                .volumes
+                .iter()
+                .find(|v| v.name.contains("llm-wiki"))
+                .unwrap_or_else(|| panic!("{name} should have library volume"));
+            assert_eq!(vol.name, expected_vol, "{name} volume name mismatch");
+        }
+    }
+
+    /// Librarian streams list contains all member streams for multi-agent serving.
+    #[test]
+    fn multi_agent_librarian_subscribes_to_all_streams() {
+        let topo =
+            make_topology_with_subsystem(Some("wiki"), None, vec!["agent-a", "agent-b", "agent-c"]);
+        let expanded = expand_subsystems(topo).unwrap();
+
+        let librarian = expanded
+            .agents
+            .iter()
+            .find(|a| a.name == "librarian-wiki")
+            .unwrap();
+        let streams_env = librarian.env.as_ref().unwrap().get("WH_STREAMS").unwrap();
+
+        assert!(streams_env.contains("eot-agent-a-wiki"));
+        assert!(streams_env.contains("eot-agent-b-wiki"));
+        assert!(streams_env.contains("eot-agent-c-wiki"));
+    }
+
     #[test]
     fn parse_topology_with_subsystems() {
         let yaml = r#"

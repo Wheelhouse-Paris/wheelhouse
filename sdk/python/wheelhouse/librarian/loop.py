@@ -135,21 +135,27 @@ class LibrarianLoop:
         reason = policy_result.reason
         is_update = reason in ("update_existing_page", "dedup_merged")
 
-        # Begin transaction
+        # Begin transaction — include source_agent_id in summary for
+        # multi-agent attribution (story 14-2-4, FR22, FR40).
+        source = event.source_agent_id or "unknown"
         self.sandbox.begin_transaction(
             operation="librarian_decide",
-            summary=f"{reason}: {page_path}",
+            summary=f"{reason}: {page_path} (source: {source})",
         )
 
         try:
             # Write page
             self.sandbox.write(page_path, content)
 
-            # Commit with structured metadata
+            # Commit with structured metadata — sources carries the
+            # originating agent so git log shows attribution (ADR-039).
+            commit_kwargs: dict = {}
             if is_update:
-                self.sandbox.commit(pages_updated=[page_path])
+                commit_kwargs["pages_updated"] = [page_path]
             else:
-                self.sandbox.commit(pages_created=[page_path])
+                commit_kwargs["pages_created"] = [page_path]
+            commit_kwargs["sources"] = [source]
+            self.sandbox.commit(**commit_kwargs)
         except Exception:
             logger.exception(
                 "Failed to write/commit page %s for event %s",
