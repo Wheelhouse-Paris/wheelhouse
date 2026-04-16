@@ -6,7 +6,8 @@ commits to git with structured metadata.
 
 Stories:
   - 14-1-2: skeleton (process_event placeholder)
-  - 14-1-3: full decision policy wiring (this version)
+  - 14-1-3: full decision policy wiring
+  - 14-1-4: idempotent event processing with LRU dedup cache
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+from wheelhouse.librarian.dedup import DedupCache
 from wheelhouse.librarian.proto import LibraryWriteEvent
 from wheelhouse.librarian.types import DecisionResult
 from wheelhouse.skills.librarian.decide import decide
@@ -40,6 +42,8 @@ class LibrarianLoop:
         llm_fn: Callable (system_prompt, user_content) -> response string.
         sandbox: LibrarySandbox instance for file operations and git commits.
                  None disables write operations (dry-run / test mode).
+        dedup: DedupCache for idempotent event processing (story 14-1-4).
+               None disables dedup checking (backward compat / test mode).
     """
 
     def __init__(
@@ -49,12 +53,14 @@ class LibrarianLoop:
         locales: list[str] | None = None,
         llm_fn: Callable[[str, str], str] | None = None,
         sandbox: object | None = None,
+        dedup: DedupCache | None = None,
     ) -> None:
         self.library_path = Path(library_path)
         self.library_id = library_id
         self.locales = locales or ["en", "fr"]
         self.llm_fn = llm_fn
         self.sandbox = sandbox
+        self.dedup = dedup
 
     def _build_library_state(self) -> LibraryState:
         """Read current Library state from the filesystem.
@@ -178,6 +184,19 @@ class LibrarianLoop:
             event.locale,
         )
 
+        # Step 0 (14-1-4): Dedup check — skip before any LLM call
+        if self.dedup is not None and self.dedup.contains(event.event_id):
+            logger.info(
+                "Dedup hit: event_id=%s already processed, skipping",
+                event.event_id,
+            )
+            return DecisionResult(
+                reason="dedup_skipped",
+                committed=False,
+                event_id=event.event_id,
+                locale=event.locale if event.locale in self.locales else "en",
+            )
+
         # Guard: llm_fn must be set
         if self.llm_fn is None:
             logger.error(
@@ -237,7 +256,12 @@ class LibrarianLoop:
                 policy_result.reason,
             )
 
-        # Step 6: Bridge policy DecisionResult to loop DecisionResult
+        # Step 6 (14-1-4): Record in dedup cache after successful processing
+        if self.dedup is not None:
+            self.dedup.add(event.event_id)
+            self.dedup.save()
+
+        # Step 7: Bridge policy DecisionResult to loop DecisionResult
         return DecisionResult(
             reason=policy_result.reason,
             committed=policy_result.committed,
