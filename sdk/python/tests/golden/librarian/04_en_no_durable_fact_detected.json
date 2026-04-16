@@ -1,0 +1,18 @@
+{
+  "input": {
+    "segment": [
+      {"role": "user", "content": "Can you explain what a REST API is?", "timestamp_ms": 1713000000000},
+      {"role": "assistant", "content": "A REST API (Representational State Transfer) is an architectural style for designing networked applications. It uses HTTP methods like GET, POST, PUT, DELETE to interact with resources identified by URLs.", "timestamp_ms": 1713000001000}
+    ],
+    "locale": "en",
+    "library_state": {"index_content": "", "existing_pages": {}},
+    "mock_llm_response": "{\"reason\": \"no_durable_fact_detected\", \"committed\": false, \"page_path\": null, \"content\": null}"
+  },
+  "expected": {
+    "reason": "no_durable_fact_detected",
+    "committed": false,
+    "page_path": null,
+    "content": null,
+    "schema_version": 1
+  }
+}

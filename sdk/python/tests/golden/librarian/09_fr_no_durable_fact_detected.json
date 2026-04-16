@@ -1,0 +1,18 @@
+{
+  "input": {
+    "segment": [
+      {"role": "user", "content": "Peux-tu m'expliquer ce qu'est une API REST ?", "timestamp_ms": 1713000000000},
+      {"role": "assistant", "content": "Une API REST (Representational State Transfer) est un style d'architecture pour les applications reseau. Elle utilise des methodes HTTP comme GET, POST, PUT, DELETE pour interagir avec des ressources identifiees par des URL.", "timestamp_ms": 1713000001000}
+    ],
+    "locale": "fr",
+    "library_state": {"index_content": "", "existing_pages": {}},
+    "mock_llm_response": "{\"reason\": \"no_durable_fact_detected\", \"committed\": false, \"page_path\": null, \"content\": null}"
+  },
+  "expected": {
+    "reason": "no_durable_fact_detected",
+    "committed": false,
+    "page_path": null,
+    "content": null,
+    "schema_version": 1
+  }
+}

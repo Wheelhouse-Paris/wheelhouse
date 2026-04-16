@@ -1,0 +1,23 @@
+{
+  "input": {
+    "segment": [
+      {"role": "user", "content": "Actually, we changed the ARR target. We now need 750k ARR before the Series A, not 500k.", "timestamp_ms": 1713100000000},
+      {"role": "assistant", "content": "Understood. I've updated the target: you now need 750k ARR before proceeding with the Series A fundraise in Q3 2027.", "timestamp_ms": 1713100001000}
+    ],
+    "locale": "en",
+    "library_state": {
+      "index_content": "# Library Index\n\n- [Fundraise Timeline](pages/fundraise-timeline.md)\n",
+      "existing_pages": {
+        "pages/fundraise-timeline.md": "---\nsource_agent_id: agent-a\nconversation_id: conv-001\ntimestamp: 2024-04-13T12:00:00Z\nsnippet: I just decided to postpone the Series A fundraise to Q3 2027.\n---\n\n# Fundraise Timeline\n\nSeries A fundraise postponed to Q3 2027. Target: 500k ARR before raising."
+      }
+    },
+    "mock_llm_response": "{\"reason\": \"update_existing_page\", \"committed\": true, \"page_path\": \"pages/fundraise-timeline.md\", \"content\": \"---\\nsource_agent_id: agent-a\\nconversation_id: conv-002\\ntimestamp: 2024-04-14T15:46:40Z\\nsnippet: Actually, we changed the ARR target. We now need 750k ARR before the Series A.\\n---\\n\\n# Fundraise Timeline\\n\\nSeries A fundraise postponed to Q3 2027. Target: **750k ARR** before raising (updated from 500k).\"}"
+  },
+  "expected": {
+    "reason": "update_existing_page",
+    "committed": true,
+    "page_path": "pages/fundraise-timeline.md",
+    "content": "---\nsource_agent_id: agent-a\nconversation_id: conv-002\ntimestamp: 2024-04-14T15:46:40Z\nsnippet: Actually, we changed the ARR target. We now need 750k ARR before the Series A.\n---\n\n# Fundraise Timeline\n\nSeries A fundraise postponed to Q3 2027. Target: **750k ARR** before raising (updated from 500k).",
+    "schema_version": 1
+  }
+}

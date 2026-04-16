@@ -1,0 +1,18 @@
+{
+  "input": {
+    "segment": [
+      {"role": "user", "content": "I just decided to postpone the Series A fundraise to Q3 2027. We want to hit 500k ARR first.", "timestamp_ms": 1713000000000},
+      {"role": "assistant", "content": "Got it. I've noted that you're postponing the Series A to Q3 2027, targeting 500k ARR as the threshold before raising.", "timestamp_ms": 1713000001000}
+    ],
+    "locale": "en",
+    "library_state": {"index_content": "", "existing_pages": {}},
+    "mock_llm_response": "{\"reason\": \"durable_fact_written\", \"committed\": true, \"page_path\": \"pages/fundraise-timeline.md\", \"content\": \"---\\nsource_agent_id: agent-a\\nconversation_id: conv-001\\ntimestamp: 2024-04-13T12:00:00Z\\nsnippet: I just decided to postpone the Series A fundraise to Q3 2027.\\n---\\n\\n# Fundraise Timeline\\n\\nSeries A fundraise postponed to Q3 2027. Target: 500k ARR before raising.\"}"
+  },
+  "expected": {
+    "reason": "durable_fact_written",
+    "committed": true,
+    "page_path": "pages/fundraise-timeline.md",
+    "content": "---\nsource_agent_id: agent-a\nconversation_id: conv-001\ntimestamp: 2024-04-13T12:00:00Z\nsnippet: I just decided to postpone the Series A fundraise to Q3 2027.\n---\n\n# Fundraise Timeline\n\nSeries A fundraise postponed to Q3 2027. Target: 500k ARR before raising.",
+    "schema_version": 1
+  }
+}
