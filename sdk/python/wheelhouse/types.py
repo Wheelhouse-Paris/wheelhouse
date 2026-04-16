@@ -26,10 +26,13 @@ from wheelhouse._proto.wheelhouse.v1 import (
     TypeRegistration,
     TypeRegistryEntry,
 )
+from wheelhouse.librarian.proto import ConversationMessage, LibraryWriteEvent
 
 __all__ = [
+    "ConversationMessage",
     "CronEvent",
     "FileMessage",
+    "LibraryWriteEvent",
     "Reaction",
     "SkillInvocation",
     "SkillProgress",
