@@ -31,6 +31,7 @@ import wheelhouse
 from wheelhouse.skills.library_sandbox import LibrarySandbox
 from wheelhouse.types import TopologyShutdown
 
+from wheelhouse._proto.wheelhouse.v1 import SkillResult
 from wheelhouse.librarian.dedup import DedupCache
 from wheelhouse.librarian.loop import LibrarianLoop
 from wheelhouse.librarian.proto import LibraryWriteEvent
@@ -187,6 +188,37 @@ async def run(config: LibrarianConfig) -> None:
     dedup_path = Path(config.library_path) / ".dedup"
     dedup = DedupCache.load(dedup_path)
 
+    # SkillResult emission callback for metering (14-1-5, AC-6).
+    # Bridges the sync LibrarianLoop with the async connection.publish().
+    _loop = asyncio.get_running_loop()
+
+    def publish_skill_result(
+        *,
+        invocation_id: str,
+        skill_name: str,
+        success: bool,
+        output: str,
+        tokens_consumed: int,
+        library_id: str,
+        agent_id: str,
+    ) -> None:
+        """Publish a SkillResult to the broker for metering (14-1-5)."""
+        import time as _time
+
+        sr = SkillResult(
+            invocation_id=invocation_id,
+            skill_name=skill_name,
+            success=success,
+            output=output,
+            timestamp_ms=int(_time.time() * 1000),
+            library_tokens=tokens_consumed,
+        )
+        # Schedule the async publish on the running event loop.
+        asyncio.run_coroutine_threadsafe(
+            connection.publish(f"skill-results-{agent_id}", sr),
+            _loop,
+        )
+
     # Initialize the librarian loop
     librarian_loop = LibrarianLoop(
         library_path=config.library_path,
@@ -195,6 +227,8 @@ async def run(config: LibrarianConfig) -> None:
         llm_fn=llm_fn,
         sandbox=sandbox,
         dedup=dedup,
+        publish_skill_result=publish_skill_result,
+        agent_name=config.agent_name,
     )
 
     # Create message handler
