@@ -18,7 +18,8 @@ proto-python:
 	uv run --extra dev python -m grpc_tools.protoc \
 		-I$(PROTO_DIR) \
 		--python_betterproto_out=$(OUT_DIR) \
-		$(PROTO_DIR)/wheelhouse/v1/*.proto
+		$(PROTO_DIR)/wheelhouse/v1/*.proto \
+		$(PROTO_DIR)/wheelhouse/librarian/v1/*.proto
 	@echo "Python proto types generated in $(OUT_DIR)"
 
 ## Run Python SDK tests

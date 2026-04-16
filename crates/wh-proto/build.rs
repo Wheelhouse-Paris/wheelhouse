@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         proto_root.join("wheelhouse/v1/skills.proto"),
         proto_root.join("wheelhouse/v1/system.proto"),
         proto_root.join("wheelhouse/v1/stream.proto"),
+        proto_root.join("wheelhouse/librarian/v1/librarian.proto"),
     ];
 
     // Verify all proto files exist

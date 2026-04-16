@@ -51,7 +51,6 @@ class TextMessage(betterproto.Message):
     attachment_filename: str = betterproto.string_field(9)
     attachment_mime_type: str = betterproto.string_field(10)
 
-
 @dataclass(eq=False, repr=False)
 class FileMessage(betterproto.Message):
     """FileMessage — binary or file content published into a stream."""

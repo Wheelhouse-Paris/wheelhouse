@@ -14,6 +14,13 @@ pub mod wheelhouse {
     pub mod v1 {
         include!(concat!(env!("OUT_DIR"), "/wheelhouse.v1.rs"));
     }
+
+    /// Librarian subsystem types (ADR-042).
+    pub mod librarian {
+        pub mod v1 {
+            include!(concat!(env!("OUT_DIR"), "/wheelhouse.librarian.v1.rs"));
+        }
+    }
 }
 
 // Re-export prost_types for consumers using Timestamp in CronEvent and other proto messages.
@@ -365,6 +372,69 @@ mod tests {
         let decoded = TypeRegistryEntry::decode(encoded.as_slice()).unwrap();
         assert!(decoded.is_builtin);
         assert_eq!(original.full_name, decoded.full_name);
+    }
+
+    // ── Librarian types ─────────────────────────────────────
+
+    #[test]
+    fn library_write_event_default() {
+        let evt = crate::wheelhouse::librarian::v1::LibraryWriteEvent::default();
+        assert!(evt.event_id.is_empty());
+        assert!(evt.source_agent_id.is_empty());
+        assert!(evt.segment.is_empty());
+        assert!(evt.locale.is_empty());
+    }
+
+    #[test]
+    fn library_write_event_roundtrip() {
+        let original = crate::wheelhouse::librarian::v1::LibraryWriteEvent {
+            event_id: "evt-001".to_string(),
+            source_agent_id: "agent-a".to_string(),
+            library_id: "research".to_string(),
+            conversation_id: "conv-123".to_string(),
+            timestamp_ms: 1710000000000,
+            segment: vec![
+                crate::wheelhouse::librarian::v1::ConversationMessage {
+                    role: "user".to_string(),
+                    content: "What is Rust?".to_string(),
+                    timestamp_ms: 1710000000000,
+                },
+                crate::wheelhouse::librarian::v1::ConversationMessage {
+                    role: "assistant".to_string(),
+                    content: "Rust is a systems programming language.".to_string(),
+                    timestamp_ms: 1710000001000,
+                },
+            ],
+            locale: "en".to_string(),
+            metadata: std::collections::HashMap::new(),
+        };
+        let encoded = original.encode_to_vec();
+        let decoded =
+            crate::wheelhouse::librarian::v1::LibraryWriteEvent::decode(encoded.as_slice())
+                .unwrap();
+        assert_eq!(original.event_id, decoded.event_id);
+        assert_eq!(original.source_agent_id, decoded.source_agent_id);
+        assert_eq!(original.library_id, decoded.library_id);
+        assert_eq!(original.locale, decoded.locale);
+        assert_eq!(original.segment.len(), decoded.segment.len());
+        assert_eq!(original.segment[0].role, decoded.segment[0].role);
+        assert_eq!(original.segment[1].content, decoded.segment[1].content);
+    }
+
+    #[test]
+    fn conversation_message_roundtrip() {
+        let original = crate::wheelhouse::librarian::v1::ConversationMessage {
+            role: "user".to_string(),
+            content: "Bonjour".to_string(),
+            timestamp_ms: 1710000000000,
+        };
+        let encoded = original.encode_to_vec();
+        let decoded =
+            crate::wheelhouse::librarian::v1::ConversationMessage::decode(encoded.as_slice())
+                .unwrap();
+        assert_eq!(original.role, decoded.role);
+        assert_eq!(original.content, decoded.content);
+        assert_eq!(original.timestamp_ms, decoded.timestamp_ms);
     }
 
     // ── Empty message deserialization ───────────────────────
