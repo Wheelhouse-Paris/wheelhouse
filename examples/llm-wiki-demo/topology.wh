@@ -1,0 +1,68 @@
+# LLM-Wiki Demo Topology
+#
+# A minimal 2-agent topology with a shared Library managed by the
+# LLM-Wiki librarian subsystem.  Deploy with:
+#
+#   wh deploy plan examples/llm-wiki-demo/topology.wh
+#   wh deploy apply examples/llm-wiki-demo/topology.wh
+#
+# The composition loader expands the `subsystems` block into:
+#   - 1 librarian container (librarian-knowledge) with RW mount
+#   - 2 end-of-turn streams (eot-assistant-en-knowledge, eot-assistant-fr-knowledge)
+#   - 1 shared named volume (wh-llm-wiki-demo-llm-wiki-knowledge)
+#   - 2 RO volume mounts on the member agents
+#   - WH_LIBRARY_WRITE_STREAM env var on each member agent
+#
+# Tear down with:
+#   wh deploy destroy examples/llm-wiki-demo/topology.wh
+#   wh deploy destroy examples/llm-wiki-demo/topology.wh --remove-volumes
+
+api_version: wheelhouse.dev/v1
+name: llm-wiki-demo
+
+# ── Agents ──────────────────────────────────────────────────────────
+# Two Claude-based agents sharing a Library.  The English agent is
+# wired to a CLI surface for quick local testing; the French agent
+# can be reached via Telegram or a second CLI surface.
+
+agents:
+  - name: assistant-en
+    image: ghcr.io/wheelhouse-paris/agent-claude:latest
+    streams: [main-en]
+    persona: |
+      You are an English-speaking assistant.
+      Help the user with their questions and tasks.
+
+  - name: assistant-fr
+    image: ghcr.io/wheelhouse-paris/agent-claude:latest
+    streams: [main-fr]
+    persona: |
+      Tu es un assistant francophone.
+      Aide l'utilisateur dans ses questions et taches.
+
+# ── Streams ─────────────────────────────────────────────────────────
+
+streams:
+  - name: main-en
+    description: "Primary conversation stream for assistant-en"
+  - name: main-fr
+    description: "Primary conversation stream for assistant-fr"
+
+# ── Surfaces ────────────────────────────────────────────────────────
+# A CLI surface for quick local interaction with the English agent.
+
+surfaces:
+  - name: cli
+    kind: cli
+    stream: main-en
+
+# ── Subsystems ──────────────────────────────────────────────────────
+# The llm-wiki subsystem adds autonomous knowledge persistence.
+# Both agents contribute to the same Library; only the librarian
+# can write.  Member agents get read-only mounts.
+
+subsystems:
+  - path: subsystems/llm-wiki/
+    members: [assistant-en, assistant-fr]
+    library_name: knowledge
+    locales: [en, fr]
