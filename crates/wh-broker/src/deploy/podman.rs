@@ -1306,7 +1306,7 @@ pub fn podman_run(
     has_skills: bool,
     extra_env: &[(String, String)],
     network: Option<&str>,
-    agent_volumes: Option<&[crate::deploy::AgentVolumeMount]>,
+    _agent_volumes: Option<&[crate::deploy::AgentVolumeMount]>,
 ) -> Result<(), DeployError> {
     podman_run_with_agent_config(
         topology_name,
@@ -2361,6 +2361,7 @@ mod tests {
             false,
             &[],
             None,
+            None,
         );
         let researcher_args = build_run_args(
             "dev",
@@ -2372,6 +2373,7 @@ mod tests {
             false,
             false,
             &[],
+            None,
             None,
         );
 

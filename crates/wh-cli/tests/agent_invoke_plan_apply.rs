@@ -95,6 +95,7 @@ fn test_agent_apply_commit_with_agent_name() {
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
+        subsystems: vec![],
     };
     std::fs::write(
         wh_dir.join("state.json"),

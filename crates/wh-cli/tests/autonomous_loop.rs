@@ -146,13 +146,15 @@ fn signal_evaluation_proposes_scale_up_on_timeout_pattern() {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     let eval = evaluate_signal("4 daily timeouts on researcher", &topology);
@@ -175,6 +177,7 @@ fn signal_evaluation_returns_none_for_unrecognized_pattern() {
         guardrails: None,
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     let eval = evaluate_signal("hello world nothing to see", &topology);
@@ -197,7 +200,8 @@ fn signal_evaluation_respects_guardrail_max_replicas() {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![],
         surfaces: vec![],
@@ -207,6 +211,7 @@ fn signal_evaluation_respects_guardrail_max_replicas() {
         }),
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     let eval = evaluate_signal("4 daily timeouts on researcher", &topology);

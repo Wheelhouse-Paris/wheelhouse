@@ -64,7 +64,8 @@ fn high_impact_change_with_low_threshold_requires_approval() {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![],
         surfaces: vec![],
@@ -75,6 +76,7 @@ fn high_impact_change_with_low_threshold_requires_approval() {
         }),
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     // Signal triggers a scale from 1->2 = 100% increase = High impact
@@ -205,7 +207,8 @@ fn low_impact_change_with_low_threshold_proceeds_autonomously() {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![],
         surfaces: vec![],
@@ -216,6 +219,7 @@ fn low_impact_change_with_low_threshold_proceeds_autonomously() {
         }),
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     // 5 -> 6 = 20% increase = Low impact
@@ -252,13 +256,15 @@ fn any_change_without_threshold_proceeds_autonomously() {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![],
         surfaces: vec![],
         guardrails: None,
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     let eval = SignalEvaluation {
@@ -294,7 +300,8 @@ fn medium_threshold_allows_medium_but_blocks_high() {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![],
         surfaces: vec![],
@@ -305,6 +312,7 @@ fn medium_threshold_allows_medium_but_blocks_high() {
         }),
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     // 2 -> 3 = 50% = Medium impact -> should proceed with medium threshold
@@ -358,7 +366,8 @@ fn high_threshold_allows_all_changes() {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }],
         streams: vec![],
         surfaces: vec![],
@@ -369,6 +378,7 @@ fn high_threshold_allows_all_changes() {
         }),
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     // 1 -> 3 = 200% = High impact -> should still proceed with high threshold
@@ -492,6 +502,7 @@ fn classify_impact_high_for_large_scaling() {
         guardrails: None,
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     // 1 -> 3 = 200% increase = High
@@ -519,6 +530,7 @@ fn classify_impact_low_for_small_increase() {
         guardrails: None,
         broker: None,
         skills_repo: None,
+        subsystems: vec![],
     };
 
     // 5 -> 6 = 20% = Low
