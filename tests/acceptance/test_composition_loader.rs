@@ -226,3 +226,125 @@ subsystems:
         "should fail on duplicate agent name 'librarian-research'"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Story 14-4-2: EROFS mount mode propagation through composition
+// ---------------------------------------------------------------------------
+
+/// Given a subsystem declaration with multiple members,
+/// When the composition loader expands it,
+/// Then ALL member agents have RO mounts (EROFS enforced) and the librarian has RW.
+#[test]
+fn erofs_all_members_get_ro_mounts() {
+    let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: prod
+agents:
+  - name: agent-a
+    image: agent-claude:latest
+    streams: [main]
+  - name: agent-b
+    image: agent-claude:latest
+    streams: [main]
+  - name: agent-c
+    image: agent-claude:latest
+    streams: [main]
+streams:
+  - name: main
+subsystems:
+  - path: subsystems/llm-wiki/
+    members: [agent-a, agent-b, agent-c]
+    library_name: wiki
+"#;
+    let topo = parse_topology(yaml).expect("valid topology");
+    let expanded = wh_broker::deploy::composition::expand_subsystems(topo)
+        .expect("subsystem expansion should succeed");
+
+    // All 3 member agents must have RO volume mounts
+    for member_name in &["agent-a", "agent-b", "agent-c"] {
+        let agent = expanded
+            .agents
+            .iter()
+            .find(|a| a.name == *member_name)
+            .unwrap_or_else(|| panic!("{member_name} should exist"));
+        let vol = agent
+            .volumes
+            .iter()
+            .find(|v| v.name.contains("llm-wiki"))
+            .unwrap_or_else(|| panic!("{member_name} should have library volume"));
+        assert_eq!(
+            vol.mount_mode.as_deref().unwrap_or("rw"),
+            "ro",
+            "{member_name} library volume must be RO (EROFS enforced)"
+        );
+    }
+
+    // Librarian must have RW mount
+    let librarian = expanded
+        .agents
+        .iter()
+        .find(|a| a.name == "librarian-wiki")
+        .expect("librarian-wiki should exist");
+    let lib_vol = librarian
+        .volumes
+        .iter()
+        .find(|v| v.name.contains("llm-wiki"))
+        .expect("librarian should have library volume");
+    assert_eq!(
+        lib_vol.mount_mode.as_deref().unwrap_or("rw"),
+        "rw",
+        "librarian library volume must be RW"
+    );
+}
+
+/// Given a subsystem expansion,
+/// When mount args are generated from the expanded volumes,
+/// Then RO member volumes produce `:ro` suffix and RW librarian does not.
+#[test]
+fn erofs_mount_args_match_composition_modes() {
+    let yaml = r#"
+api_version: wheelhouse.dev/v1
+name: lab
+agents:
+  - name: reader
+    image: agent-claude:latest
+    streams: [main]
+streams:
+  - name: main
+subsystems:
+  - path: subsystems/llm-wiki/
+    members: [reader]
+    library_name: docs
+"#;
+    let topo = parse_topology(yaml).expect("valid topology");
+    let expanded = wh_broker::deploy::composition::expand_subsystems(topo)
+        .expect("subsystem expansion should succeed");
+
+    // Reader agent should have RO volume
+    let reader = expanded
+        .agents
+        .iter()
+        .find(|a| a.name == "reader")
+        .expect("reader should exist");
+    let reader_args = wh_broker::deploy::podman::build_volume_mount_args(&reader.volumes);
+    assert!(
+        reader_args.iter().any(|a| a.ends_with(":ro")),
+        "reader volume mount args must include :ro suffix: {:?}",
+        reader_args
+    );
+
+    // Librarian should have RW volume
+    let librarian = expanded
+        .agents
+        .iter()
+        .find(|a| a.name.starts_with("librarian"))
+        .expect("librarian should exist");
+    let librarian_args =
+        wh_broker::deploy::podman::build_volume_mount_args(&librarian.volumes);
+    assert!(
+        !librarian_args.iter().any(|a| a.ends_with(":ro")),
+        "librarian volume mount args must NOT include :ro suffix: {:?}",
+        librarian_args
+    );
+}
+

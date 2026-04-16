@@ -459,6 +459,72 @@ mod tests {
         assert_eq!(env.get("WH_DECISION_PROMPT").unwrap(), "/custom/prompt.md");
     }
 
+    // ── Story 14-4-2: EROFS propagation verification ──
+
+    /// All members get RO mounts (EROFS enforced), librarian gets RW — with 3 members.
+    #[test]
+    fn erofs_all_members_ro_librarian_rw() {
+        let topo =
+            make_topology_with_subsystem(Some("wiki"), None, vec!["agent-a", "agent-b", "agent-c"]);
+        let expanded = expand_subsystems(topo).unwrap();
+
+        // Every member agent must have mount_mode = "ro"
+        for name in &["agent-a", "agent-b", "agent-c"] {
+            let agent = expanded
+                .agents
+                .iter()
+                .find(|a| a.name == *name)
+                .unwrap_or_else(|| panic!("{name} should exist"));
+            let vol = agent
+                .volumes
+                .iter()
+                .find(|v| v.name.contains("llm-wiki"))
+                .unwrap_or_else(|| panic!("{name} should have library volume"));
+            assert_eq!(
+                vol.mount_mode.as_deref(),
+                Some("ro"),
+                "{name} must have RO mount (EROFS enforced)"
+            );
+        }
+
+        // Librarian must have mount_mode = "rw"
+        let librarian = expanded
+            .agents
+            .iter()
+            .find(|a| a.name == "librarian-wiki")
+            .expect("librarian-wiki should exist");
+        assert_eq!(
+            librarian.volumes[0].mount_mode.as_deref(),
+            Some("rw"),
+            "librarian must have RW mount"
+        );
+    }
+
+    /// Mount args generated from expanded composition produce correct :ro/:rw suffixes.
+    #[test]
+    fn erofs_mount_args_from_composition() {
+        let topo = make_topology_with_subsystem(Some("docs"), None, vec!["reader"]);
+        let expanded = expand_subsystems(topo).unwrap();
+
+        let reader = expanded.agents.iter().find(|a| a.name == "reader").unwrap();
+        let reader_args = super::super::podman::build_volume_mount_args(&reader.volumes);
+        assert!(
+            reader_args.iter().any(|a| a.ends_with(":ro")),
+            "reader mount args must include :ro suffix: {reader_args:?}"
+        );
+
+        let librarian = expanded
+            .agents
+            .iter()
+            .find(|a| a.name.starts_with("librarian"))
+            .unwrap();
+        let lib_args = super::super::podman::build_volume_mount_args(&librarian.volumes);
+        assert!(
+            !lib_args.iter().any(|a| a.ends_with(":ro")),
+            "librarian mount args must NOT include :ro suffix: {lib_args:?}"
+        );
+    }
+
     #[test]
     fn parse_topology_with_subsystems() {
         let yaml = r#"
