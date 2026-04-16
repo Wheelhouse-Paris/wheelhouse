@@ -31,6 +31,7 @@ import wheelhouse
 from wheelhouse.skills.library_sandbox import LibrarySandbox
 from wheelhouse.types import TopologyShutdown
 
+from wheelhouse.librarian.dedup import DedupCache
 from wheelhouse.librarian.loop import LibrarianLoop
 from wheelhouse.librarian.proto import LibraryWriteEvent
 
@@ -182,6 +183,10 @@ async def run(config: LibrarianConfig) -> None:
     # Create llm_fn wrapping Anthropic API
     llm_fn = make_anthropic_llm_fn(config.anthropic_api_key)
 
+    # Initialize dedup cache from Library volume (story 14-1-4)
+    dedup_path = Path(config.library_path) / ".dedup"
+    dedup = DedupCache.load(dedup_path)
+
     # Initialize the librarian loop
     librarian_loop = LibrarianLoop(
         library_path=config.library_path,
@@ -189,6 +194,7 @@ async def run(config: LibrarianConfig) -> None:
         locales=config.locales,
         llm_fn=llm_fn,
         sandbox=sandbox,
+        dedup=dedup,
     )
 
     # Create message handler
