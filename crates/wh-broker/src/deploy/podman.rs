@@ -492,6 +492,53 @@ pub fn ensure_volumes(topology_name: &str, agent_names: &[&str]) -> Result<(), D
     Ok(())
 }
 
+/// Create additional named volumes from subsystem composition (ADR-044).
+///
+/// Accepts a list of extra volume names beyond the standard topology volumes.
+/// Each volume is created idempotently via `podman volume create --ignore`.
+#[tracing::instrument(skip_all)]
+pub fn ensure_extra_volumes(extra_names: &[String]) -> Result<(), DeployError> {
+    if extra_names.is_empty() {
+        return Ok(());
+    }
+    let podman = find_podman()?;
+    tracing::info!(
+        count = extra_names.len(),
+        "ensuring subsystem volumes exist"
+    );
+    for name in extra_names {
+        run_podman_checked(
+            podman,
+            &["volume", "create", name, "--ignore"],
+            PODMAN_CMD_TIMEOUT,
+        )?;
+    }
+    tracing::info!(count = extra_names.len(), "subsystem volumes ready");
+    Ok(())
+}
+
+/// Remove additional named volumes from subsystem composition (ADR-044).
+///
+/// Best-effort: each volume removal is attempted independently.
+#[tracing::instrument(skip_all)]
+pub fn remove_extra_volumes(extra_names: &[String]) -> Result<(), DeployError> {
+    if extra_names.is_empty() {
+        return Ok(());
+    }
+    let podman = find_podman()?;
+    tracing::info!(count = extra_names.len(), "removing subsystem volumes");
+    for name in extra_names {
+        let output = run_podman(podman, &["volume", "rm", name], PODMAN_CMD_TIMEOUT)?;
+        if output.status.success() {
+            tracing::info!(volume = %name, "subsystem volume removed");
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(volume = %name, error = %stderr, "failed to remove subsystem volume");
+        }
+    }
+    Ok(())
+}
+
 /// Remove all named data volumes for the topology (ADR-027, ADR-036).
 ///
 /// Runs `podman volume rm <name>` for each volume returned by
@@ -1203,6 +1250,40 @@ pub fn build_run_args(
     args
 }
 
+/// Build volume mount arguments for agent-specific volumes (ADR-043, ADR-044).
+///
+/// Returns `-v <name>:<mount>[:ro]` flags for each volume mount on the agent.
+/// When `mount_mode` is `"ro"`, appends `:ro` to the mount spec so Podman
+/// enforces kernel-level read-only (EROFS on write attempts).
+pub fn build_volume_mount_args(volumes: &[crate::deploy::VolumeMount]) -> Vec<String> {
+    let mut args = Vec::new();
+    for vol in volumes {
+        let mode_suffix = match vol.mount_mode.as_deref() {
+            Some("ro") => ":ro",
+            _ => "",
+        };
+        args.push("-v".to_string());
+        args.push(format!("{}:{}{}", vol.name, vol.mount, mode_suffix));
+    }
+    args
+}
+
+/// Build environment variable arguments from an agent's `env` map (ADR-045).
+///
+/// Returns `-e KEY=VALUE` flags for each entry in the env map.
+pub fn build_agent_env_args(
+    env: &Option<std::collections::BTreeMap<String, String>>,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(env_map) = env {
+        for (key, value) in env_map {
+            args.push("-e".to_string());
+            args.push(format!("{key}={value}"));
+        }
+    }
+    args
+}
+
 /// Start an agent container via Podman.
 ///
 /// Uses `podman run -d` with the appropriate environment variables.
@@ -1210,6 +1291,7 @@ pub fn build_run_args(
 /// When `has_context` is true, mounts the context named volume read-only.
 /// When `network` is provided, attaches the container to the named Podman network (ADR-024).
 /// `extra_env` is forwarded to `build_run_args` for secret injection.
+/// `agent_volumes` and `agent_env` are subsystem-generated volume mounts and env vars (ADR-043, ADR-045).
 /// Timeout: 120s (image pull may be slow on first run).
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(agent = agent_name, topology = topology_name))]
@@ -1226,8 +1308,7 @@ pub fn podman_run(
     network: Option<&str>,
     agent_volumes: Option<&[crate::deploy::AgentVolumeMount]>,
 ) -> Result<(), DeployError> {
-    let podman = find_podman()?;
-    let args = build_run_args(
+    podman_run_with_agent_config(
         topology_name,
         agent_name,
         image,
@@ -1238,8 +1319,58 @@ pub fn podman_run(
         has_skills,
         extra_env,
         network,
-        agent_volumes,
+        &[],
+        &None,
+    )
+}
+
+/// Start an agent container via Podman with optional agent-specific volumes and env vars.
+///
+/// Extension of `podman_run` that also accepts subsystem-generated volume mounts
+/// (ADR-043) and environment variables (ADR-045) to inject into the container.
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, fields(agent = agent_name, topology = topology_name))]
+pub fn podman_run_with_agent_config(
+    topology_name: &str,
+    agent_name: &str,
+    image: &str,
+    streams: &[String],
+    broker_url: Option<&str>,
+    has_persona: bool,
+    has_context: bool,
+    has_skills: bool,
+    extra_env: &[(String, String)],
+    network: Option<&str>,
+    agent_volumes: &[crate::deploy::VolumeMount],
+    agent_env: &Option<std::collections::BTreeMap<String, String>>,
+) -> Result<(), DeployError> {
+    let podman = find_podman()?;
+    let mut args = build_run_args(
+        topology_name,
+        agent_name,
+        image,
+        streams,
+        broker_url,
+        has_persona,
+        has_context,
+        has_skills,
+        extra_env,
+        network,
+        None,
     );
+
+    // Remove the trailing image arg, insert agent-specific args, then re-add image
+    let image_arg = args.pop().expect("build_run_args always ends with image");
+
+    // Append subsystem-generated volume mounts (ADR-043, ADR-044)
+    args.extend(build_volume_mount_args(agent_volumes));
+
+    // Append subsystem-generated env vars (ADR-045)
+    args.extend(build_agent_env_args(agent_env));
+
+    // Re-add image as the last argument
+    args.push(image_arg);
+
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
     tracing::info!("starting agent container");
@@ -1757,6 +1888,30 @@ pub fn provision_containers(
         }
     }
 
+    // Ensure subsystem-generated volumes exist (ADR-044).
+    // Collect unique volume names from agent volume mount declarations.
+    {
+        let mut subsystem_volumes: Vec<String> = agents
+            .iter()
+            .flat_map(|a| a.volumes.iter().map(|v| v.name.clone()))
+            .collect();
+        subsystem_volumes.sort();
+        subsystem_volumes.dedup();
+        if let Err(e) = ensure_extra_volumes(&subsystem_volumes) {
+            tracing::error!(error = %e, "failed to create subsystem volumes");
+            eprintln!("Error: {e}");
+            return ApplyResult {
+                created: 0,
+                changed: 0,
+                destroyed: 0,
+                streams_created,
+                surfaces_created: 0,
+                surfaces_changed: 0,
+                surfaces_destroyed: 0,
+            };
+        }
+    }
+
     // Build agent permissions env var for wh-cli built-in skill (ADR-035, FR77).
     let agent_permissions_env = build_agent_permissions_env(agents);
 
@@ -1903,7 +2058,7 @@ pub fn provision_containers(
                 let has_context = true;
                 let has_skills = skills_repo.is_some();
 
-                match podman_run(
+                match podman_run_with_agent_config(
                     topology_name,
                     &agent.name,
                     &agent.image,
@@ -1914,7 +2069,8 @@ pub fn provision_containers(
                     has_skills,
                     extra_env,
                     Some(&topo_network),
-                    agent.volumes.as_deref(),
+                    &agent.volumes,
+                    &agent.env,
                 ) {
                     Ok(()) => result.created += 1,
                     Err(e) => {
@@ -1958,7 +2114,7 @@ pub fn provision_containers(
                 // Stop old
                 let _ = podman_stop(&name);
                 // Start new
-                match podman_run(
+                match podman_run_with_agent_config(
                     topology_name,
                     &agent.name,
                     &agent.image,
@@ -1969,7 +2125,8 @@ pub fn provision_containers(
                     has_skills,
                     extra_env,
                     Some(&topo_network),
-                    agent.volumes.as_deref(),
+                    &agent.volumes,
+                    &agent.env,
                 ) {
                     Ok(()) => result.changed += 1,
                     Err(e) => {

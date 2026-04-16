@@ -548,6 +548,7 @@ pub fn destroy(
         streams: vec![],
         surfaces: vec![],
         guardrails: topology.guardrails.clone(),
+        subsystems: vec![],
     };
     let state_path = wh_dir.join("state.json");
     let state_json = serde_json::to_string_pretty(&empty_topology)
@@ -650,6 +651,7 @@ mod tests {
                 streams: vec![],
                 surfaces: vec![],
                 guardrails: None,
+                subsystems: vec![],
             },
             source_path: PathBuf::from("test.wh"),
             context_files: vec![],
@@ -684,6 +686,7 @@ mod tests {
                 streams: vec![],
                 surfaces: vec![],
                 guardrails: None,
+                subsystems: vec![],
             },
             source_path: PathBuf::from("test.wh"),
             context_files: vec![],

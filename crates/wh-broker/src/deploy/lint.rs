@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::deploy::composition;
 use crate::deploy::{
     load_topology, load_topology_from_path, ComponentSourceMap, DeployError, Topology,
 };
@@ -61,6 +62,8 @@ pub fn lint(path: impl AsRef<Path>) -> Result<LintedFile, DeployError> {
 
     if path.is_dir() {
         let (topology, source_map) = load_topology_from_path(path)?;
+        // Expand subsystem declarations before validation (ADR-045)
+        let topology = composition::expand_subsystems(topology)?;
         Ok(LintedFile {
             topology,
             source_path: path.to_path_buf(),
@@ -68,6 +71,8 @@ pub fn lint(path: impl AsRef<Path>) -> Result<LintedFile, DeployError> {
         })
     } else {
         let topology = load_topology(path)?;
+        // Expand subsystem declarations before validation (ADR-045)
+        let topology = composition::expand_subsystems(topology)?;
         let filename = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())

@@ -575,6 +575,7 @@ mod tests {
             streams: vec![],
             surfaces: vec![],
             guardrails,
+            subsystems: vec![],
         }
     }
 
@@ -587,7 +588,8 @@ mod tests {
             persona: None,
             skills: None,
             topology_edit: None,
-            volumes: None,
+            volumes: vec![],
+            env: None,
         }
     }
 
