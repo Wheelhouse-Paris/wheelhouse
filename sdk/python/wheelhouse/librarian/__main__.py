@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import wheelhouse
+from wheelhouse.skills.library_sandbox import LibrarySandbox
 from wheelhouse.types import TopologyShutdown
 
 from wheelhouse.librarian.loop import LibrarianLoop
@@ -124,6 +125,33 @@ def validate_env() -> LibrarianConfig:
     )
 
 
+def make_anthropic_llm_fn(api_key: str) -> Any:
+    """Create an llm_fn that wraps anthropic.Anthropic().messages.create().
+
+    Returns a callable ``(system_prompt, user_content) -> response_text``
+    suitable for injection into ``decide()``.
+
+    The Anthropic client is instantiated once and reused across calls.
+    """
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    def llm_fn(system_prompt: str, user_content: str) -> str:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+        )
+        # Extract text from the response content blocks.
+        return "".join(
+            block.text for block in response.content if hasattr(block, "text")
+        )
+
+    return llm_fn
+
+
 # Shutdown coordination
 _shutdown_event = asyncio.Event()
 
@@ -144,12 +172,23 @@ async def run(config: LibrarianConfig) -> None:
         logger.error("Failed to connect to broker at %s: %s", config.wh_url, exc)
         sys.exit(1)
 
+    # Initialize LibrarySandbox with git enabled for page writes
+    sandbox = LibrarySandbox(
+        config.library_path,
+        git_enabled=True,
+        agent_name=config.agent_name,
+    )
+
+    # Create llm_fn wrapping Anthropic API
+    llm_fn = make_anthropic_llm_fn(config.anthropic_api_key)
+
     # Initialize the librarian loop
     librarian_loop = LibrarianLoop(
         library_path=config.library_path,
         library_id=config.library_id,
         locales=config.locales,
-        llm_fn=None,  # Plugged in by story 14-1-3
+        llm_fn=llm_fn,
+        sandbox=sandbox,
     )
 
     # Create message handler
