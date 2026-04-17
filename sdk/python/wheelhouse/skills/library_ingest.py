@@ -238,6 +238,16 @@ LIBRARY_INGEST_PDF_INVALID = "LIBRARY_INGEST_PDF_INVALID"
 #: explicit non-goal in v1. Added by story 13-9.
 LIBRARY_INGEST_PDF_EMPTY_EXTRACTION = "LIBRARY_INGEST_PDF_EMPTY_EXTRACTION"
 
+#: Story 15-1-1 (ADR-049) — the individual source file exceeds the 20MB
+#: per-file limit for Library storage. The error message echoes only the
+#: file size and the cap (integers, NFR9-safe).
+LIBRARY_INGEST_SOURCE_FILE_TOO_LARGE = "LIBRARY_INGEST_SOURCE_FILE_TOO_LARGE"
+
+#: Story 15-1-1 (ADR-049, NFR27) — copying the source file into
+#: ``sources/`` would push the total Library size over the 50MB cap.
+#: The error message echoes only sizes (integers, NFR9-safe).
+LIBRARY_INGEST_STORAGE_LIMIT = "LIBRARY_INGEST_STORAGE_LIMIT"
+
 
 # ─── Fixed message strings (pinned by tests) ──────────────────────────
 
@@ -359,6 +369,32 @@ _PAGE_COUNT_WARN_FMT = (
 _ACCEPT_LARGE_WARN_FMT = (
     "library_ingest: accept_large=true override — ingesting "
     "{word_count}-word source (rough token estimate: ~{tokens} tokens)"
+)
+
+# ─── ADR-049 source-file retention constants (Story 15-1-1) ──────────
+
+#: Per-file size cap for source retention. Files over 20MB are rejected
+#: before the source copy step. NFR27 bounds total Library size at 50MB,
+#: so this per-file limit gives meaningful headroom for pages + metadata.
+MAX_SOURCE_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+#: Total Library size cap including source files (NFR27 / ADR-049).
+#: The ingest pipeline computes projected size BEFORE writing the source
+#: and rejects the ingest if the cap would be exceeded.
+MAX_LIBRARY_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Story 15-1-1 — per-file size rejection. Echoes only the size and the
+# cap (integers, NFR9-safe). The "{size_mb:.1f}" format keeps decimal
+# alignment for sizes like 23.4 MB.
+_SOURCE_FILE_TOO_LARGE_MESSAGE = (
+    "File too large for Library storage (20MB limit). "
+    "Use CLI to ingest large files directly."
+)
+
+# Story 15-1-1 — total Library size rejection. Echoes no paths.
+_STORAGE_LIMIT_MESSAGE = (
+    "Library storage limit reached (50MB). "
+    "Remove unused sources or pages before ingesting new content."
 )
 
 # ─── FR13 consistency-gate user-facing copy (Story 13-11) ─────────────
@@ -491,6 +527,33 @@ def _count_library_pages(sandbox: LibrarySandbox) -> int:
             continue
         count += 1
     return count
+
+
+def _compute_library_size_bytes(sandbox: LibrarySandbox) -> int:
+    """Return the total size in bytes of all files in the Library.
+
+    Story 15-1-1 (ADR-049, NFR27) — walks every file returned by
+    ``sandbox.list(".")`` and sums ``os.path.getsize`` on the validated
+    absolute path. Used by the source retention step to enforce the 50MB
+    total Library cap before copying the source file.
+
+    Returns 0 on any listing failure (same robustness contract as
+    :func:`_count_library_pages`).
+    """
+    try:
+        raw = sandbox.list(".")
+    except Exception:  # noqa: BLE001 — caller stays robust on mock / missing dir
+        return 0
+    total = 0
+    for path in raw:
+        if path.startswith(".git/"):
+            continue
+        try:
+            abs_path = sandbox._validate(path)
+            total += os.path.getsize(abs_path)
+        except Exception:  # noqa: BLE001 — skip unreadable / vanished files
+            continue
+    return total
 
 
 def _is_unsafe_slug(normalized: str) -> tuple[bool, str]:
@@ -931,15 +994,26 @@ def _ingest_pipeline(
     # The PDF branch (13-9) extracts text via pypdf and collects a
     # partial-extraction flag for the commit metadata; the text /
     # markdown branch (13-8) goes through the original UTF-8 resolver.
+    #
+    # Story 15-1-1 (ADR-049): capture the raw source bytes alongside
+    # the extracted text so the retention step can persist the original
+    # file in ``sources/``. For PDF, the bytes come from
+    # ``_resolve_pdf_bytes``; for text/markdown, we re-encode the
+    # resolved text to UTF-8.
     extra_metadata: dict[str, Any] = {}
+    source_bytes: bytes
     if source_type == "pdf":
-        source_text, source_name, partial = _resolve_pdf_text(
-            sandbox, parameters
+        # Story 15-1-1: use the _with_bytes variant to get both the
+        # extracted text and the raw PDF bytes in a single resolution
+        # pass, avoiding a double read_bytes call.
+        source_text, source_name, partial, source_bytes = (
+            _resolve_pdf_text_with_bytes(sandbox, parameters)
         )
         if partial:
             extra_metadata["pdf_partial_extraction"] = True
     else:
         source_text, source_name = _resolve_source_text(sandbox, parameters)
+        source_bytes = source_text.encode("utf-8")
 
     # Steps 3–6 — shared with the text/markdown path. ``accept_large``
     # (Story 13-10 FR11 override) is resolved once here and forwarded
@@ -949,6 +1023,7 @@ def _ingest_pipeline(
         source_text=source_text,
         source_name=source_name,
         source_type=source_type,
+        source_bytes=source_bytes,
         user_hint_raw=parameters.get("user_summary_hint"),
         extra_metadata=extra_metadata,
         accept_large=_is_accept_large(parameters),
@@ -962,6 +1037,7 @@ def _summarize_and_write(
     source_text: str,
     source_name: str,
     source_type: str,
+    source_bytes: bytes | None = None,
     user_hint_raw: Any,
     extra_metadata: Mapping[str, Any],
     accept_large: bool = False,
@@ -975,6 +1051,10 @@ def _summarize_and_write(
     thread branch-specific keys (e.g. ``pdf_partial_extraction``) into
     the transaction's ``commit_metadata`` without this helper needing
     to know anything about the upstream source format.
+
+    Story 15-1-1 (ADR-049) adds ``source_bytes``: the raw original file
+    content to persist in ``sources/<source_name>`` alongside the
+    summarized pages. ``None`` disables source retention (backward compat).
     """
     # ── FR11 pre-summarizer size gate (Story 13-10) ──────────────────
     # Count words BEFORE the summarizer is called so a runaway source
@@ -1001,6 +1081,24 @@ def _summarize_and_write(
                     tokens=token_estimate,
                 ),
                 code=LIBRARY_INGEST_SOURCE_TOO_LARGE,
+            )
+
+    # ── ADR-049 source-file size gates (Story 15-1-1) ─────────────────
+    # Check BEFORE the summarizer call so we never spend LLM tokens on
+    # a source whose file would be rejected post-summarization.
+    if source_bytes is not None:
+        source_file_size = len(source_bytes)
+        if source_file_size > MAX_SOURCE_FILE_BYTES:
+            raise LibrarySkillError(
+                _SOURCE_FILE_TOO_LARGE_MESSAGE,
+                code=LIBRARY_INGEST_SOURCE_FILE_TOO_LARGE,
+            )
+        # Total Library size projection: current size + new source file.
+        current_library_size = _compute_library_size_bytes(sandbox)
+        if current_library_size + source_file_size > MAX_LIBRARY_SIZE_BYTES:
+            raise LibrarySkillError(
+                _STORAGE_LIMIT_MESSAGE,
+                code=LIBRARY_INGEST_STORAGE_LIMIT,
             )
 
     # Step 3 — summarizer wired? Do this BEFORE opening a transaction
@@ -1132,12 +1230,16 @@ def _summarize_and_write(
         rendered_pages: dict[str, str] = {}
         for draft in result.drafts:
             page_path = _normalize_page_path(draft.path)
+            _source_file = (
+                f"sources/{source_name}" if source_bytes is not None else None
+            )
             rendered_pages[page_path] = _render_page(
                 body=draft.body,
                 source_name=source_name,
                 source_type=source_type,
                 ingest_ts=ingest_ts,
                 cross_refs=list(draft.cross_refs),
+                source_file_path=_source_file,
             )
 
         _check_ingest_consistency(
@@ -1206,6 +1308,19 @@ def _summarize_and_write(
         sandbox.write(
             _PROVENANCE_PATH, _serialize_provenance(provenance_updated)
         )
+
+        # ── ADR-049 source-file retention (Story 15-1-1) ────────────
+        # Persist the original source file in ``sources/<source_name>``
+        # inside the SAME transaction as the summarized pages. The file
+        # is written AFTER the consistency gate and provenance sidecar
+        # so any failure in those earlier steps rolls back cleanly
+        # without leaving an orphaned source file. On re-ingest, the
+        # write naturally overwrites the previous version — git
+        # preserves the prior content in history.
+        if source_bytes is not None:
+            source_file_path = f"sources/{source_name}"
+            sandbox.write_bytes(source_file_path, source_bytes)
+            handle.commit_metadata["source_file"] = source_file_path
 
     # Step 6 — SkillResult. invocation_id / skill_name are filled in
     # by ``run_library_ingest`` from its own parameters; this function
@@ -1511,10 +1626,31 @@ def _resolve_pdf_text(
     Kept as a seam so that a future story can swap the extraction
     backend (pdfplumber, tika, OCR) without touching the branching
     logic inside :func:`_ingest_pipeline`.
+
+    Story 15-1-1: callers that also need the raw PDF bytes for source
+    retention should call :func:`_resolve_pdf_text_with_bytes` instead,
+    which additionally returns the original ``pdf_bytes``.
     """
     pdf_bytes, source_name = _resolve_pdf_bytes(sandbox, parameters)
     text, partial = _extract_pdf_text(pdf_bytes)
     return text, source_name, partial
+
+
+def _resolve_pdf_text_with_bytes(
+    sandbox: LibrarySandbox,
+    parameters: Mapping[str, Any],
+) -> tuple[str, str, bool, bytes]:
+    """Like :func:`_resolve_pdf_text` but also returns the raw PDF bytes.
+
+    Story 15-1-1 (ADR-049): the ingest pipeline needs both the extracted
+    text (for summarization) and the raw bytes (for source retention in
+    ``sources/``). Resolves the bytes once and threads them through.
+
+    Returns ``(text, source_name, partial, pdf_bytes)``.
+    """
+    pdf_bytes, source_name = _resolve_pdf_bytes(sandbox, parameters)
+    text, partial = _extract_pdf_text(pdf_bytes)
+    return text, source_name, partial, pdf_bytes
 
 
 def _list_existing_pages(sandbox: LibrarySandbox) -> list[str]:
@@ -1729,6 +1865,7 @@ def _render_page(
     source_type: str,
     ingest_ts: str,
     cross_refs: list[str],
+    source_file_path: str | None = None,
 ) -> str:
     """Render a page body with a minimal YAML front-matter block.
 
@@ -1746,19 +1883,31 @@ def _render_page(
     citations without re-inferring the type. Pre-13-13 pages remain
     parseable — ``_parse_front_matter_local`` handles unknown and
     missing keys gracefully.
+
+    Story 15-1-1 (ADR-049) adds ``source_file_path``: when non-None,
+    a ``source_file`` front-matter field and a ``**Source:** <path>``
+    line are appended to the rendered page so readers can locate the
+    original document.
     """
     if not body.endswith("\n"):
         body = body + "\n"
     refs_yaml = ", ".join(json.dumps(r) for r in cross_refs)
+    source_file_line = ""
+    if source_file_path is not None:
+        source_file_line = f"source_file: {json.dumps(source_file_path)}\n"
     front_matter = (
         "---\n"
         f"source: {json.dumps(source_name)}\n"
         f"source_type: {json.dumps(source_type)}\n"
         f"ingest_date: {ingest_ts}\n"
         f"cross_refs: [{refs_yaml}]\n"
-        "---\n"
+        + source_file_line
+        + "---\n"
         "\n"
     )
+    # Story 15-1-1: append source file reference to the page body.
+    if source_file_path is not None:
+        body = body + f"\n**Source:** {source_file_path}\n"
     return front_matter + body
 
 
@@ -2090,12 +2239,16 @@ __all__ = [
     "LIBRARY_INGEST_NOT_IMPLEMENTED",
     "LIBRARY_INGEST_PDF_EMPTY_EXTRACTION",
     "LIBRARY_INGEST_PDF_INVALID",
+    "LIBRARY_INGEST_SOURCE_FILE_TOO_LARGE",
     "LIBRARY_INGEST_SOURCE_NOT_FOUND",
     "LIBRARY_INGEST_SOURCE_TOO_LARGE",
+    "LIBRARY_INGEST_STORAGE_LIMIT",
     "LIBRARY_INGEST_SUMMARIZER_FAILED",
     "LIBRARY_INGEST_UNSUPPORTED_TYPE",
     "LIBRARY_READ_ONLY",
     "MAX_INGEST_WORDS",
+    "MAX_LIBRARY_SIZE_BYTES",
+    "MAX_SOURCE_FILE_BYTES",
     "OPTIONAL_PARAMS",
     "PAGE_COUNT_BLOCK",
     "PAGE_COUNT_WARN",

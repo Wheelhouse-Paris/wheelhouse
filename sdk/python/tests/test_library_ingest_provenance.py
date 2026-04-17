@@ -191,10 +191,10 @@ def test_ac1_new_page_has_four_field_front_matter(
     # Extract the front-matter block.
     fm_end = content.index("---\n", 4)
     fm = content[:fm_end]
-    # Four top-level keys in pinned order.
+    # Five top-level keys in pinned order (source_file added by 15-1-1).
     lines = [ln for ln in fm.splitlines() if ln and not ln.startswith("---")]
     keys = [ln.split(":", 1)[0] for ln in lines]
-    assert keys == ["source", "source_type", "ingest_date", "cross_refs"], keys
+    assert keys == ["source", "source_type", "ingest_date", "cross_refs", "source_file"], keys
     assert 'source: "notes.md"' in fm
     assert 'source_type: "markdown"' in fm
     assert "ingest_date: 2026-04-10T00:00:00Z" in fm

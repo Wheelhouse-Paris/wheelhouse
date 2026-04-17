@@ -318,6 +318,27 @@ class LibrarySandbox:
             f.write(content)
         self._record_staged(rel_path)
 
+    def write_bytes(self, rel_path: str, content: bytes) -> None:
+        """Write raw binary content inside the Library root.
+
+        Mirrors :meth:`write` but accepts ``bytes`` instead of a
+        UTF-8-encoded ``str`` — used by story 15-1-1 (source file
+        retention) to persist original PDF / binary source documents
+        alongside the summarized markdown pages.
+
+        Parent directories are created as needed, but only *after* the
+        path has been validated — an escape attempt never creates any
+        directory on disk. The path is recorded for staging exactly like
+        :meth:`write`.
+        """
+        target = self._validate(rel_path)
+        parent = os.path.dirname(target)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(content)
+        self._record_staged(rel_path)
+
     def list(self, rel_path: str = ".") -> list[str]:
         """Recursively list file paths under ``rel_path`` (relative to root).
 
@@ -638,6 +659,8 @@ class LibrarySandbox:
         pages_created: list[str] | None = None,
         pages_updated: list[str] | None = None,
         cross_references_added: int | None = None,
+        source_file: str | None = None,
+        **_extra: Any,
     ) -> None:
         """Stage and commit every path touched in the active transaction.
 
@@ -699,6 +722,7 @@ class LibrarySandbox:
                 pages_created=pages_created,
                 pages_updated=pages_updated,
                 cross_references_added=cross_references_added,
+                source_file=source_file,
             )
             # Story 13-6: `git commit` re-acquires index.lock briefly to
             # write the new tree, so it goes through the retry wrapper too.
@@ -938,6 +962,7 @@ class LibrarySandbox:
         pages_created: list[str] | None,
         pages_updated: list[str] | None,
         cross_references_added: int | None,
+        source_file: str | None = None,
     ) -> str:
         """Render the structured commit message defined by ADR-039.
 
@@ -949,11 +974,15 @@ class LibrarySandbox:
             Pages created: <comma-separated>
             Pages updated: <comma-separated>
             Cross-references added: <N>
+            source_file: <path>
 
         Empty/None body fields are omitted entirely (no
         ``Sources:`` line with nothing after the colon). Downstream
         tooling (wh-cli status, audit, activity feed) parses this
         format directly, so it is a de-facto API — see ADR-039.
+
+        Story 15-1-1 (ADR-049) adds the ``source_file`` field when the
+        original source document is retained in ``sources/``.
         """
         subject = f"[{operation}] {summary}"
         body_lines: list[str] = []
@@ -965,6 +994,8 @@ class LibrarySandbox:
             body_lines.append(f"Pages updated: {', '.join(pages_updated)}")
         if cross_references_added is not None:
             body_lines.append(f"Cross-references added: {cross_references_added}")
+        if source_file is not None:
+            body_lines.append(f"source_file: {source_file}")
         if body_lines:
             return subject + "\n\n" + "\n".join(body_lines)
         return subject
