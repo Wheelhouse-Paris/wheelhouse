@@ -1,4 +1,4 @@
-"""Acceptance tests for LibraryGit per-file git history SDK (Story 15-1-2).
+"""Acceptance tests for LibraryGit per-file git history SDK (Stories 15-1-2, 15-1-3).
 
 Covers ADR-050 constraints LE-03 (path validation), LE-04 (binary safety).
 All tests require the ``git`` CLI on PATH.
@@ -15,7 +15,13 @@ from typing import Iterator
 import pytest
 
 from wheelhouse.errors import LibraryCommitError, PathEscapeError
-from wheelhouse.skills.library_git import LibraryGit, TreeEntry, _validate_sha
+from wheelhouse.skills.library_git import (
+    LibraryGit,
+    LogEntry,
+    SearchResult,
+    TreeEntry,
+    _validate_sha,
+)
 from wheelhouse.skills.library_sandbox import LibrarySandbox
 
 # ─── Skip the whole file if `git` is not on PATH ──────────────────────
@@ -311,3 +317,174 @@ class TestShaValidation:
 
         with pytest.raises(ValueError, match="Invalid SHA"):
             library_git.file_content("pages/x.md", sha=";;;drop table")
+
+
+# ─── Story 15-1-3: file_log() ──────────────────────────────────────────
+
+
+class TestFileLog:
+    def test_file_log_returns_all_commits(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #1: file_log returns entries with sha, author, timestamp, message, diff_stat."""
+        _commit_file(git_sandbox, "pages/fiscal.md", "v1", summary="initial version")
+        _commit_file(git_sandbox, "pages/fiscal.md", "v1\nv2", summary="add line")
+        _commit_file(git_sandbox, "pages/fiscal.md", "v1\nv2\nv3", summary="another line")
+
+        entries = library_git.file_log("pages/fiscal.md")
+
+        assert len(entries) == 3
+        for entry in entries:
+            assert isinstance(entry, LogEntry)
+            assert len(entry.sha) == 40
+            assert "alice" in entry.author.lower() or "Agent" in entry.author
+            assert entry.timestamp > 0
+            assert entry.message  # non-empty
+
+    def test_file_log_most_recent_first(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #1: entries are ordered most recent first."""
+        _commit_file(git_sandbox, "pages/fiscal.md", "v1", summary="first")
+        _commit_file(git_sandbox, "pages/fiscal.md", "v2", summary="second")
+        _commit_file(git_sandbox, "pages/fiscal.md", "v3", summary="third")
+
+        entries = library_git.file_log("pages/fiscal.md")
+
+        # Most recent first: timestamps should be non-increasing.
+        timestamps = [e.timestamp for e in entries]
+        assert timestamps == sorted(timestamps, reverse=True)
+        # Most recent message should be "third".
+        assert "third" in entries[0].message
+
+    def test_file_log_diff_stat(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #1: diff_stat shows lines added/removed."""
+        _commit_file(git_sandbox, "pages/fiscal.md", "line1\nline2\nline3")
+        _commit_file(git_sandbox, "pages/fiscal.md", "line1\nchanged\nline3\nline4")
+
+        entries = library_git.file_log("pages/fiscal.md")
+
+        # The most recent commit modified lines — should have a non-empty diff_stat.
+        assert entries[0].diff_stat  # e.g. "+2 -1" or similar
+
+    def test_file_log_with_limit(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #2: limit truncates results."""
+        for i in range(5):
+            _commit_file(
+                git_sandbox, "pages/fiscal.md", f"version {i}", summary=f"commit {i}"
+            )
+
+        entries = library_git.file_log("pages/fiscal.md", limit=2)
+
+        assert len(entries) == 2
+
+    def test_file_log_nonexistent_file_returns_empty(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """file_log for a path with no commits returns empty list."""
+        _commit_file(git_sandbox, "pages/other.md", "content")
+
+        entries = library_git.file_log("pages/no-such-file.md")
+
+        assert entries == []
+
+    def test_file_log_path_traversal_raises(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #5: file_log with path traversal raises PathEscapeError."""
+        _commit_file(git_sandbox, "pages/legit.md", "ok")
+
+        with pytest.raises(PathEscapeError):
+            library_git.file_log("../../etc/passwd")
+
+
+# ─── Story 15-1-3: search() ────────────────────────────────────────────
+
+
+class TestSearch:
+    def test_search_returns_matches_with_context(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #3: search returns path, line_number, matching_line, context."""
+        content = "line one\nline two\nfiscal year data\nline four\nline five"
+        _commit_file(git_sandbox, "pages/report.md", content)
+
+        results = library_git.search("fiscal")
+
+        assert len(results) >= 1
+        r = results[0]
+        assert isinstance(r, SearchResult)
+        assert r.path == "pages/report.md"
+        assert r.line_number == 3
+        assert "fiscal" in r.matching_line
+        # Context: up to 2 lines before and after.
+        assert len(r.context_before) <= 2
+        assert len(r.context_after) <= 2
+
+    def test_search_matches_in_pages_and_sources(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #3: results include matches in both pages/ and sources/."""
+        _commit_file(git_sandbox, "pages/overview.md", "fiscal summary here")
+        _commit_file(git_sandbox, "sources/notes.txt", "fiscal notes here")
+
+        results = library_git.search("fiscal")
+
+        matched_paths = {r.path for r in results}
+        assert "pages/overview.md" in matched_paths
+        assert "sources/notes.txt" in matched_paths
+
+    def test_search_excludes_binary_files(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #3: binary files are excluded from search results."""
+        _commit_file(git_sandbox, "pages/overview.md", "fiscal data here")
+        # Create a binary file that happens to contain the search string.
+        binary_content = b"\x00\x01fiscal\x02\x03" + bytes(range(128, 256))
+        _commit_binary(git_sandbox, "sources/report.bin", binary_content)
+
+        results = library_git.search("fiscal")
+
+        matched_paths = {r.path for r in results}
+        assert "pages/overview.md" in matched_paths
+        assert "sources/report.bin" not in matched_paths
+
+    def test_search_no_matches_returns_empty(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #4: no matches returns empty list, not an error."""
+        _commit_file(git_sandbox, "pages/overview.md", "hello world")
+
+        results = library_git.search("xyznonexistent")
+
+        assert results == []
+
+    def test_search_empty_query_returns_empty(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """Empty query returns empty list."""
+        _commit_file(git_sandbox, "pages/overview.md", "content")
+
+        results = library_git.search("")
+
+        assert results == []
+
+    def test_search_shell_metacharacters_safe(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #6: shell metacharacters in query are safe (--fixed-strings)."""
+        _commit_file(git_sandbox, "pages/overview.md", 'safe content with "quotes"')
+
+        # These should not cause command injection or errors.
+        results = library_git.search('"; rm -rf /')
+        assert results == []
+
+        results = library_git.search("$(whoami)")
+        assert results == []
+
+        results = library_git.search(".*")
+        assert results == []  # literal ".*" not in file
