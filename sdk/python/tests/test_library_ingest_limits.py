@@ -487,20 +487,23 @@ def test_ac11_size_gate_runs_after_pdf_extraction(
 ) -> None:
     """The size gate MUST run on the extracted text, not the PDF bytes.
 
-    We stub out ``_resolve_pdf_text`` so the PDF branch returns a
-    60_000-word synthetic text blob, then assert the size gate raises
-    LIBRARY_INGEST_SOURCE_TOO_LARGE on THAT word count without the
-    summarizer ever being called.
+    We stub out ``_resolve_pdf_text_with_bytes`` so the PDF branch
+    returns a 60_000-word synthetic text blob, then assert the size gate
+    raises LIBRARY_INGEST_SOURCE_TOO_LARGE on THAT word count without
+    the summarizer ever being called.
+
+    Story 15-1-1: the pipeline now calls ``_resolve_pdf_text_with_bytes``
+    which also returns source bytes for retention.
     """
     big_extracted_text = "word " * 60_000
     calls: list[str] = []
 
-    def _fake_resolve_pdf_text(sandbox, parameters):  # type: ignore[no-untyped-def]
+    def _fake_resolve_pdf_text_with_bytes(sandbox, parameters):  # type: ignore[no-untyped-def]
         calls.append("pdf_resolve_called")
-        return big_extracted_text, "brief.pdf", False
+        return big_extracted_text, "brief.pdf", False, b"%PDF-stub"
 
     monkeypatch.setattr(
-        ingest_mod, "_resolve_pdf_text", _fake_resolve_pdf_text
+        ingest_mod, "_resolve_pdf_text_with_bytes", _fake_resolve_pdf_text_with_bytes
     )
 
     # Summarizer that tracks whether it was called.
