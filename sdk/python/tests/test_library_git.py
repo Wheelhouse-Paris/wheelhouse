@@ -488,3 +488,129 @@ class TestSearch:
 
         results = library_git.search(".*")
         assert results == []  # literal ".*" not in file
+
+
+# ─── Story 15-1-4: restore() ───────────────────────────────────────────
+
+
+class TestRestore:
+    def test_restore_reverts_content_to_historical_version(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #1: restore reverts file content and creates a new commit."""
+        sha_v1 = _commit_file(
+            git_sandbox, "pages/fiscal.md", "version one", summary="v1"
+        )
+        _commit_file(git_sandbox, "pages/fiscal.md", "version two", summary="v2")
+        _commit_file(git_sandbox, "pages/fiscal.md", "version three", summary="v3")
+
+        new_sha = library_git.restore("pages/fiscal.md", sha=sha_v1)
+
+        # Content should match version 1.
+        content = git_sandbox.read("pages/fiscal.md")
+        assert content == "version one"
+
+        # A new commit (v4) should have been created.
+        assert new_sha != sha_v1
+        assert len(new_sha) == 40
+
+    def test_restore_returns_new_commit_sha(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #1: restore returns the new commit SHA."""
+        sha_v1 = _commit_file(
+            git_sandbox, "pages/fiscal.md", "original", summary="v1"
+        )
+        _commit_file(git_sandbox, "pages/fiscal.md", "changed", summary="v2")
+
+        new_sha = library_git.restore("pages/fiscal.md", sha=sha_v1)
+
+        # Verify the returned SHA matches HEAD.
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=git_sandbox._root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert new_sha == result.stdout.strip()
+
+    def test_restore_commit_message_format(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #1: commit message contains structured restore info."""
+        sha_v1 = _commit_file(
+            git_sandbox, "pages/fiscal.md", "original", summary="v1"
+        )
+        _commit_file(git_sandbox, "pages/fiscal.md", "changed", summary="v2")
+
+        library_git.restore("pages/fiscal.md", sha=sha_v1)
+
+        # Check commit message.
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%B"],
+            cwd=git_sandbox._root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        message = result.stdout.strip()
+        short_sha = sha_v1[:7]
+        assert f"[restore] Restored pages/fiscal.md from {short_sha}" in message
+        assert f"restored_from: {sha_v1}" in message
+
+    def test_restore_nonexistent_file_at_sha_raises(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #2: restore with non-existent file at SHA raises FileNotFoundError."""
+        sha_v1 = _commit_file(
+            git_sandbox, "pages/other.md", "content", summary="v1"
+        )
+
+        with pytest.raises(FileNotFoundError, match="does not exist"):
+            library_git.restore("pages/nonexistent.md", sha=sha_v1)
+
+    def test_restore_path_traversal_raises(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #3: restore with path traversal raises PathEscapeError."""
+        sha_v1 = _commit_file(
+            git_sandbox, "pages/legit.md", "ok", summary="v1"
+        )
+
+        with pytest.raises(PathEscapeError):
+            library_git.restore("../../etc/passwd", sha=sha_v1)
+
+    def test_restore_invalid_sha_raises(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """AC #4: restore with invalid SHA raises ValueError."""
+        _commit_file(git_sandbox, "pages/fiscal.md", "content", summary="v1")
+
+        with pytest.raises(ValueError, match="Invalid SHA"):
+            library_git.restore("pages/fiscal.md", sha="not-a-valid-sha!")
+
+    def test_restore_idempotent_creates_new_commit(
+        self, git_sandbox: LibrarySandbox, library_git: LibraryGit
+    ) -> None:
+        """Restoring to current content still creates a new commit."""
+        sha_v1 = _commit_file(
+            git_sandbox, "pages/fiscal.md", "same content", summary="v1"
+        )
+
+        # Get current HEAD before restore.
+        pre_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=git_sandbox._root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        head_before = pre_result.stdout.strip()
+
+        new_sha = library_git.restore("pages/fiscal.md", sha=sha_v1)
+
+        # Content is the same but a new commit should exist.
+        assert new_sha != head_before
+        content = git_sandbox.read("pages/fiscal.md")
+        assert content == "same content"
