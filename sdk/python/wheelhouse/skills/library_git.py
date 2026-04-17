@@ -1,18 +1,19 @@
 """LibraryGit — per-file git history SDK methods for Library explorer.
 
-Exposes read-only git operations (tree browsing, file content retrieval,
-per-file commit history, and content search) on a :class:`LibrarySandbox`
-instance. Every path argument is validated through the sandbox's
-``_validate`` method before being passed to git, so no path traversal is
-possible (ADR-050, constraint LE-03).
+Exposes git operations (tree browsing, file content retrieval,
+per-file commit history, content search, and file restore) on a
+:class:`LibrarySandbox` instance. Every path argument is validated
+through the sandbox's ``_validate`` method before being passed to git,
+so no path traversal is possible (ADR-050, constraint LE-03).
 
 All methods shell out to ``git`` via :mod:`subprocess` — no ``pygit2``
 dependency (ADR-050 rejected it to avoid native dependencies in the
 Lambda layer).
 
 See:
-    - epics-library-explorer.md#Story 15.1.2, 15.1.3
+    - epics-library-explorer.md#Story 15.1.2, 15.1.3, 15.1.4
     - architecture.md#ADR-050 (Per-File Git History SDK Methods)
+    - architecture.md#ADR-040 (Concurrent Write Serialization)
 
 Public API:
     LibraryGit(sandbox)
@@ -20,8 +21,7 @@ Public API:
         .file_content(path, sha=None) -> bytes
         .file_log(path, limit=None) -> list[LogEntry]
         .search(query) -> list[SearchResult]
-
-Story 15.1.4 will add: restore()
+        .restore(path, sha) -> str
 """
 
 from __future__ import annotations
@@ -319,6 +319,95 @@ class LibraryGit:
             )
 
         return self._parse_grep_output(result.stdout)
+
+    def restore(self, path: str, *, sha: str) -> str:
+        """Restore a file to its content at a historical commit.
+
+        Checks out the file at the given SHA and creates a new commit
+        recording the restore operation. The commit message follows
+        ADR-039 structured format with a ``restored_from`` trailer.
+
+        Uses ``git checkout <sha> -- <path>`` which writes to the
+        working tree and stages the file in one operation, then commits
+        via the sandbox's lock-retry wrapper (ADR-040).
+
+        Args:
+            path: Relative path within the Library.
+            sha: Commit SHA to restore from.
+
+        Returns:
+            The full 40-character SHA of the newly created commit.
+
+        Raises:
+            PathEscapeError: if ``path`` resolves outside the sandbox.
+            ValueError: if ``sha`` is not a valid hex reference.
+            FileNotFoundError: if the file does not exist at the given
+                SHA (or the SHA itself does not exist).
+            LibraryBusyError: if the git index lock cannot be acquired
+                within the timeout (ADR-040).
+            LibraryCommitError: if any git command fails for other reasons.
+        """
+        # 1. Validate path through sandbox (raises PathEscapeError on traversal).
+        self._sandbox._validate(path)
+
+        # 2. Validate SHA format.
+        _validate_sha(sha)
+
+        # 3. Verify the file exists at the given SHA.
+        self._check_file_exists_at_sha(path, sha)
+
+        # 4. Checkout the file at the historical SHA.
+        # `git checkout <sha> -- <path>` writes to the working tree AND
+        # stages the file in the index in one operation.
+        self._sandbox._git_with_lock_retry(["checkout", sha, "--", path])
+
+        # 5. Build structured commit message (ADR-039).
+        short_sha = sha[:7]
+        subject = f"[restore] Restored {path} from {short_sha}"
+        message = f"{subject}\n\nrestored_from: {sha}"
+
+        # 6. Commit with lock-retry (ADR-040 serialization).
+        try:
+            self._sandbox._git_with_lock_retry(
+                ["commit", "-m", message, "--allow-empty"]
+            )
+        except BaseException:
+            # Best-effort rollback: restore working tree to HEAD state.
+            try:
+                self._sandbox._git(
+                    ["reset", "--hard", "HEAD"],
+                    suppress_stderr=True,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
+        # 7. Return the new commit SHA.
+        result = self._git_text(["rev-parse", "HEAD"])
+        return result.strip()
+
+    def _check_file_exists_at_sha(self, path: str, sha: str) -> None:
+        """Raise FileNotFoundError if ``path`` does not exist at ``sha``.
+
+        Uses ``git cat-file -e <sha>:<path>`` which exits 0 if the object
+        exists and non-zero otherwise. This covers both the case where
+        the SHA is valid but the file was not present, and the case where
+        the SHA itself does not exist in the repository.
+        """
+        env = self._git_env()
+        result = subprocess.run(  # noqa: S603
+            ["git", "cat-file", "-e", f"{sha}:{path}"],
+            cwd=self._sandbox._root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_GIT_SUBPROCESS_TIMEOUT_S,
+        )
+        if result.returncode != 0:
+            raise FileNotFoundError(
+                f"File '{path}' does not exist at revision '{sha}'"
+            )
 
     # ─── Internal helpers ──────────────────────────────────────────────
 
